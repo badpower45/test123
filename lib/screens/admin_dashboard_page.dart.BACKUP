@@ -1,0 +1,1769 @@
+import 'package:flutter/material.dart';
+import 'package:hive_flutter/hive_flutter.dart';
+
+import '../models/employee.dart';
+import '../models/employee_adjustment.dart';
+import '../models/pulse.dart';
+import '../models/pulse_log_entry.dart';
+import '../services/employee_adjustment_repository.dart';
+import '../services/employee_repository.dart';
+import '../theme/app_colors.dart';
+
+enum DashboardMode { admin, hr, monitor }
+
+enum DashboardSection { monitor, team, hr }
+
+class AdminDashboardPage extends StatefulWidget {
+  const AdminDashboardPage({
+    super.key,
+    this.mode = DashboardMode.admin,
+    this.currentUserId,
+  });
+
+  static const routeName = '/admin-dashboard';
+
+  final DashboardMode mode;
+  final String? currentUserId;
+
+  @override
+  State<AdminDashboardPage> createState() => _AdminDashboardPageState();
+}
+
+class _AdminDashboardPageState extends State<AdminDashboardPage>
+    with SingleTickerProviderStateMixin {
+  late final Box<PulseLogEntry> _historyBox;
+  late final Box<Pulse> _offlineBox;
+  late final Box<Employee> _employeeBox;
+  late final Box<EmployeeAdjustment> _adjustmentBox;
+  late final TabController _tabController;
+  late final List<DashboardSection> _sections;
+
+  bool get _isAdmin => widget.mode == DashboardMode.admin;
+  bool get _isHr => widget.mode == DashboardMode.hr;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeBoxes();
+    _sections = [DashboardSection.monitor];
+    if (_isAdmin || _isHr) {
+      _sections.add(DashboardSection.team);
+      _sections.add(DashboardSection.hr);
+    }
+    _tabController = TabController(length: _sections.length, vsync: this);
+  }
+
+  void _initializeBoxes() {
+    if (Hive.isBoxOpen(pulseHistoryBox)) {
+      _historyBox = Hive.box<PulseLogEntry>(pulseHistoryBox);
+    } else {
+      // Box will be opened in main.dart, but we'll handle gracefully
+      throw HiveError('Box $pulseHistoryBox is not open');
+    }
+    
+    if (Hive.isBoxOpen(offlinePulsesBox)) {
+      _offlineBox = Hive.box<Pulse>(offlinePulsesBox);
+    } else {
+      throw HiveError('Box $offlinePulsesBox is not open');
+    }
+    
+    if (Hive.isBoxOpen(employeesBox)) {
+      _employeeBox = Hive.box<Employee>(employeesBox);
+    } else {
+      throw HiveError('Box $employeesBox is not open');
+    }
+    
+    if (Hive.isBoxOpen(employeeAdjustmentsBox)) {
+      _adjustmentBox = Hive.box<EmployeeAdjustment>(employeeAdjustmentsBox);
+    } else {
+      throw HiveError('Box $employeeAdjustmentsBox is not open');
+    }
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final activeSection =
+        _sections[_tabController.index.clamp(0, _sections.length - 1)];
+    final canManageEmployees = _isAdmin;
+    final canRecordAdjustments = _isAdmin || _isHr;
+
+    return Scaffold(
+      backgroundColor: AppColors.primaryOrange,
+      appBar: AppBar(
+        backgroundColor: AppColors.primaryOrange,
+        foregroundColor: AppColors.onPrimary,
+        elevation: 0,
+        title: Text(
+          switch (widget.mode) {
+            DashboardMode.admin => 'Admin Dashboard',
+            DashboardMode.hr => 'HR Dashboard',
+            DashboardMode.monitor => 'Monitor Dashboard',
+          },
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'Clear local data',
+            onPressed: _confirmClearLocalData,
+            icon: const Icon(Icons.delete_forever_outlined),
+          ),
+        ],
+        bottom: TabBar(
+          controller: _tabController,
+          indicatorColor: AppColors.onPrimary,
+          tabs: _sections
+              .map(
+                (section) => Tab(
+                  text: switch (section) {
+                    DashboardSection.monitor => 'Monitor',
+                    DashboardSection.team => 'Team',
+                    DashboardSection.hr => 'HR',
+                  },
+                ),
+              )
+              .toList(growable: false),
+        ),
+      ),
+      floatingActionButton: canManageEmployees &&
+              activeSection == DashboardSection.team
+          ? FloatingActionButton.extended(
+              onPressed: () => _showEmployeeFormSheet(context),
+              icon: const Icon(Icons.person_add_alt),
+              label: const Text('Add employee'),
+            )
+          : null,
+      body: TabBarView(
+        controller: _tabController,
+        children: _sections
+            .map(
+              (section) => _buildSection(
+                section,
+                canManageEmployees: canManageEmployees,
+                canRecordAdjustments: canRecordAdjustments,
+              ),
+            )
+            .toList(growable: false),
+      ),
+    );
+  }
+
+  Widget _buildSection(
+    DashboardSection section, {
+    required bool canManageEmployees,
+    required bool canRecordAdjustments,
+  }) {
+    switch (section) {
+      case DashboardSection.monitor:
+        return _buildMonitorSection();
+      case DashboardSection.team:
+        return _buildTeamSection(
+          canManageEmployees: canManageEmployees,
+          canRecordAdjustments: canRecordAdjustments,
+        );
+      case DashboardSection.hr:
+        return _buildHrSection(canRecordAdjustments: canRecordAdjustments);
+    }
+  }
+
+  Widget _buildMonitorSection() {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.only(
+          topLeft: Radius.circular(32),
+          topRight: Radius.circular(32),
+        ),
+      ),
+      child: ValueListenableBuilder<Box<Employee>>(
+        valueListenable: _employeeBox.listenable(),
+        builder: (context, employeeBox, _) {
+          final employeeDirectory = {
+            for (final employee in employeeBox.values) employee.id: employee,
+          };
+          return ValueListenableBuilder<Box<PulseLogEntry>>(
+            valueListenable: _historyBox.listenable(),
+            builder: (context, historyBox, __) {
+              final historyEntries =
+                  historyBox.values.toList(growable: false)
+                    ..sort((a, b) => b.recordedAt.compareTo(a.recordedAt));
+              return ValueListenableBuilder<Box<Pulse>>(
+                valueListenable: _offlineBox.listenable(),
+                builder: (context, offlineBox, ___) {
+                  final offlinePulses =
+                      offlineBox.values.toList(growable: false);
+                  final stats =
+                      _PulseStats.from(historyEntries, offlinePulses);
+                  final snapshots = _buildEmployeeSnapshots(
+                    historyEntries,
+                    offlinePulses,
+                    employeeDirectory,
+                  );
+
+                  if (snapshots.isEmpty) {
+                    return _EmptyAdminState(stats: stats);
+                  }
+
+                  return Column(
+                    children: [
+                      const SizedBox(height: 24),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: _PulseStatsSummary(stats: stats),
+                      ),
+                      const SizedBox(height: 16),
+                      Expanded(
+                        child: ListView.separated(
+                          padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                          itemCount: snapshots.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 20),
+                          itemBuilder: (context, index) => _EmployeeCard(
+                            employee: snapshots[index],
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildTeamSection({
+    required bool canManageEmployees,
+    required bool canRecordAdjustments,
+  }) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.only(
+          topLeft: Radius.circular(32),
+          topRight: Radius.circular(32),
+        ),
+      ),
+      child: ValueListenableBuilder<Box<Employee>>(
+        valueListenable: _employeeBox.listenable(),
+        builder: (context, employeeBox, _) {
+          final employees = employeeBox.values.toList(growable: false);
+          if (employees.isEmpty) {
+            return const _EmptyTeamState();
+          }
+
+          return ValueListenableBuilder<Box<PulseLogEntry>>(
+            valueListenable: _historyBox.listenable(),
+            builder: (context, historyBox, __) {
+              final historyEntries =
+                  historyBox.values.toList(growable: false)
+                    ..sort((a, b) => b.recordedAt.compareTo(a.recordedAt));
+              final offlinePulses =
+                  _offlineBox.values.toList(growable: false);
+              final directory = {
+                for (final employee in employees) employee.id: employee,
+              };
+              final snapshots = _buildEmployeeSnapshots(
+                historyEntries,
+                offlinePulses,
+                directory,
+              );
+
+              return ListView.separated(
+                padding: const EdgeInsets.fromLTRB(24, 24, 24, 120),
+                itemCount: snapshots.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 20),
+                itemBuilder: (context, index) {
+                  final snapshot = snapshots[index];
+                  return _EmployeeCard(
+                    employee: snapshot,
+                    showManagementActions: canManageEmployees ||
+                        canRecordAdjustments,
+                    onToggleActive: canManageEmployees
+                        ? () async {
+                            await EmployeeRepository.toggleActive(
+                              snapshot.employeeId,
+                            );
+                          }
+                        : null,
+                    onEdit: canManageEmployees
+                        ? () => _showEmployeeFormSheet(
+                              context,
+                              existing: directory[snapshot.employeeId],
+                            )
+                        : null,
+                    onRecordAdjustment: canRecordAdjustments
+                        ? () => _showAdjustmentSheet(context, snapshot)
+                        : null,
+                  );
+                },
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildHrSection({required bool canRecordAdjustments}) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.only(
+          topLeft: Radius.circular(32),
+          topRight: Radius.circular(32),
+        ),
+      ),
+      child: ValueListenableBuilder<Box<EmployeeAdjustment>>(
+        valueListenable: _adjustmentBox.listenable(),
+        builder: (context, adjustmentBox, _) {
+          final adjustments = adjustmentBox.values.toList(growable: false)
+            ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+          if (adjustments.isEmpty) {
+            return const _EmptyHrState();
+          }
+
+          return ListView.separated(
+            padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
+            itemCount: adjustments.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 16),
+            itemBuilder: (context, index) {
+              final adjustment = adjustments[index];
+              final employee = _employeeBox.get(adjustment.employeeId);
+              final icon = switch (adjustment.type) {
+                AdjustmentType.bonus => Icons.arrow_upward,
+                AdjustmentType.deduction => Icons.arrow_downward,
+                AdjustmentType.note => Icons.sticky_note_2_outlined,
+              };
+              final color = switch (adjustment.type) {
+                AdjustmentType.bonus => AppColors.success,
+                AdjustmentType.deduction => AppColors.danger,
+                AdjustmentType.note => Colors.blueGrey,
+              };
+
+              return Card(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                elevation: 4,
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(icon, color: color),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              employee?.fullName ?? adjustment.employeeId,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleMedium
+                                  ?.copyWith(fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                          Text(
+                            _formatTimestamp(adjustment.createdAt),
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodySmall
+                                ?.copyWith(color: Colors.black54),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Text(adjustment.reason),
+                      if (adjustment.amount != null) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          '${adjustment.type == AdjustmentType.deduction ? '-' : '+'}${adjustment.amount!.toStringAsFixed(2)} EGP',
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleSmall
+                              ?.copyWith(
+                                fontWeight: FontWeight.w600,
+                                color: adjustment.type == AdjustmentType.deduction
+                                    ? AppColors.danger
+                                    : AppColors.success,
+                              ),
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          const Icon(Icons.person_outline, size: 18),
+                          const SizedBox(width: 6),
+                          Text('Recorded by ${adjustment.recordedBy}'),
+                          const Spacer(),
+                          if (canRecordAdjustments)
+                            IconButton(
+                              tooltip: 'Delete entry',
+                              onPressed: () async {
+                                await EmployeeAdjustmentRepository.remove(
+                                  adjustment.id,
+                                );
+                              },
+                              icon: const Icon(Icons.delete_outline),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _showEmployeeFormSheet(
+    BuildContext context, {
+    Employee? existing,
+  }) async {
+    final result = await showModalBottomSheet<_EmployeeFormResult>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => _EmployeeFormSheet(existing: existing),
+    );
+
+    if (result == null) {
+      return;
+    }
+
+    if (existing == null) {
+      final employee = Employee(
+        id: result.id,
+        fullName: result.fullName,
+        pin: result.pin,
+        role: result.role,
+        permissions: result.permissions,
+      );
+      await EmployeeRepository.upsert(employee);
+    } else {
+      existing
+        ..fullName = result.fullName
+        ..pin = result.pin
+        ..role = result.role
+        ..permissions = result.permissions
+        ..touch();
+      await EmployeeRepository.upsert(existing);
+    }
+  }
+
+  Future<void> _showAdjustmentSheet(
+    BuildContext context,
+    _EmployeeSnapshot employee,
+  ) async {
+    final result = await showModalBottomSheet<_AdjustmentFormResult>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => _AdjustmentFormSheet(employee: employee),
+    );
+
+    if (result == null) {
+      return;
+    }
+
+    await EmployeeAdjustmentRepository.create(
+      employeeId: employee.employeeId,
+      type: result.type,
+      reason: result.reason,
+      recordedBy: result.recordedBy,
+      amount: result.amount,
+    );
+  }
+
+  Future<void> _confirmClearLocalData() async {
+    final shouldClear = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Clear local data?'),
+            content: const Text(
+              'This removes all stored pulse history and any offline pulses waiting to sync on this device.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('Clear data'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!shouldClear) {
+      return;
+    }
+
+    await Future.wait([
+      _historyBox.clear(),
+      _offlineBox.clear(),
+    ]);
+
+    if (!mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Local pulse data cleared.')),
+    );
+  }
+}
+
+class _PulseStats {
+  const _PulseStats({
+    required this.totalLogged,
+    required this.monthlyLogged,
+    required this.pendingOffline,
+    required this.lastActivity,
+  });
+
+  final int totalLogged;
+  final int monthlyLogged;
+  final int pendingOffline;
+  final DateTime? lastActivity;
+
+  factory _PulseStats.from(
+    List<PulseLogEntry> historyEntries,
+    List<Pulse> offlinePulses,
+  ) {
+    final now = DateTime.now();
+    final monthly = historyEntries.where((entry) {
+      final local = entry.recordedAt.toLocal();
+      return local.year == now.year && local.month == now.month;
+    }).length;
+    final lastActivity = historyEntries.isEmpty
+        ? null
+        : historyEntries.first.recordedAt.toLocal();
+    return _PulseStats(
+      totalLogged: historyEntries.length,
+      monthlyLogged: monthly,
+      pendingOffline: offlinePulses.length,
+      lastActivity: lastActivity,
+    );
+  }
+}
+
+class _PulseStatsSummary extends StatelessWidget {
+  const _PulseStatsSummary({required this.stats});
+
+  final _PulseStats stats;
+
+  @override
+  Widget build(BuildContext context) {
+    final tiles = <_PulseMetricTile>[
+      _PulseMetricTile(
+        icon: Icons.auto_graph,
+        label: 'Total pulses logged',
+        value: stats.totalLogged.toString(),
+        color: AppColors.primaryOrange,
+      ),
+      _PulseMetricTile(
+        icon: Icons.calendar_month,
+        label: 'Pulses this month',
+        value: stats.monthlyLogged.toString(),
+        color: AppColors.success,
+      ),
+      _PulseMetricTile(
+        icon: Icons.cloud_upload_outlined,
+        label: 'Offline queue',
+        value: stats.pendingOffline.toString(),
+        color: Colors.orange.shade600,
+        subtitle:
+            stats.pendingOffline == 0 ? 'All data synced' : 'Waiting connection',
+      ),
+    ];
+
+    if (stats.lastActivity != null) {
+      tiles.add(
+        _PulseMetricTile(
+          icon: Icons.schedule_outlined,
+          label: 'Last activity',
+          value: _formatTimestamp(stats.lastActivity!, short: true),
+          color: Colors.blueGrey,
+        ),
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact = constraints.maxWidth < 720;
+        if (isCompact) {
+          return Column(
+            children: [
+              for (var i = 0; i < tiles.length; i++) ...[
+                tiles[i],
+                if (i != tiles.length - 1) const SizedBox(height: 12),
+              ],
+            ],
+          );
+        }
+        return Row(
+          children: [
+            for (var i = 0; i < tiles.length; i++) ...[
+              Expanded(child: tiles[i]),
+              if (i != tiles.length - 1) const SizedBox(width: 12),
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _PulseMetricTile extends StatelessWidget {
+  const _PulseMetricTile({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.color,
+    this.subtitle,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color color;
+  final String? subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: color.withAlpha((0.14 * 255).round()),
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: color),
+          const SizedBox(height: 16),
+          Text(
+            value,
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: Colors.black87,
+                ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: Theme.of(context)
+                .textTheme
+                .bodyMedium
+                ?.copyWith(color: Colors.black54),
+          ),
+          if (subtitle != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              subtitle!,
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: Colors.black54),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _EmptyAdminState extends StatelessWidget {
+  const _EmptyAdminState({required this.stats});
+
+  final _PulseStats stats;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: _PulseStatsSummary(stats: stats),
+        ),
+        const SizedBox(height: 40),
+        Icon(Icons.insights_outlined, size: 56, color: Colors.grey.shade400),
+        const SizedBox(height: 16),
+        Text(
+          'No employee activity yet',
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        const SizedBox(height: 6),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 32),
+          child: Text(
+            'Once employees start sending heartbeats you\'ll see live analytics, sync status, and detailed trails right here.',
+            style: Theme.of(context)
+                .textTheme
+                .bodyMedium
+                ?.copyWith(color: Colors.grey.shade600),
+            textAlign: TextAlign.center,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _EmptyTeamState extends StatelessWidget {
+  const _EmptyTeamState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Icon(Icons.group_outlined, size: 72, color: Colors.grey.shade400),
+            const SizedBox(height: 16),
+            Text(
+              'No team members yet',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Add employees to start tracking check-ins, monitor activity, and manage permissions.',
+              textAlign: TextAlign.center,
+              style: Theme.of(context)
+                  .textTheme
+                  .bodyMedium
+                  ?.copyWith(color: Colors.grey.shade600),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyHrState extends StatelessWidget {
+  const _EmptyHrState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Icon(Icons.receipt_long_outlined,
+                size: 72, color: Colors.grey.shade400),
+            const SizedBox(height: 16),
+            Text(
+              'No HR adjustments yet',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Log bonuses, deductions, or notes to create a transparent HR audit trail.',
+              textAlign: TextAlign.center,
+              style: Theme.of(context)
+                  .textTheme
+                  .bodyMedium
+                  ?.copyWith(color: Colors.grey.shade600),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _EmployeeSnapshot {
+  const _EmployeeSnapshot({
+    required this.employeeId,
+    required this.displayName,
+    required this.status,
+    required this.totalDuration,
+    required this.pulses,
+    required this.pendingOfflineCount,
+    required this.lastPulseAt,
+    required this.role,
+    required this.permissions,
+    required this.isActive,
+    required this.totalLogged,
+    required this.monthlyLogged,
+  });
+
+  final String employeeId;
+  final String displayName;
+  final EmployeeStatus status;
+  final Duration totalDuration;
+  final List<_PulseSnapshot> pulses;
+  final int pendingOfflineCount;
+  final DateTime? lastPulseAt;
+  final EmployeeRole? role;
+  final List<EmployeePermission> permissions;
+  final bool isActive;
+  final int totalLogged;
+  final int monthlyLogged;
+}
+
+class _PulseSnapshot {
+  const _PulseSnapshot({
+    required this.timestampLabel,
+    required this.latitude,
+    required this.longitude,
+    required this.isFake,
+    required this.wasOnline,
+  });
+
+  final String timestampLabel;
+  final double latitude;
+  final double longitude;
+  final bool isFake;
+  final bool wasOnline;
+}
+
+enum EmployeeStatus { checkedIn, checkedOut, offline, inactive }
+
+List<_EmployeeSnapshot> _buildEmployeeSnapshots(
+  List<PulseLogEntry> historyEntries,
+  List<Pulse> offlinePulses,
+  Map<String, Employee> employeeDirectory,
+) {
+  final Map<String, List<PulseLogEntry>> groupedHistory = {};
+  for (final entry in historyEntries) {
+    groupedHistory.putIfAbsent(entry.pulse.employeeId, () => []).add(entry);
+  }
+
+  final Map<String, int> offlineCounts = {};
+  for (final pulse in offlinePulses) {
+    offlineCounts[pulse.employeeId] =
+        (offlineCounts[pulse.employeeId] ?? 0) + 1;
+  }
+
+  final snapshots = <_EmployeeSnapshot>[];
+
+  void addSnapshot(String employeeId, List<PulseLogEntry> entries) {
+    entries.sort((a, b) => b.recordedAt.compareTo(a.recordedAt));
+    final latest = entries.isNotEmpty ? entries.first : null;
+    final totalLogged = entries.length;
+    final monthlyLogged = entries.where((entry) {
+      final local = entry.recordedAt.toLocal();
+      final now = DateTime.now();
+      return local.year == now.year && local.month == now.month;
+    }).length;
+    final dayEntries = latest == null
+        ? <PulseLogEntry>[]
+        : entries
+            .where((log) =>
+                _isSameDay(log.pulse.timestamp, latest.pulse.timestamp))
+            .toList();
+    final duration = latest == null || dayEntries.length < 2
+        ? Duration.zero
+        : latest.pulse.timestamp
+            .difference(dayEntries.last.pulse.timestamp)
+            .abs();
+    final pendingOffline = offlineCounts[employeeId] ?? 0;
+    final employeeRecord = employeeDirectory[employeeId];
+    final displayName = employeeRecord?.fullName ?? employeeId;
+    final status = _deriveStatus(
+      latest,
+      pendingOffline,
+      employeeRecord?.isActive ?? true,
+    );
+
+    final recentPulses = entries.take(5).map((log) {
+      final ts = log.pulse.timestamp.toLocal();
+      final label = _formatTimestamp(ts);
+      return _PulseSnapshot(
+        timestampLabel: label,
+        latitude: log.pulse.latitude,
+        longitude: log.pulse.longitude,
+        isFake: log.pulse.isFake,
+        wasOnline: log.deliveryStatus == PulseDeliveryStatus.sentOnline,
+      );
+    }).toList();
+
+    snapshots.add(
+      _EmployeeSnapshot(
+        employeeId: employeeId,
+        displayName: displayName,
+        status: status,
+        totalDuration: duration,
+        pulses: recentPulses,
+        pendingOfflineCount: pendingOffline,
+        lastPulseAt: latest?.pulse.timestamp.toLocal(),
+        role: employeeRecord?.role,
+        permissions: employeeRecord?.permissions ?? const [],
+        isActive: employeeRecord?.isActive ?? true,
+        totalLogged: totalLogged,
+        monthlyLogged: monthlyLogged,
+      ),
+    );
+  }
+
+  groupedHistory.forEach(addSnapshot);
+
+  for (final entry in employeeDirectory.entries) {
+    if (!groupedHistory.containsKey(entry.key)) {
+      addSnapshot(entry.key, <PulseLogEntry>[]);
+    }
+  }
+
+  snapshots.sort((a, b) {
+    final left = a.lastPulseAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final right = b.lastPulseAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    return right.compareTo(left);
+  });
+
+  return snapshots;
+}
+
+EmployeeStatus _deriveStatus(
+  PulseLogEntry? latest,
+  int pendingOfflineCount,
+  bool isActive,
+) {
+  if (!isActive) {
+    return EmployeeStatus.inactive;
+  }
+  if (pendingOfflineCount > 0 ||
+      (latest?.deliveryStatus ?? PulseDeliveryStatus.failed) ==
+          PulseDeliveryStatus.queuedOffline) {
+    return EmployeeStatus.offline;
+  }
+  if (latest == null) {
+    return EmployeeStatus.checkedOut;
+  }
+  final minutesSincePulse =
+      DateTime.now().difference(latest.pulse.timestamp).inMinutes;
+  if (minutesSincePulse <= 10) {
+    return EmployeeStatus.checkedIn;
+  }
+  return EmployeeStatus.checkedOut;
+}
+
+bool _isSameDay(DateTime a, DateTime b) {
+  final localA = a.toLocal();
+  final localB = b.toLocal();
+  return localA.year == localB.year &&
+      localA.month == localB.month &&
+      localA.day == localB.day;
+}
+
+String _formatTimestamp(DateTime timestamp, {bool short = false}) {
+  final local = timestamp.toLocal();
+  final now = DateTime.now();
+  final dateLabel = _isSameDay(local, now)
+      ? 'Today'
+      : '${local.day.toString().padLeft(2, '0')}/${local.month.toString().padLeft(2, '0')}';
+  final timeLabel =
+      '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+  return short ? '$dateLabel · $timeLabel' : '$dateLabel at $timeLabel';
+}
+
+class _EmployeeCard extends StatelessWidget {
+  const _EmployeeCard({
+    required this.employee,
+    this.showManagementActions = false,
+    this.onToggleActive,
+    this.onEdit,
+    this.onRecordAdjustment,
+  });
+
+  final _EmployeeSnapshot employee;
+  final bool showManagementActions;
+  final VoidCallback? onToggleActive;
+  final VoidCallback? onEdit;
+  final VoidCallback? onRecordAdjustment;
+
+  Color _statusColor(EmployeeStatus status) {
+    switch (status) {
+      case EmployeeStatus.checkedIn:
+        return AppColors.success;
+      case EmployeeStatus.checkedOut:
+        return Colors.blueGrey;
+      case EmployeeStatus.offline:
+        return Colors.orange.shade700;
+      case EmployeeStatus.inactive:
+        return Colors.grey;
+    }
+  }
+
+  String _statusLabel(EmployeeStatus status) {
+    switch (status) {
+      case EmployeeStatus.checkedIn:
+        return 'Checked-in';
+      case EmployeeStatus.checkedOut:
+        return 'Checked-out';
+      case EmployeeStatus.offline:
+        return 'Offline';
+      case EmployeeStatus.inactive:
+        return 'Inactive';
+    }
+  }
+
+  String _formatDuration(Duration duration) {
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes.remainder(60).abs();
+    return '${hours}h ${minutes.toString().padLeft(2, '0')}m';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final fakePulseCount =
+        employee.pulses.where((pulse) => pulse.isFake).length;
+    final statusColor = _statusColor(employee.status);
+
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      elevation: 6,
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                CircleAvatar(
+                  radius: 24,
+                  backgroundColor: AppColors.primaryOrange,
+                  child: Text(
+                    employee.displayName.isNotEmpty
+                        ? employee.displayName.substring(0, 1).toUpperCase()
+                        : '?',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 22,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        employee.displayName,
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'ID: ${employee.employeeId}',
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodyMedium
+                            ?.copyWith(color: Colors.grey.shade600),
+                      ),
+                      if (employee.role != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          _roleLabel(employee.role!),
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodySmall
+                              ?.copyWith(color: Colors.grey.shade600),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: statusColor.withAlpha((0.15 * 255).round()),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    _statusLabel(employee.status),
+                    style: TextStyle(
+                      color: statusColor,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 12,
+              runSpacing: 8,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.timer_outlined, color: Colors.black54),
+                    const SizedBox(width: 8),
+                    Text('Shift: ${_formatDuration(employee.totalDuration)}'),
+                  ],
+                ),
+                if (employee.totalLogged > 0)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.favorite_rounded,
+                          color: Colors.black54, size: 18),
+                      const SizedBox(width: 4),
+                      Text('${employee.totalLogged} total'),
+                    ],
+                  ),
+                if (employee.monthlyLogged > 0)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.calendar_month,
+                          color: Colors.black54, size: 18),
+                      const SizedBox(width: 4),
+                      Text('${employee.monthlyLogged} this month'),
+                    ],
+                  ),
+              ],
+            ),
+            if (employee.lastPulseAt != null) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  const Icon(Icons.schedule_rounded, color: Colors.black54),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Last pulse ${_formatTimestamp(employee.lastPulseAt!)}',
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            const SizedBox(height: 16),
+            Text(
+              'Recent pulses',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+            ),
+            const SizedBox(height: 12),
+            if (employee.pulses.isEmpty)
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.hourglass_empty, color: Colors.black45),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Text('No pulses recorded yet.'),
+                    ),
+                  ],
+                ),
+              )
+            else
+              ...employee.pulses.map((pulse) {
+                final isFake = pulse.isFake;
+                final deliveredOnline = pulse.wasOnline;
+                final backgroundColor = (isFake
+                        ? AppColors.danger
+                        : deliveredOnline
+                            ? AppColors.success
+                            : Colors.orange.shade700)
+                    .withAlpha((0.08 * 255).round());
+                final icon = isFake
+                    ? const Icon(Icons.warning_amber_rounded,
+                        color: AppColors.danger)
+                    : deliveredOnline
+                        ? const Icon(Icons.check_circle_outline,
+                            color: AppColors.success)
+                        : const Icon(Icons.cloud_off,
+                            color: Colors.orangeAccent);
+                final description = isFake
+                    ? '${pulse.timestampLabel} — Outside geofence.'
+                    : deliveredOnline
+                        ? '${pulse.timestampLabel} — Synced online.'
+                        : '${pulse.timestampLabel} — Pending sync.';
+
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: backgroundColor,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Row(
+                    children: [
+                      icon,
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              description,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodyMedium
+                                  ?.copyWith(
+                                    color: isFake
+                                        ? AppColors.danger
+                                        : deliveredOnline
+                                            ? Colors.black87
+                                            : Colors.orange.shade800,
+                                    fontWeight: isFake
+                                        ? FontWeight.w600
+                                        : FontWeight.normal,
+                                  ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Lat: ${pulse.latitude.toStringAsFixed(4)}  |  Lon: ${pulse.longitude.toStringAsFixed(4)}',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(color: Colors.black54),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+            if (employee.pendingOfflineCount > 0)
+              Container(
+                margin: const EdgeInsets.only(top: 12),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withAlpha((0.12 * 255).round()),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.cloud_upload_outlined,
+                        color: Colors.orange),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '${employee.pendingOfflineCount} pulse${employee.pendingOfflineCount == 1 ? '' : 's'} waiting for connection.',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            if (fakePulseCount > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Row(
+                  children: [
+                    const Icon(Icons.shield, color: Colors.redAccent),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '$fakePulseCount pulse${fakePulseCount == 1 ? '' : 's'} flagged as outside the restaurant. Review required.',
+                        style: const TextStyle(
+                          color: AppColors.danger,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            if (showManagementActions) ...[
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  if (onEdit != null)
+                    OutlinedButton.icon(
+                      onPressed: onEdit,
+                      icon: const Icon(Icons.edit_outlined, size: 18),
+                      label: const Text('Edit'),
+                    ),
+                  if (onToggleActive != null)
+                    OutlinedButton.icon(
+                      onPressed: onToggleActive,
+                      icon: Icon(
+                        employee.isActive
+                            ? Icons.pause_circle_outline
+                            : Icons.play_circle_outline,
+                        size: 18,
+                      ),
+                      label:
+                          Text(employee.isActive ? 'Deactivate' : 'Activate'),
+                    ),
+                  if (onRecordAdjustment != null)
+                    ElevatedButton.icon(
+                      onPressed: onRecordAdjustment,
+                      icon: const Icon(Icons.receipt_long_outlined, size: 18),
+                      label: const Text('HR adjustment'),
+                    ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _EmployeeFormSheet extends StatefulWidget {
+  const _EmployeeFormSheet({this.existing});
+
+  final Employee? existing;
+
+  @override
+  State<_EmployeeFormSheet> createState() => _EmployeeFormSheetState();
+}
+
+class _EmployeeFormSheetState extends State<_EmployeeFormSheet> {
+  late final TextEditingController _idController;
+  late final TextEditingController _nameController;
+  late final TextEditingController _pinController;
+  late EmployeeRole _role;
+  late Set<EmployeePermission> _selectedPermissions;
+
+  @override
+  void initState() {
+    super.initState();
+    final existing = widget.existing;
+    _idController = TextEditingController(text: existing?.id ?? '');
+    _nameController = TextEditingController(text: existing?.fullName ?? '');
+    _pinController = TextEditingController(text: existing?.pin ?? '');
+    _role = existing?.role ?? EmployeeRole.staff;
+    _selectedPermissions = existing == null
+        ? <EmployeePermission>{}
+        : existing.permissions.toSet();
+  }
+
+  @override
+  void dispose() {
+    _idController.dispose();
+    _nameController.dispose();
+    _pinController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    final existing = widget.existing;
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottomInset),
+      child: SafeArea(
+        top: false,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Text(
+                    existing == null ? 'Add employee' : 'Edit employee',
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleLarge
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _idController,
+                readOnly: existing != null,
+                decoration: const InputDecoration(
+                  labelText: 'Employee ID',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _nameController,
+                decoration: const InputDecoration(
+                  labelText: 'Full name',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _pinController,
+                decoration: const InputDecoration(
+                  labelText: 'PIN',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.number,
+                obscureText: true,
+              ),
+              const SizedBox(height: 16),
+              InputDecorator(
+                decoration: const InputDecoration(
+                  labelText: 'Role',
+                  border: OutlineInputBorder(),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<EmployeeRole>(
+                    value: _role,
+                    isExpanded: true,
+                    onChanged: (value) {
+                      if (value == null) {
+                        return;
+                      }
+                      setState(() => _role = value);
+                    },
+                    items: EmployeeRole.values
+                        .map(
+                          (role) => DropdownMenuItem<EmployeeRole>(
+                            value: role,
+                            child: Text(_roleLabel(role)),
+                          ),
+                        )
+                        .toList(growable: false),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Permissions',
+                style: Theme.of(context)
+                    .textTheme
+                    .titleSmall
+                    ?.copyWith(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: EmployeePermission.values
+                    .map(
+                      (permission) => FilterChip(
+                        label: Text(_permissionLabel(permission)),
+                        selected: _selectedPermissions.contains(permission),
+                        onSelected: (selected) {
+                          setState(() {
+                            if (selected) {
+                              _selectedPermissions.add(permission);
+                            } else {
+                              _selectedPermissions.remove(permission);
+                            }
+                          });
+                        },
+                      ),
+                    )
+                    .toList(growable: false),
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _submit,
+                  icon: const Icon(Icons.save_outlined),
+                  label: Text(existing == null ? 'Create employee' : 'Save changes'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _submit() {
+    final id = _idController.text.trim();
+    final name = _nameController.text.trim();
+    final pin = _pinController.text.trim();
+
+    if (id.isEmpty || name.isEmpty || pin.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please fill all required fields.')),
+      );
+      return;
+    }
+
+    Navigator.of(context).pop(
+      _EmployeeFormResult(
+        id: id,
+        fullName: name,
+        pin: pin,
+        role: _role,
+        permissions: _selectedPermissions.toList(growable: false),
+      ),
+    );
+  }
+}
+
+class _EmployeeFormResult {
+  const _EmployeeFormResult({
+    required this.id,
+    required this.fullName,
+    required this.pin,
+    required this.role,
+    required this.permissions,
+  });
+
+  final String id;
+  final String fullName;
+  final String pin;
+  final EmployeeRole role;
+  final List<EmployeePermission> permissions;
+}
+
+class _AdjustmentFormSheet extends StatefulWidget {
+  const _AdjustmentFormSheet({required this.employee});
+
+  final _EmployeeSnapshot employee;
+
+  @override
+  State<_AdjustmentFormSheet> createState() => _AdjustmentFormSheetState();
+}
+
+class _AdjustmentFormSheetState extends State<_AdjustmentFormSheet> {
+  late AdjustmentType _type;
+  late final TextEditingController _reasonController;
+  late final TextEditingController _amountController;
+  late final TextEditingController _recordedByController;
+
+  @override
+  void initState() {
+    super.initState();
+    _type = AdjustmentType.deduction;
+    _reasonController = TextEditingController();
+    _amountController = TextEditingController();
+    _recordedByController = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _reasonController.dispose();
+    _amountController.dispose();
+    _recordedByController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    final requiresAmount = _type != AdjustmentType.note;
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottomInset),
+      child: SafeArea(
+        top: false,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Text(
+                    'Record HR adjustment',
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleLarge
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Employee: ${widget.employee.displayName}',
+                style: Theme.of(context)
+                    .textTheme
+                    .titleMedium
+                    ?.copyWith(color: Colors.grey.shade700),
+              ),
+              const SizedBox(height: 16),
+              InputDecorator(
+                decoration: const InputDecoration(
+                  labelText: 'Type',
+                  border: OutlineInputBorder(),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<AdjustmentType>(
+                    value: _type,
+                    isExpanded: true,
+                    onChanged: (value) {
+                      if (value == null) {
+                        return;
+                      }
+                      setState(() => _type = value);
+                    },
+                    items: AdjustmentType.values
+                        .map(
+                          (type) => DropdownMenuItem<AdjustmentType>(
+                            value: type,
+                            child: Text(_adjustmentLabel(type)),
+                          ),
+                        )
+                        .toList(growable: false),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _reasonController,
+                decoration: const InputDecoration(
+                  labelText: 'Reason / notes',
+                  border: OutlineInputBorder(),
+                ),
+                maxLines: 3,
+              ),
+              const SizedBox(height: 16),
+              if (requiresAmount)
+                TextField(
+                  controller: _amountController,
+                  decoration: InputDecoration(
+                    labelText: _type == AdjustmentType.deduction
+                        ? 'Deduction amount (EGP)'
+                        : 'Bonus amount (EGP)',
+                    border: const OutlineInputBorder(),
+                  ),
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                ),
+              if (requiresAmount) const SizedBox(height: 16),
+              TextField(
+                controller: _recordedByController,
+                decoration: const InputDecoration(
+                  labelText: 'Recorded by',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _submit,
+                  icon: const Icon(Icons.save_outlined),
+                  label: const Text('Save adjustment'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _submit() {
+    final reason = _reasonController.text.trim();
+    final recordedBy = _recordedByController.text.trim();
+    final requiresAmount = _type != AdjustmentType.note;
+    double? amount;
+
+    if (requiresAmount) {
+      amount = double.tryParse(_amountController.text.trim());
+    }
+
+    if (reason.isEmpty ||
+        recordedBy.isEmpty ||
+        (requiresAmount && amount == null)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please fill all required fields.')),
+      );
+      return;
+    }
+
+    Navigator.of(context).pop(
+      _AdjustmentFormResult(
+        type: _type,
+        reason: reason,
+        recordedBy: recordedBy,
+        amount: amount,
+      ),
+    );
+  }
+}
+
+class _AdjustmentFormResult {
+  const _AdjustmentFormResult({
+    required this.type,
+    required this.reason,
+    required this.recordedBy,
+    this.amount,
+  });
+
+  final AdjustmentType type;
+  final String reason;
+  final String recordedBy;
+  final double? amount;
+}
+
+String _roleLabel(EmployeeRole role) {
+  switch (role) {
+    case EmployeeRole.staff:
+      return 'Staff member';
+    case EmployeeRole.monitor:
+      return 'Monitor';
+    case EmployeeRole.hr:
+      return 'HR';
+    case EmployeeRole.admin:
+      return 'Administrator';
+  }
+}
+
+String _permissionLabel(EmployeePermission permission) {
+  switch (permission) {
+    case EmployeePermission.monitorAccess:
+      return 'Monitor access';
+    case EmployeePermission.manageScheduling:
+      return 'Manage scheduling';
+    case EmployeePermission.viewPayroll:
+      return 'View payroll';
+    case EmployeePermission.applyDiscounts:
+      return 'Apply discounts';
+    case EmployeePermission.manageEmployees:
+      return 'Manage employees';
+  }
+}
+
+String _adjustmentLabel(AdjustmentType type) {
+  switch (type) {
+    case AdjustmentType.deduction:
+      return 'Deduction';
+    case AdjustmentType.bonus:
+      return 'Bonus';
+    case AdjustmentType.note:
+      return 'Note only';
+  }
+}
