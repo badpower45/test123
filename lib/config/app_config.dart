@@ -4,14 +4,14 @@ class AppConfig {
   /// Supabase project URL, e.g. https://xyzcompany.supabase.co
   static const String supabaseUrl = String.fromEnvironment(
     'SUPABASE_URL',
-    defaultValue: 'https://cjojfmnlhkkdqcwkdjea.supabase.co',
+    defaultValue: 'https://rxlckqprxskhnkrnsaem.supabase.co',
   );
 
   /// Supabase anonymous public key.
   static const String supabaseAnonKey = String.fromEnvironment(
     'SUPABASE_ANON_KEY',
     defaultValue:
-        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNqb2pmbW5saGtrZHFjd2tkamVhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk4NDMxMTAsImV4cCI6MjA3NTQxOTExMH0.W7dExxtfxRr56XCr-c0VS1VEidtyyiEJrR97fB4pdsI',
+        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ4bGNrcXByeHNraG5rcm5zYWVtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjAyMDgyMTMsImV4cCI6MjA3NTc4NDIxM30.q6vdpD72xrQNNJp4aO9ctZB9h24AzlTu5vIkrkF-szY',
   );
 
   /// Supabase table that stores pulse rows.
