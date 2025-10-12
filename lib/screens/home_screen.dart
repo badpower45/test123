@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -240,7 +241,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<bool> _ensureNotificationPermission() async {
-    if (!Platform.isAndroid) {
+    if (kIsWeb || !Platform.isAndroid) {
       return true;
     }
     final status = await Permission.notification.status;

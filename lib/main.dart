@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -33,7 +34,7 @@ Future<void> main() async {
   await _seedDemoDataIfNeeded();
   await PulseSyncManager.initializeForMainIsolate();
   await PulseBackendClient.initialize();
-  if (Platform.isAndroid) {
+  if (!kIsWeb && Platform.isAndroid) {
     final status = await Permission.notification.status;
     if (!status.isGranted && !status.isLimited) {
       await Permission.notification.request();
@@ -71,7 +72,7 @@ class OldiesApp extends StatelessWidget {
     );
 
     return MaterialApp(
-	title: 'أولديزز وركرز',
+        title: 'أولديزز وركرز',
       debugShowCheckedModeBanner: false,
       theme: theme,
       locale: const Locale('ar', 'EG'),
