@@ -1683,7 +1683,7 @@ class _PermissionRequestSheetState extends State<_PermissionRequestSheet> {
                   labelText: 'نوع الطلب',
                   border: OutlineInputBorder(),
                 ),
-                initialValue: _selectedType,
+                value: _selectedType,
                 items: _types
                     .map(
                       (type) => DropdownMenuItem<String>(
