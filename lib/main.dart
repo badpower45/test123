@@ -128,7 +128,7 @@ Future<void> _seedDemoDataIfNeeded() async {
     return;
   }
 
-  final now = DateTime.now().toUtc();
+  // Only seed login credentials - NO demo pulse data
   final employees = [
     Employee(
       id: 'EMP001',
@@ -169,79 +169,9 @@ Future<void> _seedDemoDataIfNeeded() async {
   ];
 
   await employeeBox.putAll({for (final employee in employees) employee.id: employee});
-
-  final historyBox = Hive.box<PulseLogEntry>(pulseHistoryBox);
-  if (historyBox.isEmpty) {
-    final pulseEntries = [
-      PulseLogEntry(
-        pulse: Pulse(
-          employeeId: 'EMP003',
-          latitude: 30.0444,
-          longitude: 31.2357,
-          timestamp: now.subtract(const Duration(minutes: 12)),
-          isFake: false,
-        ),
-        recordedAt: now.subtract(const Duration(minutes: 12)),
-        wasOnline: true,
-        deliveryStatus: PulseDeliveryStatus.sentOnline,
-      ),
-      PulseLogEntry(
-        pulse: Pulse(
-          employeeId: 'EMP002',
-          latitude: 30.0450,
-          longitude: 31.2362,
-          timestamp: now.subtract(const Duration(hours: 2, minutes: 20)),
-          isFake: false,
-        ),
-        recordedAt: now.subtract(const Duration(hours: 2, minutes: 20)),
-        wasOnline: true,
-        deliveryStatus: PulseDeliveryStatus.sentOnline,
-      ),
-      PulseLogEntry(
-        pulse: Pulse(
-          employeeId: 'EMP003',
-          latitude: 30.0449,
-          longitude: 31.2361,
-          timestamp: now.subtract(const Duration(hours: 5)),
-          isFake: false,
-        ),
-        recordedAt: now.subtract(const Duration(hours: 5)),
-        wasOnline: false,
-        deliveryStatus: PulseDeliveryStatus.queuedOffline,
-      ),
-    ];
-
-    for (final entry in pulseEntries) {
-      await historyBox.add(entry);
-    }
-  }
-
-  final offlineBox = Hive.box<Pulse>(offlinePulsesBox);
-  if (offlineBox.isEmpty) {
-    await offlineBox.add(
-      Pulse(
-        employeeId: 'EMP003',
-        latitude: 30.0441,
-        longitude: 31.2355,
-        timestamp: now.subtract(const Duration(hours: 1, minutes: 15)),
-        isFake: false,
-      ),
-    );
-  }
-
-  final adjustmentBox = Hive.box<EmployeeAdjustment>(employeeAdjustmentsBox);
-  if (adjustmentBox.isEmpty) {
-    await adjustmentBox.put(
-      'ADJ-001',
-      EmployeeAdjustment(
-        id: 'ADJ-001',
-        employeeId: 'EMP002',
-        type: AdjustmentType.bonus,
-        reason: 'مكافأة أداء مستهدفة لشهر سبتمبر',
-        recordedBy: 'مريم حسن',
-        amount: 750,
-        createdAt: now.subtract(const Duration(days: 3)),
-      ),
-    );
-  }
+  
+  // NO demo pulse history
+  // NO demo offline pulses
+  // NO demo adjustments
+  // All data will be REAL from actual usage
 }

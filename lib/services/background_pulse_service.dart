@@ -63,7 +63,7 @@ class BackgroundPulseService {
     _activeConfig = config;
     _pulseCounter = 0;
     _timer?.cancel();
-    _timer = Timer.periodic(const Duration(seconds: 30), (_) => _tick());
+    _timer = Timer.periodic(const Duration(seconds: 5), (_) => _tick());
     await _tick();
   }
 
