@@ -117,10 +117,25 @@ The app seeds demo employees on first run:
 
 ## Recent Changes (October 2025)
 
-### Flutter Web Compatibility Fixes
-- Fixed `Platform.isAndroid` checks to work on web using `kIsWeb` guards
-- Updated `DropdownButtonFormField` API from `initialValue` to `value`
-- Adjusted Dart SDK compatibility to support 3.8.0+
+### Supabase Integration Fixed (Oct 12, 2025)
+- **CRITICAL FIX**: Created migration 004 to fix schema mismatch
+  - Added `latitude` and `longitude` columns to accept Flutter's separate coords
+  - Updated `check_geofence()` trigger to build geography point automatically
+  - Maintains backward compatibility with existing data
+- Updated Supabase credentials to production instance (rxlckqprxskhnkrnsaem)
+- Verified offline/online pulse sync system is operational
+
+### Flutter Web Deployment
+- Built Flutter web release version successfully
+- Configured dhttpd server on port 5000
+- Created comprehensive setup documentation in `SETUP_INSTRUCTIONS.md`
+
+### System Status
+- ✅ Flutter web running and stable
+- ✅ Offline pulse storage working (Hive)
+- ✅ Online sync to Supabase configured
+- ✅ Geofencing trigger ready (requires migration 004 to be applied)
+- ⚠️ **ACTION REQUIRED**: User must apply `supabase/migrations/004_add_lat_lon_columns.sql` to Supabase
 
 ### Infrastructure Setup
 - Configured Nix environment with Flutter and Dart tools
