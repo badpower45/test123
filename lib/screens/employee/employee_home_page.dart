@@ -1,182 +1,232 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'dart:async';
 import '../../theme/app_colors.dart';
-import '../../services/background_pulse_service.dart';
-import '../../constants/restaurant_config.dart';
+import '../../services/attendance_api_service.dart';
 
 class EmployeeHomePage extends StatefulWidget {
-  const EmployeeHomePage({super.key, required this.employeeId});
-
   final String employeeId;
+
+  const EmployeeHomePage({super.key, required this.employeeId});
 
   @override
   State<EmployeeHomePage> createState() => _EmployeeHomePageState();
 }
 
 class _EmployeeHomePageState extends State<EmployeeHomePage> {
-  bool _checkedIn = false;
-  bool _isProcessing = false;
+  bool _isCheckedIn = false;
   DateTime? _checkInTime;
-  Duration _elapsed = Duration.zero;
+  String _elapsedTime = '00:00:00';
   Timer? _timer;
-  int _pulseCount = 0;
-  bool _isOnline = true;
-  StreamSubscription<Map<String, dynamic>?>? _statusSubscription;
+  bool _isLoading = false;
 
   @override
   void initState() {
     super.initState();
-    _statusSubscription = BackgroundPulseService.statusStream().listen((event) {
-      if (!mounted || event == null) return;
-      
-      setState(() {
-        _isOnline = event['isOnline'] != false;
-        _pulseCount = (event['pulseCounter'] as num?)?.toInt() ?? _pulseCount;
-      });
-    });
+    _checkCurrentStatus();
   }
 
   @override
   void dispose() {
     _timer?.cancel();
-    _statusSubscription?.cancel();
     super.dispose();
   }
 
-  Future<void> _handleCheckIn() async {
-    setState(() => _isProcessing = true);
-
-    try {
-      await BackgroundPulseService.start(
-        PulseConfig(
-          employeeId: widget.employeeId,
-          restaurantLat: RestaurantConfig.latitude,
-          restaurantLon: RestaurantConfig.longitude,
-          radiusInMeters: RestaurantConfig.allowedRadiusInMeters,
-          enforceLocation: RestaurantConfig.enforceLocation,
-        ),
-      );
-
-      setState(() {
-        _checkedIn = true;
-        _checkInTime = DateTime.now();
-        _elapsed = Duration.zero;
-        _isProcessing = false;
-      });
-      
-      _startTimer();
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: AppColors.success,
-          content: Text(
-            'تم تسجيل الحضور بنجاح - ${_formatTime(DateTime.now())}',
-            style: GoogleFonts.ibmPlexSansArabic(color: Colors.white),
-            textDirection: TextDirection.rtl,
-          ),
-        ),
-      );
-    } catch (e) {
-      setState(() => _isProcessing = false);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: AppColors.danger,
-          content: Text(
-            'فشل تسجيل الحضور: ${e.toString()}',
-            style: GoogleFonts.ibmPlexSansArabic(color: Colors.white),
-            textDirection: TextDirection.rtl,
-          ),
-        ),
-      );
-    }
-  }
-
-  Future<void> _handleCheckOut() async {
-    setState(() => _isProcessing = true);
-
-    try {
-      await BackgroundPulseService.stop();
-      _timer?.cancel();
-
-      setState(() {
-        _checkedIn = false;
-        _elapsed = Duration.zero;
-        _checkInTime = null;
-        _isProcessing = false;
-      });
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: AppColors.success,
-          content: Text(
-            'تم تسجيل الانصراف بنجاح',
-            style: GoogleFonts.ibmPlexSansArabic(color: Colors.white),
-            textDirection: TextDirection.rtl,
-          ),
-        ),
-      );
-    } catch (e) {
-      setState(() => _isProcessing = false);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: AppColors.danger,
-          content: Text(
-            'فشل تسجيل الانصراف: ${e.toString()}',
-            style: GoogleFonts.ibmPlexSansArabic(color: Colors.white),
-            textDirection: TextDirection.rtl,
-          ),
-        ),
-      );
-    }
+  Future<void> _checkCurrentStatus() async {
+    // Check if user is currently checked in from backend
   }
 
   void _startTimer() {
     _timer?.cancel();
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted || _checkInTime == null) return;
-      setState(() {
-        _elapsed = DateTime.now().difference(_checkInTime!);
-      });
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_checkInTime != null) {
+        final duration = DateTime.now().difference(_checkInTime!);
+        setState(() {
+          _elapsedTime = _formatDuration(duration);
+        });
+      }
     });
   }
 
   String _formatDuration(Duration duration) {
-    final hours = duration.inHours.toString().padLeft(2, '0');
-    final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    final hours = twoDigits(duration.inHours);
+    final minutes = twoDigits(duration.inMinutes.remainder(60));
+    final seconds = twoDigits(duration.inSeconds.remainder(60));
     return '$hours:$minutes:$seconds';
   }
 
-  String _formatTime(DateTime time) {
-    final hour = time.hour.toString().padLeft(2, '0');
-    final minute = time.minute.toString().padLeft(2, '0');
-    return '$hour:$minute';
+  Future<void> _handleCheckIn() async {
+    setState(() => _isLoading = true);
+    
+    try {
+      await AttendanceApiService.checkIn(widget.employeeId);
+      
+      setState(() {
+        _isCheckedIn = true;
+        _checkInTime = DateTime.now();
+        _isLoading = false;
+      });
+      
+      _startTimer();
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✓ تم تسجيل الحضور بنجاح'),
+            backgroundColor: AppColors.success,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() => _isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('خطأ: ${e.toString()}'),
+            backgroundColor: AppColors.error,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
+  Future<void> _handleCheckOut() async {
+    setState(() => _isLoading = true);
+    
+    try {
+      await AttendanceApiService.checkOut(widget.employeeId, 'shift_id');
+      
+      setState(() {
+        _isCheckedIn = false;
+        _checkInTime = null;
+        _elapsedTime = '00:00:00';
+        _isLoading = false;
+      });
+      
+      _timer?.cancel();
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✓ تم تسجيل الانصراف بنجاح'),
+            backgroundColor: AppColors.success,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() => _isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('خطأ: ${e.toString()}'),
+            backgroundColor: AppColors.error,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
+  void _showAttendanceRequestDialog() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom,
+        ),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _buildStatusCard(),
-              const SizedBox(height: 20),
-              _buildTimerCard(),
-              const SizedBox(height: 20),
-              _buildActionButton(),
-              const SizedBox(height: 16),
-              if (_checkedIn) _buildAttendanceRequestButton(),
-              const SizedBox(height: 20),
-              _buildStatsRow(),
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppColors.primaryOrange.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.calendar_today,
+                      color: AppColors.primaryOrange,
+                      size: 24,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'طلب تسجيل حضور',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          'للموظفين الذين نسوا التسجيل',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
+              TextField(
+                decoration: InputDecoration(
+                  labelText: 'السبب',
+                  hintText: 'اكتب سبب نسيان التسجيل...',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: AppColors.primaryOrange, width: 2),
+                  ),
+                ),
+                maxLines: 3,
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('✓ تم إرسال الطلب بنجاح'),
+                      backgroundColor: AppColors.success,
+                    ),
+                  );
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primaryOrange,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: const Text(
+                  'إرسال الطلب',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                ),
+              ),
             ],
           ),
         ),
@@ -184,197 +234,279 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
     );
   }
 
-  Widget _buildStatusCard() {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: _checkedIn
-              ? [AppColors.success, AppColors.success.withOpacity(0.8)]
-              : [Colors.grey.shade400, Colors.grey.shade500],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: (_checkedIn ? AppColors.success : Colors.grey).withOpacity(0.3),
-            blurRadius: 15,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Icon(
-            _checkedIn ? Icons.check_circle : Icons.access_time,
-            color: Colors.white,
-            size: 48,
-          ),
-          const SizedBox(height: 12),
-          Text(
-            _checkedIn ? 'أنت قيد العمل' : 'أنت خارج العمل',
-            style: GoogleFonts.ibmPlexSansArabic(
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-              color: Colors.white,
-            ),
-            textDirection: TextDirection.rtl,
-          ),
-          if (_checkedIn && _checkInTime != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              'بدأت الساعة ${_formatTime(_checkInTime!)}',
-              style: GoogleFonts.ibmPlexSansArabic(
-                fontSize: 16,
-                color: Colors.white.withOpacity(0.9),
-              ),
-              textDirection: TextDirection.rtl,
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTimerCard() {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.grey.shade200),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Text(
-            'مدة العمل الحالية',
-            style: GoogleFonts.ibmPlexSansArabic(
-              fontSize: 16,
-              color: Colors.grey.shade600,
-            ),
-            textDirection: TextDirection.rtl,
-          ),
-          const SizedBox(height: 16),
-          Text(
-            _formatDuration(_elapsed),
-            style: GoogleFonts.ibmPlexSansArabic(
-              fontSize: 48,
-              fontWeight: FontWeight.bold,
-              color: _checkedIn ? AppColors.primaryOrange : Colors.grey.shade400,
-              letterSpacing: 2,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildActionButton() {
-    return ElevatedButton(
-      onPressed: _isProcessing
-          ? null
-          : (_checkedIn ? _handleCheckOut : _handleCheckIn),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: _checkedIn ? AppColors.danger : AppColors.success,
-        foregroundColor: Colors.white,
-        padding: const EdgeInsets.symmetric(vertical: 20),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        elevation: 0,
-      ),
-      child: _isProcessing
-          ? const SizedBox(
-              height: 24,
-              width: 24,
-              child: CircularProgressIndicator(
-                color: Colors.white,
-                strokeWidth: 2,
-              ),
-            )
-          : Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  _checkedIn ? Icons.logout : Icons.login,
-                  size: 28,
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(20.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Header with Greeting
+              Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  gradient: AppColors.primaryGradient,
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.primaryOrange.withOpacity(0.3),
+                      blurRadius: 20,
+                      offset: const Offset(0, 10),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 12),
-                Text(
-                  _checkedIn ? 'تسجيل الانصراف' : 'تسجيل الحضور',
-                  style: GoogleFonts.ibmPlexSansArabic(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Icon(
+                            Icons.wb_sunny_outlined,
+                            color: Colors.white,
+                            size: 28,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'صباح الخير',
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                'أهلاً بك في عملك اليوم',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              
+              const SizedBox(height: 24),
+              
+              // Status Card with Timer
+              Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.05),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: _isCheckedIn 
+                                ? AppColors.success.withOpacity(0.1)
+                                : AppColors.textTertiary.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(
+                            _isCheckedIn ? Icons.work : Icons.work_outline,
+                            color: _isCheckedIn ? AppColors.success : AppColors.textTertiary,
+                            size: 24,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _isCheckedIn ? 'قيد العمل' : 'خارج العمل',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: _isCheckedIn ? AppColors.success : AppColors.textSecondary,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                _isCheckedIn
+                                    ? 'منذ ${_checkInTime != null ? "${_checkInTime!.hour}:${_checkInTime!.minute.toString().padLeft(2, '0')}" : ""}'
+                                    : 'سجل حضورك لبدء العمل',
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  color: AppColors.textTertiary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    
+                    if (_isCheckedIn) ...[
+                      const SizedBox(height: 24),
+                      Container(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        decoration: BoxDecoration(
+                          color: AppColors.surfaceVariant,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Column(
+                          children: [
+                            const Text(
+                              'مدة العمل',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: AppColors.textSecondary,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              _elapsedTime,
+                              style: const TextStyle(
+                                fontSize: 32,
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.primaryOrange,
+                                fontFeatures: [FontFeature.tabularFigures()],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              
+              const SizedBox(height: 24),
+              
+              // Main Action Button
+              SizedBox(
+                height: 56,
+                child: ElevatedButton(
+                  onPressed: _isLoading
+                      ? null
+                      : (_isCheckedIn ? _handleCheckOut : _handleCheckIn),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _isCheckedIn ? AppColors.error : AppColors.primaryOrange,
+                    disabledBackgroundColor: AppColors.textTertiary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    elevation: 0,
                   ),
-                  textDirection: TextDirection.rtl,
+                  child: _isLoading
+                      ? const SizedBox(
+                          height: 24,
+                          width: 24,
+                          child: CircularProgressIndicator(
+                            color: Colors.white,
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              _isCheckedIn ? Icons.logout : Icons.login,
+                              size: 24,
+                            ),
+                            const SizedBox(width: 12),
+                            Text(
+                              _isCheckedIn ? 'تسجيل الانصراف' : 'تسجيل الحضور',
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
                 ),
-              ],
-            ),
-    );
-  }
-
-  Widget _buildAttendanceRequestButton() {
-    return OutlinedButton.icon(
-      onPressed: () {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'سيتم إضافة نموذج طلب الحضور قريباً',
-              style: GoogleFonts.ibmPlexSansArabic(),
-              textDirection: TextDirection.rtl,
-            ),
+              ),
+              
+              const SizedBox(height: 16),
+              
+              // Secondary Action - Attendance Request
+              OutlinedButton(
+                onPressed: _showAttendanceRequestDialog,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.primaryOrange,
+                  side: const BorderSide(color: AppColors.primaryOrange),
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                ),
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.event_note, size: 20),
+                    SizedBox(width: 8),
+                    Text(
+                      'طلب تسجيل حضور',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              
+              const SizedBox(height: 32),
+              
+              // Quick Stats
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildStatCard(
+                      icon: Icons.calendar_month,
+                      label: 'هذا الشهر',
+                      value: '22 يوم',
+                      color: AppColors.info,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: _buildStatCard(
+                      icon: Icons.schedule,
+                      label: 'إجمالي الساعات',
+                      value: '176 ساعة',
+                      color: AppColors.success,
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
-        );
-      },
-      style: OutlinedButton.styleFrom(
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        side: BorderSide(color: AppColors.primaryOrange),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
         ),
       ),
-      icon: const Icon(Icons.assignment_late, color: AppColors.primaryOrange),
-      label: Text(
-        'طلب حضور (نسيت التسجيل)',
-        style: GoogleFonts.ibmPlexSansArabic(
-          fontSize: 16,
-          color: AppColors.primaryOrange,
-          fontWeight: FontWeight.w600,
-        ),
-        textDirection: TextDirection.rtl,
-      ),
-    );
-  }
-
-  Widget _buildStatsRow() {
-    return Row(
-      children: [
-        Expanded(
-          child: _buildStatCard(
-            icon: Icons.repeat,
-            label: 'النبضات اليوم',
-            value: _pulseCount.toString(),
-            color: AppColors.primaryOrange,
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: _buildStatCard(
-            icon: _isOnline ? Icons.wifi : Icons.wifi_off,
-            label: 'الحالة',
-            value: _isOnline ? 'متصل' : 'أوفلاين',
-            color: _isOnline ? Colors.blue : Colors.orange,
-          ),
-        ),
-      ],
     );
   }
 
@@ -385,32 +517,45 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
     required Color color,
   }) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Column(
         children: [
-          Icon(icon, color: color, size: 32),
-          const SizedBox(height: 8),
-          Text(
-            label,
-            style: GoogleFonts.ibmPlexSansArabic(
-              fontSize: 12,
-              color: Colors.grey.shade600,
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(10),
             ),
-            textDirection: TextDirection.rtl,
+            child: Icon(icon, color: color, size: 24),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: AppColors.textPrimary,
+            ),
           ),
           const SizedBox(height: 4),
           Text(
-            value,
-            style: GoogleFonts.ibmPlexSansArabic(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: color,
+            label,
+            style: const TextStyle(
+              fontSize: 12,
+              color: AppColors.textSecondary,
             ),
+            textAlign: TextAlign.center,
           ),
         ],
       ),

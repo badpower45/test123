@@ -1,469 +1,414 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import '../../theme/app_colors.dart';
-import '../../models/attendance_report.dart';
 
 class ReportsPage extends StatefulWidget {
-  const ReportsPage({super.key, required this.employeeId});
-
   final String employeeId;
+
+  const ReportsPage({super.key, required this.employeeId});
 
   @override
   State<ReportsPage> createState() => _ReportsPageState();
 }
 
 class _ReportsPageState extends State<ReportsPage> {
-  bool _isLoading = false;
-  AttendanceReport? _report;
+  bool get _isReportAvailable {
+    final day = DateTime.now().day;
+    return day == 1 || day == 16;
+  }
 
-  bool get _isDay1or16 {
+  int get _daysUntilNextReport {
     final now = DateTime.now();
-    return now.day == 1 || now.day == 16;
+    final day = now.day;
+    
+    if (day < 16) {
+      return 16 - day;
+    } else {
+      final nextMonth = DateTime(now.year, now.month + 1, 1);
+      return nextMonth.difference(now).inDays;
+    }
   }
 
-  Future<void> _loadReport(String period) async {
-    setState(() => _isLoading = true);
-
-    await Future.delayed(const Duration(seconds: 1));
-
-    if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          'سيتم تحميل التقرير من الـ API قريباً',
-          style: GoogleFonts.ibmPlexSansArabic(),
-          textDirection: TextDirection.rtl,
-        ),
-      ),
-    );
-
-    setState(() => _isLoading = false);
-  }
-
-  @override
-  Widget build(BuildContext context) {
+  String get _nextReportDate {
     final now = DateTime.now();
-    final daysUntilNext = now.day < 16
-        ? 16 - now.day
-        : DateTime(now.year, now.month + 1, 1).difference(now).inDays;
-
-    return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA),
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        title: Text(
-          'تقرير الحضور',
-          style: GoogleFonts.ibmPlexSansArabic(
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-            color: Colors.black87,
-          ),
-        ),
-        centerTitle: true,
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _report == null
-              ? _buildEmptyState(daysUntilNext)
-              : _buildReportView(),
-    );
-  }
-
-  Widget _buildEmptyState(int daysUntilNext) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [AppColors.primaryOrange, Color(0xFFFF9A56)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(20),
-              boxShadow: [
-                BoxShadow(
-                  color: AppColors.primaryOrange.withOpacity(0.3),
-                  blurRadius: 15,
-                  offset: const Offset(0, 8),
-                ),
-              ],
-            ),
-            child: Column(
-              children: [
-                Icon(
-                  _isDay1or16 ? Icons.description : Icons.lock_clock,
-                  size: 64,
-                  color: Colors.white,
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  _isDay1or16
-                      ? 'التقرير متاح الآن'
-                      : 'التقرير غير متاح حالياً',
-                  style: GoogleFonts.ibmPlexSansArabic(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  _isDay1or16
-                      ? 'يمكنك الآن عرض تقرير الحضور والراتب'
-                      : 'يمكنك عرض التقرير في يوم 1 أو يوم 16 من كل شهر',
-                  style: GoogleFonts.ibmPlexSansArabic(
-                    fontSize: 16,
-                    color: Colors.white.withOpacity(0.9),
-                  ),
-                  textAlign: TextAlign.center,
-                  textDirection: TextDirection.rtl,
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 20),
-          if (!_isDay1or16) ...[
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.grey.shade200),
-              ),
-              child: Column(
-                children: [
-                  Icon(
-                    Icons.calendar_month,
-                    size: 48,
-                    color: Colors.grey.shade400,
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    'متبقي $daysUntilNext يوم على التقرير التالي',
-                    style: GoogleFonts.ibmPlexSansArabic(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.grey.shade700,
-                    ),
-                    textDirection: TextDirection.rtl,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'سيتم فتح التقرير تلقائياً في التاريخ المحدد',
-                    style: GoogleFonts.ibmPlexSansArabic(
-                      fontSize: 14,
-                      color: Colors.grey.shade500,
-                    ),
-                    textDirection: TextDirection.rtl,
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 20),
-          ],
-          _buildReportTypeCard(
-            title: 'تقرير منتصف الشهر',
-            subtitle: 'من 1 إلى 15 ${_getMonthName(DateTime.now().month)}',
-            icon: Icons.calendar_view_month,
-            color: Colors.blue,
-            enabled: _isDay1or16 && DateTime.now().day == 16,
-            onTap: () => _loadReport('mid-month'),
-          ),
-          const SizedBox(height: 12),
-          _buildReportTypeCard(
-            title: 'تقرير نهاية الشهر',
-            subtitle: 'من 16 إلى آخر ${_getMonthName(DateTime.now().month)}',
-            icon: Icons.calendar_today,
-            color: Colors.purple,
-            enabled: _isDay1or16 && DateTime.now().day == 1,
-            onTap: () => _loadReport('full-month'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildReportTypeCard({
-    required String title,
-    required String subtitle,
-    required IconData icon,
-    required Color color,
-    required bool enabled,
-    required VoidCallback onTap,
-  }) {
-    return Opacity(
-      opacity: enabled ? 1.0 : 0.5,
-      child: GestureDetector(
-        onTap: enabled ? onTap : null,
-        child: Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: enabled ? color : Colors.grey.shade300,
-              width: 2,
-            ),
-          ),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: color.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(icon, color: color, size: 32),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: GoogleFonts.ibmPlexSansArabic(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: enabled ? Colors.black87 : Colors.grey.shade600,
-                      ),
-                      textDirection: TextDirection.rtl,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      subtitle,
-                      style: GoogleFonts.ibmPlexSansArabic(
-                        fontSize: 14,
-                        color: Colors.grey.shade600,
-                      ),
-                      textDirection: TextDirection.rtl,
-                    ),
-                  ],
-                ),
-              ),
-              if (enabled)
-                Icon(Icons.arrow_forward_ios, color: color, size: 20),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildReportView() {
-    if (_report == null) return const SizedBox();
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _buildSummaryCard(),
-          const SizedBox(height: 16),
-          _buildAttendanceTable(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSummaryCard() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [AppColors.primaryOrange, Color(0xFFFF9A56)],
-        ),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Column(
-        children: [
-          Text(
-            'ملخص الفترة',
-            style: GoogleFonts.ibmPlexSansArabic(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-              color: Colors.white,
-            ),
-          ),
-          const SizedBox(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _buildSummaryItem('ساعات العمل', '120', Icons.access_time),
-              _buildSummaryItem('السلف', '500', Icons.attach_money),
-              _buildSummaryItem('الخصومات', '0', Icons.money_off),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSummaryItem(String label, String value, IconData icon) {
-    return Column(
-      children: [
-        Icon(icon, color: Colors.white, size: 28),
-        const SizedBox(height: 8),
-        Text(
-          value,
-          style: GoogleFonts.ibmPlexSansArabic(
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
-          ),
-        ),
-        Text(
-          label,
-          style: GoogleFonts.ibmPlexSansArabic(
-            fontSize: 12,
-            color: Colors.white.withOpacity(0.9),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildAttendanceTable() {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              'سجل الحضور التفصيلي',
-              style: GoogleFonts.ibmPlexSansArabic(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-              textDirection: TextDirection.rtl,
-            ),
-          ),
-          const Divider(height: 1),
-          _buildTableHeader(),
-          const Divider(height: 1),
-          _buildTableRow('1 يناير', '09:00', '17:00', '8.0', '0', '0'),
-          const Divider(height: 1),
-          _buildTableRow('2 يناير', '09:15', '17:10', '7.9', '0', '0'),
-          const Divider(height: 1),
-          _buildTableRow('3 يناير', '09:00', '18:00', '9.0', '0', '0'),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTableHeader() {
-    return Container(
-      color: Colors.grey.shade50,
-      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-      child: Row(
-        children: [
-          Expanded(
-            flex: 2,
-            child: _buildTableHeaderCell('التاريخ'),
-          ),
-          Expanded(child: _buildTableHeaderCell('الحضور')),
-          Expanded(child: _buildTableHeaderCell('الانصراف')),
-          Expanded(child: _buildTableHeaderCell('الساعات')),
-          Expanded(child: _buildTableHeaderCell('سلف')),
-          Expanded(child: _buildTableHeaderCell('خصم')),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTableHeaderCell(String text) {
-    return Text(
-      text,
-      style: GoogleFonts.ibmPlexSansArabic(
-        fontSize: 12,
-        fontWeight: FontWeight.bold,
-        color: Colors.grey.shade700,
-      ),
-      textAlign: TextAlign.center,
-      textDirection: TextDirection.rtl,
-    );
-  }
-
-  Widget _buildTableRow(
-    String date,
-    String checkIn,
-    String checkOut,
-    String hours,
-    String advance,
-    String deduction,
-  ) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-      child: Row(
-        children: [
-          Expanded(
-            flex: 2,
-            child: _buildTableCell(date, fontSize: 13, bold: true),
-          ),
-          Expanded(child: _buildTableCell(checkIn)),
-          Expanded(child: _buildTableCell(checkOut)),
-          Expanded(child: _buildTableCell(hours)),
-          Expanded(
-            child: _buildTableCell(
-              advance,
-              color: advance != '0' ? AppColors.primaryOrange : null,
-            ),
-          ),
-          Expanded(
-            child: _buildTableCell(
-              deduction,
-              color: deduction != '0' ? AppColors.danger : null,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTableCell(
-    String text, {
-    double fontSize = 12,
-    bool bold = false,
-    Color? color,
-  }) {
-    return Text(
-      text,
-      style: GoogleFonts.ibmPlexSansArabic(
-        fontSize: fontSize,
-        fontWeight: bold ? FontWeight.bold : FontWeight.normal,
-        color: color ?? Colors.grey.shade700,
-      ),
-      textAlign: TextAlign.center,
-    );
+    final day = now.day;
+    
+    if (day < 16) {
+      return '16 ${_getMonthName(now.month)}';
+    } else {
+      final nextMonth = now.month == 12 ? 1 : now.month + 1;
+      return '1 ${_getMonthName(nextMonth)}';
+    }
   }
 
   String _getMonthName(int month) {
     const months = [
-      'يناير',
-      'فبراير',
-      'مارس',
-      'أبريل',
-      'مايو',
-      'يونيو',
-      'يوليو',
-      'أغسطس',
-      'سبتمبر',
-      'أكتوبر',
-      'نوفمبر',
-      'ديسمبر'
+      'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
+      'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'
     ];
     return months[month - 1];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Header
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                gradient: AppColors.subtleGradient,
+                borderRadius: const BorderRadius.vertical(
+                  bottom: Radius.circular(24),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AppColors.primaryOrange.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(
+                          Icons.analytics,
+                          color: AppColors.primaryOrange,
+                          size: 28,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'التقارير',
+                              style: TextStyle(
+                                fontSize: 28,
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.textPrimary,
+                              ),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              'تقرير الحضور الشهري',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: AppColors.textSecondary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (!_isReportAvailable) ...[
+                      // Countdown Card
+                      Container(
+                        padding: const EdgeInsets.all(24),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [
+                              AppColors.primaryOrange.withOpacity(0.1),
+                              AppColors.primaryLight.withOpacity(0.1),
+                            ],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: AppColors.primaryOrange.withOpacity(0.3),
+                            width: 2,
+                          ),
+                        ),
+                        child: Column(
+                          children: [
+                            const Icon(
+                              Icons.schedule,
+                              size: 64,
+                              color: AppColors.primaryOrange,
+                            ),
+                            const SizedBox(height: 16),
+                            const Text(
+                              'التقرير غير متاح حالياً',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.textPrimary,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              'التقارير متاحة يوم 1 و 16 من كل شهر',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: AppColors.textSecondary,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 24),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 24,
+                                vertical: 16,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(
+                                    Icons.calendar_today,
+                                    color: AppColors.primaryOrange,
+                                    size: 20,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      const Text(
+                                        'التقرير القادم',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: AppColors.textTertiary,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        _nextReportDate,
+                                        style: const TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.bold,
+                                          color: AppColors.textPrimary,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(width: 24),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 8,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.primaryOrange.withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(20),
+                                    ),
+                                    child: Text(
+                                      'بعد $_daysUntilNextReport ${_daysUntilNextReport == 1 ? "يوم" : "أيام"}',
+                                      style: const TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.bold,
+                                        color: AppColors.primaryOrange,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      
+                      const SizedBox(height: 24),
+                      
+                      // Quick Stats While Waiting
+                      const Text(
+                        'إحصائيات سريعة',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      
+                      const SizedBox(height: 16),
+                      
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _buildQuickStat(
+                              icon: Icons.event_available,
+                              label: 'أيام الحضور',
+                              value: '22',
+                              color: AppColors.success,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _buildQuickStat(
+                              icon: Icons.schedule,
+                              label: 'إجمالي الساعات',
+                              value: '176',
+                              color: AppColors.info,
+                            ),
+                          ),
+                        ],
+                      ),
+                      
+                      const SizedBox(height: 12),
+                      
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _buildQuickStat(
+                              icon: Icons.payments,
+                              label: 'السلف',
+                              value: '500',
+                              color: AppColors.warning,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _buildQuickStat(
+                              icon: Icons.beach_access,
+                              label: 'الإجازات',
+                              value: '2',
+                              color: AppColors.primaryOrange,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ] else ...[
+                      // Report Available
+                      Container(
+                        padding: const EdgeInsets.all(24),
+                        decoration: BoxDecoration(
+                          gradient: AppColors.primaryGradient,
+                          borderRadius: BorderRadius.circular(20),
+                          boxShadow: [
+                            BoxShadow(
+                              color: AppColors.primaryOrange.withOpacity(0.3),
+                              blurRadius: 20,
+                              offset: const Offset(0, 10),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          children: [
+                            const Icon(
+                              Icons.check_circle,
+                              size: 64,
+                              color: Colors.white,
+                            ),
+                            const SizedBox(height: 16),
+                            const Text(
+                              'التقرير متاح الآن',
+                              style: TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            const Text(
+                              'يمكنك الاطلاع على تقرير حضورك الشهري',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.white70,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 24),
+                            ElevatedButton.icon(
+                              onPressed: () {
+                                // Open report
+                              },
+                              icon: const Icon(Icons.download),
+                              label: const Text('عرض التقرير'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.white,
+                                foregroundColor: AppColors.primaryOrange,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 32,
+                                  vertical: 16,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQuickStat({
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: color, size: 28),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 12,
+              color: AppColors.textSecondary,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
   }
 }

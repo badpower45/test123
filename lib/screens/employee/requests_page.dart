@@ -1,29 +1,28 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import '../../theme/app_colors.dart';
-import '../../models/leave_request.dart' as leave;
-import '../../models/advance_request.dart' as advance;
+import '../../models/leave_request.dart';
+import '../../models/advance_request.dart';
+import '../../services/requests_api_service.dart';
 
 class RequestsPage extends StatefulWidget {
-  const RequestsPage({super.key, required this.employeeId});
-
   final String employeeId;
+
+  const RequestsPage({super.key, required this.employeeId});
 
   @override
   State<RequestsPage> createState() => _RequestsPageState();
 }
 
-class _RequestsPageState extends State<RequestsPage> with SingleTickerProviderStateMixin {
+class _RequestsPageState extends State<RequestsPage>
+    with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  final List<leave.LeaveRequest> _leaveRequests = [];
-  final List<advance.AdvanceRequest> _advanceRequests = [];
-  double _currentEarnings = 0.0;
+  double? _currentEarnings;
+  bool _isLoadingEarnings = false;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    _loadRequests();
   }
 
   @override
@@ -32,96 +31,39 @@ class _RequestsPageState extends State<RequestsPage> with SingleTickerProviderSt
     super.dispose();
   }
 
-  Future<void> _loadRequests() async {
-    setState(() {
-      _currentEarnings = 3500.0;
-    });
+  Future<void> _loadCurrentEarnings() async {
+    if (_currentEarnings != null) return;
+    
+    setState(() => _isLoadingEarnings = true);
+    try {
+      final earnings = await RequestsApiService.getCurrentEarnings(widget.employeeId);
+      setState(() {
+        _currentEarnings = earnings;
+        _isLoadingEarnings = false;
+      });
+    } catch (e) {
+      setState(() => _isLoadingEarnings = false);
+    }
   }
 
-  Future<void> _createLeaveRequest() async {
-    final result = await showModalBottomSheet<Map<String, dynamic>>(
+  void _showLeaveRequestSheet() {
+    showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => _LeaveRequestForm(),
-    );
-
-    if (result == null) return;
-
-    final leaveDate = result['date'] as DateTime;
-    final type = result['type'] as leave.LeaveType;
-    final reason = result['reason'] as String;
-
-    final now = DateTime.now();
-    final diff = leaveDate.difference(now);
-
-    if (type == leave.LeaveType.normal && diff.inHours < 48) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: AppColors.danger,
-          content: Text(
-            'طلب الإجازة العادية يجب أن يكون قبلها بـ 48 ساعة على الأقل',
-            style: GoogleFonts.ibmPlexSansArabic(color: Colors.white),
-            textDirection: TextDirection.rtl,
-          ),
-        ),
-      );
-      return;
-    }
-
-    if (type == leave.LeaveType.emergency && diff.inHours < 24) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: AppColors.danger,
-          content: Text(
-            'طلب الإجازة الطارئة يجب أن يكون قبلها بـ 24 ساعة على الأقل',
-            style: GoogleFonts.ibmPlexSansArabic(color: Colors.white),
-            textDirection: TextDirection.rtl,
-          ),
-        ),
-      );
-      return;
-    }
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        backgroundColor: AppColors.success,
-        content: Text(
-          'تم إرسال طلب الإجازة للمدير',
-          style: GoogleFonts.ibmPlexSansArabic(color: Colors.white),
-          textDirection: TextDirection.rtl,
-        ),
-      ),
+      builder: (context) => _LeaveRequestSheet(employeeId: widget.employeeId),
     );
   }
 
-  Future<void> _createAdvanceRequest() async {
-    final maxAllowed = _currentEarnings * 0.30;
-
-    final result = await showModalBottomSheet<double>(
+  void _showAdvanceRequestSheet() {
+    _loadCurrentEarnings();
+    showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => _AdvanceRequestForm(
-        maxAllowed: maxAllowed,
+      builder: (context) => _AdvanceRequestSheet(
+        employeeId: widget.employeeId,
         currentEarnings: _currentEarnings,
-      ),
-    );
-
-    if (result == null) return;
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        backgroundColor: AppColors.success,
-        content: Text(
-          'تم إرسال طلب السلفة بمبلغ ${result.toStringAsFixed(0)} جنيه للمدير',
-          style: GoogleFonts.ibmPlexSansArabic(color: Colors.white),
-          textDirection: TextDirection.rtl,
-        ),
       ),
     );
   }
@@ -129,350 +71,319 @@ class _RequestsPageState extends State<RequestsPage> with SingleTickerProviderSt
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA),
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        title: Text(
-          'طلباتي',
-          style: GoogleFonts.ibmPlexSansArabic(
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-            color: Colors.black87,
-          ),
-        ),
-        centerTitle: true,
-        bottom: TabBar(
-          controller: _tabController,
-          labelColor: AppColors.primaryOrange,
-          unselectedLabelColor: Colors.grey,
-          indicatorColor: AppColors.primaryOrange,
-          labelStyle: GoogleFonts.ibmPlexSansArabic(
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-          ),
-          tabs: const [
-            Tab(text: 'الإجازات'),
-            Tab(text: 'السلف'),
-          ],
-        ),
-      ),
-      body: TabBarView(
-        controller: _tabController,
+      backgroundColor: AppColors.background,
+      body: Column(
         children: [
-          _buildLeaveRequestsTab(),
-          _buildAdvanceRequestsTab(),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          if (_tabController.index == 0) {
-            _createLeaveRequest();
-          } else {
-            _createAdvanceRequest();
-          }
-        },
-        backgroundColor: AppColors.primaryOrange,
-        icon: const Icon(Icons.add),
-        label: Text(
-          _tabController.index == 0 ? 'طلب إجازة' : 'طلب سلفة',
-          style: GoogleFonts.ibmPlexSansArabic(fontWeight: FontWeight.bold),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildLeaveRequestsTab() {
-    if (_leaveRequests.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.event_busy, size: 80, color: Colors.grey.shade300),
-            const SizedBox(height: 16),
-            Text(
-              'لا توجد طلبات إجازة',
-              style: GoogleFonts.ibmPlexSansArabic(
-                fontSize: 18,
-                color: Colors.grey.shade500,
+          // Header
+          Container(
+            padding: const EdgeInsets.fromLTRB(20, 60, 20, 20),
+            decoration: BoxDecoration(
+              gradient: AppColors.subtleGradient,
+              borderRadius: const BorderRadius.vertical(
+                bottom: Radius.circular(24),
               ),
             ),
-            const SizedBox(height: 8),
-            Text(
-              'اضغط على الزر بالأسفل لتقديم طلب جديد',
-              style: GoogleFonts.ibmPlexSansArabic(
-                fontSize: 14,
-                color: Colors.grey.shade400,
-              ),
-              textDirection: TextDirection.rtl,
-            ),
-          ],
-        ),
-      );
-    }
-
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: _leaveRequests.length,
-      itemBuilder: (context, index) {
-        final request = _leaveRequests[index];
-        return _buildLeaveRequestCard(request);
-      },
-    );
-  }
-
-  Widget _buildAdvanceRequestsTab() {
-    return Column(
-      children: [
-        Container(
-          margin: const EdgeInsets.all(16),
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [AppColors.primaryOrange, Color(0xFFFF9A56)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Column(
-            children: [
-              Text(
-                'مرتبك الحالي',
-                style: GoogleFonts.ibmPlexSansArabic(
-                  fontSize: 14,
-                  color: Colors.white.withOpacity(0.9),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'الطلبات',
+                  style: TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.textPrimary,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                '${_currentEarnings.toStringAsFixed(0)} جنيه',
-                style: GoogleFonts.ibmPlexSansArabic(
-                  fontSize: 32,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
+                const SizedBox(height: 8),
+                const Text(
+                  'إدارة طلبات الإجازات والسلف',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: AppColors.textSecondary,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'يمكنك طلب سلفة حتى ${(_currentEarnings * 0.30).toStringAsFixed(0)} جنيه (30%)',
-                style: GoogleFonts.ibmPlexSansArabic(
-                  fontSize: 12,
-                  color: Colors.white.withOpacity(0.8),
-                ),
-                textDirection: TextDirection.rtl,
-              ),
-            ],
-          ),
-        ),
-        Expanded(
-          child: _advanceRequests.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.account_balance_wallet,
-                          size: 80, color: Colors.grey.shade300),
-                      const SizedBox(height: 16),
-                      Text(
-                        'لا توجد طلبات سلف',
-                        style: GoogleFonts.ibmPlexSansArabic(
-                          fontSize: 18,
-                          color: Colors.grey.shade500,
-                        ),
+                const SizedBox(height: 20),
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.05),
+                        blurRadius: 10,
+                        offset: const Offset(0, 2),
                       ),
                     ],
                   ),
-                )
-              : ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  itemCount: _advanceRequests.length,
-                  itemBuilder: (context, index) {
-                    final request = _advanceRequests[index];
-                    return _buildAdvanceRequestCard(request);
-                  },
+                  child: TabBar(
+                    controller: _tabController,
+                    indicator: BoxDecoration(
+                      color: AppColors.primaryOrange,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    labelColor: Colors.white,
+                    unselectedLabelColor: AppColors.textSecondary,
+                    dividerColor: Colors.transparent,
+                    tabs: const [
+                      Tab(
+                        icon: Icon(Icons.beach_access),
+                        text: 'الإجازات',
+                      ),
+                      Tab(
+                        icon: Icon(Icons.payments),
+                        text: 'السلف',
+                      ),
+                    ],
+                  ),
                 ),
-        ),
-      ],
+              ],
+            ),
+          ),
+          
+          // Tab Content
+          Expanded(
+            child: TabBarView(
+              controller: _tabController,
+              children: [
+                _LeaveRequestsTab(
+                  employeeId: widget.employeeId,
+                  onNewRequest: _showLeaveRequestSheet,
+                ),
+                _AdvanceRequestsTab(
+                  employeeId: widget.employeeId,
+                  onNewRequest: _showAdvanceRequestSheet,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// Leave Requests Tab
+class _LeaveRequestsTab extends StatelessWidget {
+  final String employeeId;
+  final VoidCallback onNewRequest;
+
+  const _LeaveRequestsTab({
+    required this.employeeId,
+    required this.onNewRequest,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ElevatedButton.icon(
+            onPressed: onNewRequest,
+            icon: const Icon(Icons.add),
+            label: const Text('طلب إجازة جديد'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryOrange,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
+          
+          const SizedBox(height: 24),
+          
+          const Text(
+            'الطلبات السابقة',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          
+          const SizedBox(height: 16),
+          
+          // Placeholder for past requests
+          _buildEmptyState(
+            icon: Icons.inbox,
+            title: 'لا توجد طلبات سابقة',
+            subtitle: 'سيتم عرض طلباتك هنا',
+          ),
+        ],
+      ),
     );
   }
 
-  Widget _buildLeaveRequestCard(leave.LeaveRequest request) {
+  Widget _buildEmptyState({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+  }) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(40),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
       ),
-      child: Row(
+      child: Column(
         children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: _getStatusColor(request.status).withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(
-              _getStatusIcon(request.status),
-              color: _getStatusColor(request.status),
-              size: 28,
+          Icon(
+            icon,
+            size: 64,
+            color: AppColors.textTertiary,
+          ),
+          const SizedBox(height: 16),
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textSecondary,
             ),
           ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          const SizedBox(height: 8),
+          Text(
+            subtitle,
+            style: const TextStyle(
+              fontSize: 14,
+              color: AppColors.textTertiary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// Advance Requests Tab
+class _AdvanceRequestsTab extends StatelessWidget {
+  final String employeeId;
+  final VoidCallback onNewRequest;
+
+  const _AdvanceRequestsTab({
+    required this.employeeId,
+    required this.onNewRequest,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ElevatedButton.icon(
+            onPressed: onNewRequest,
+            icon: const Icon(Icons.add),
+            label: const Text('طلب سلفة جديد'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryOrange,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
+          
+          const SizedBox(height: 24),
+          
+          const Text(
+            'الطلبات السابقة',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          
+          const SizedBox(height: 16),
+          
+          // Placeholder
+          Container(
+            padding: const EdgeInsets.all(40),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: const Column(
               children: [
+                Icon(
+                  Icons.inbox,
+                  size: 64,
+                  color: AppColors.textTertiary,
+                ),
+                SizedBox(height: 16),
                 Text(
-                  request.isEmergency ? 'إجازة طارئة' : 'إجازة عادية',
-                  style: GoogleFonts.ibmPlexSansArabic(
+                  'لا توجد طلبات سابقة',
+                  style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w600,
+                    color: AppColors.textSecondary,
                   ),
                 ),
-                const SizedBox(height: 4),
+                SizedBox(height: 8),
                 Text(
-                  _formatDate(request.leaveDate),
-                  style: GoogleFonts.ibmPlexSansArabic(
+                  'سيتم عرض طلباتك هنا',
+                  style: TextStyle(
                     fontSize: 14,
-                    color: Colors.grey.shade600,
+                    color: AppColors.textTertiary,
                   ),
                 ),
               ],
             ),
           ),
-          _buildStatusBadge(request.status),
         ],
       ),
     );
-  }
-
-  Widget _buildAdvanceRequestCard(advance.AdvanceRequest request) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: _getStatusColor(request.status).withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(
-              Icons.attach_money,
-              color: _getStatusColor(request.status),
-              size: 28,
-            ),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '${request.amount.toStringAsFixed(0)} جنيه',
-                  style: GoogleFonts.ibmPlexSansArabic(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  _formatDateTime(request.createdAt),
-                  style: GoogleFonts.ibmPlexSansArabic(
-                    fontSize: 14,
-                    color: Colors.grey.shade600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          _buildStatusBadge(request.status),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatusBadge(dynamic status) {
-    final statusText = status == advance.RequestStatus.pending ||
-            status == leave.RequestStatus.pending
-        ? 'قيد المراجعة'
-        : status == advance.RequestStatus.approved ||
-                status == leave.RequestStatus.approved
-            ? 'موافق عليه'
-            : 'مرفوض';
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: _getStatusColor(status).withOpacity(0.1),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: _getStatusColor(status)),
-      ),
-      child: Text(
-        statusText,
-        style: GoogleFonts.ibmPlexSansArabic(
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-          color: _getStatusColor(status),
-        ),
-      ),
-    );
-  }
-
-  Color _getStatusColor(dynamic status) {
-    if (status == advance.RequestStatus.pending ||
-        status == leave.RequestStatus.pending) {
-      return Colors.orange;
-    } else if (status == advance.RequestStatus.approved ||
-        status == leave.RequestStatus.approved) {
-      return AppColors.success;
-    } else {
-      return AppColors.danger;
-    }
-  }
-
-  IconData _getStatusIcon(dynamic status) {
-    if (status == leave.RequestStatus.pending) {
-      return Icons.pending;
-    } else if (status == leave.RequestStatus.approved) {
-      return Icons.check_circle;
-    } else {
-      return Icons.cancel;
-    }
-  }
-
-  String _formatDate(DateTime date) {
-    return '${date.day}/${date.month}/${date.year}';
-  }
-
-  String _formatDateTime(DateTime date) {
-    return '${date.day}/${date.month}/${date.year} - ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
   }
 }
 
-class _LeaveRequestForm extends StatefulWidget {
+// Leave Request Sheet
+class _LeaveRequestSheet extends StatefulWidget {
+  final String employeeId;
+
+  const _LeaveRequestSheet({required this.employeeId});
+
   @override
-  State<_LeaveRequestForm> createState() => _LeaveRequestFormState();
+  State<_LeaveRequestSheet> createState() => _LeaveRequestSheetState();
 }
 
-class _LeaveRequestFormState extends State<_LeaveRequestForm> {
+class _LeaveRequestSheetState extends State<_LeaveRequestSheet> {
+  LeaveType _selectedType = LeaveType.normal;
   DateTime? _selectedDate;
-  leave.LeaveType _type = leave.LeaveType.normal;
   final _reasonController = TextEditingController();
 
   @override
   void dispose() {
     _reasonController.dispose();
     super.dispose();
+  }
+
+  Future<void> _selectDate() async {
+    final date = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now().add(const Duration(days: 2)),
+      firstDate: DateTime.now(),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: AppColors.primaryOrange,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+    
+    if (date != null) {
+      setState(() => _selectedDate = date);
+    }
   }
 
   @override
@@ -488,166 +399,116 @@ class _LeaveRequestFormState extends State<_LeaveRequestForm> {
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade300,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            Text(
-              'طلب إجازة',
-              style: GoogleFonts.ibmPlexSansArabic(
+            const Text(
+              'طلب إجازة جديد',
+              style: TextStyle(
                 fontSize: 24,
                 fontWeight: FontWeight.bold,
+                color: AppColors.textPrimary,
               ),
-              textAlign: TextAlign.center,
             ),
+            
             const SizedBox(height: 24),
-            Text(
+            
+            const Text(
               'نوع الإجازة',
-              style: GoogleFonts.ibmPlexSansArabic(
-                fontSize: 16,
+              style: TextStyle(
+                fontSize: 14,
                 fontWeight: FontWeight.w600,
+                color: AppColors.textSecondary,
               ),
-              textDirection: TextDirection.rtl,
             ),
             const SizedBox(height: 12),
+            
             Row(
               children: [
                 Expanded(
-                  child: _buildTypeButton(
-                    label: 'عادية (قبلها ب48 ساعة)',
-                    selected: _type == leave.LeaveType.normal,
-                    onTap: () => setState(() => _type = leave.LeaveType.normal),
+                  child: _buildTypeCard(
+                    type: LeaveType.normal,
+                    title: 'إجازة عادية',
+                    subtitle: 'قبلها ب 48 ساعة',
+                    icon: Icons.event_available,
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: _buildTypeButton(
-                    label: 'طارئة (قبلها ب24 ساعة)',
-                    selected: _type == leave.LeaveType.emergency,
-                    onTap: () =>
-                        setState(() => _type = leave.LeaveType.emergency),
+                  child: _buildTypeCard(
+                    type: LeaveType.emergency,
+                    title: 'إجازة طارئة',
+                    subtitle: 'قبلها ب 24 ساعة',
+                    icon: Icons.warning_amber,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 20),
-            Text(
-              'تاريخ الإجازة',
-              style: GoogleFonts.ibmPlexSansArabic(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-              ),
-              textDirection: TextDirection.rtl,
-            ),
-            const SizedBox(height: 12),
+            
+            const SizedBox(height: 24),
+            
             OutlinedButton.icon(
-              onPressed: () async {
-                final date = await showDatePicker(
-                  context: context,
-                  initialDate: DateTime.now().add(const Duration(days: 3)),
-                  firstDate: DateTime.now(),
-                  lastDate: DateTime.now().add(const Duration(days: 365)),
-                );
-                if (date != null) {
-                  setState(() => _selectedDate = date);
-                }
-              },
+              onPressed: _selectDate,
               icon: const Icon(Icons.calendar_today),
               label: Text(
-                _selectedDate == null
-                    ? 'اختر التاريخ'
-                    : '${_selectedDate!.day}/${_selectedDate!.month}/${_selectedDate!.year}',
-                style: GoogleFonts.ibmPlexSansArabic(),
+                _selectedDate != null
+                    ? '${_selectedDate!.day}/${_selectedDate!.month}/${_selectedDate!.year}'
+                    : 'اختر التاريخ',
               ),
               style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.all(16),
-                side: BorderSide(color: Colors.grey.shade300),
-              ),
-            ),
-            const SizedBox(height: 20),
-            if (_type == leave.LeaveType.emergency) ...[
-              Text(
-                'السبب (إجباري للإجازة الطارئة)',
-                style: GoogleFonts.ibmPlexSansArabic(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
-                textDirection: TextDirection.rtl,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _reasonController,
-                maxLines: 3,
-                textDirection: TextDirection.rtl,
-                decoration: InputDecoration(
-                  hintText: 'اكتب سبب الإجازة الطارئة...',
-                  hintStyle: GoogleFonts.ibmPlexSansArabic(),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
-            ],
-            ElevatedButton(
-              onPressed: () {
-                if (_selectedDate == null) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'يرجى اختيار تاريخ الإجازة',
-                        style: GoogleFonts.ibmPlexSansArabic(),
-                        textDirection: TextDirection.rtl,
-                      ),
-                    ),
-                  );
-                  return;
-                }
-
-                if (_type == leave.LeaveType.emergency &&
-                    _reasonController.text.trim().isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'يرجى كتابة سبب الإجازة الطارئة',
-                        style: GoogleFonts.ibmPlexSansArabic(),
-                        textDirection: TextDirection.rtl,
-                      ),
-                    ),
-                  );
-                  return;
-                }
-
-                Navigator.pop(context, {
-                  'date': _selectedDate,
-                  'type': _type,
-                  'reason': _reasonController.text.trim(),
-                });
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primaryOrange,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.all(16),
+                foregroundColor: AppColors.primaryOrange,
+                side: const BorderSide(color: AppColors.primaryOrange),
+                padding: const EdgeInsets.symmetric(vertical: 16),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
               ),
-              child: Text(
-                'إرسال الطلب',
-                style: GoogleFonts.ibmPlexSansArabic(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
+            ),
+            
+            if (_selectedType == LeaveType.emergency) ...[
+              const SizedBox(height: 16),
+              TextField(
+                controller: _reasonController,
+                decoration: InputDecoration(
+                  labelText: 'السبب (إلزامي للطوارئ)',
+                  hintText: 'اكتب سبب الإجازة الطارئة...',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(
+                      color: AppColors.primaryOrange,
+                      width: 2,
+                    ),
+                  ),
                 ),
+                maxLines: 3,
+              ),
+            ],
+            
+            const SizedBox(height: 24),
+            
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('✓ تم إرسال طلب الإجازة بنجاح'),
+                    backgroundColor: AppColors.success,
+                  ),
+                );
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryOrange,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              child: const Text(
+                'إرسال الطلب',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
               ),
             ),
           ],
@@ -656,54 +517,84 @@ class _LeaveRequestFormState extends State<_LeaveRequestForm> {
     );
   }
 
-  Widget _buildTypeButton({
-    required String label,
-    required bool selected,
-    required VoidCallback onTap,
+  Widget _buildTypeCard({
+    required LeaveType type,
+    required String title,
+    required String subtitle,
+    required IconData icon,
   }) {
+    final isSelected = _selectedType == type;
+    
     return GestureDetector(
-      onTap: onTap,
+      onTap: () => setState(() => _selectedType = type),
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: selected ? AppColors.primaryOrange.withOpacity(0.1) : Colors.white,
-          borderRadius: BorderRadius.circular(12),
+          color: isSelected ? AppColors.primaryOrange.withOpacity(0.1) : Colors.white,
           border: Border.all(
-            color: selected ? AppColors.primaryOrange : Colors.grey.shade300,
+            color: isSelected ? AppColors.primaryOrange : AppColors.surfaceVariant,
             width: 2,
           ),
+          borderRadius: BorderRadius.circular(12),
         ),
-        child: Text(
-          label,
-          style: GoogleFonts.ibmPlexSansArabic(
-            fontSize: 14,
-            fontWeight: selected ? FontWeight.bold : FontWeight.normal,
-            color: selected ? AppColors.primaryOrange : Colors.grey.shade700,
-          ),
-          textAlign: TextAlign.center,
-          textDirection: TextDirection.rtl,
+        child: Column(
+          children: [
+            Icon(
+              icon,
+              color: isSelected ? AppColors.primaryOrange : AppColors.textTertiary,
+              size: 32,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              title,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: isSelected ? AppColors.primaryOrange : AppColors.textPrimary,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
+              style: const TextStyle(
+                fontSize: 12,
+                color: AppColors.textTertiary,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
         ),
       ),
     );
   }
 }
 
-class _AdvanceRequestForm extends StatefulWidget {
-  const _AdvanceRequestForm({
-    required this.maxAllowed,
-    required this.currentEarnings,
+// Advance Request Sheet
+class _AdvanceRequestSheet extends StatefulWidget {
+  final String employeeId;
+  final double? currentEarnings;
+
+  const _AdvanceRequestSheet({
+    required this.employeeId,
+    this.currentEarnings,
   });
 
-  final double maxAllowed;
-  final double currentEarnings;
-
   @override
-  State<_AdvanceRequestForm> createState() => _AdvanceRequestFormState();
+  State<_AdvanceRequestSheet> createState() => _AdvanceRequestSheetState();
 }
 
-class _AdvanceRequestFormState extends State<_AdvanceRequestForm> {
+class _AdvanceRequestSheetState extends State<_AdvanceRequestSheet> {
   final _amountController = TextEditingController();
-  double _selectedAmount = 0;
+  double _maxAdvance = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.currentEarnings != null) {
+      _maxAdvance = widget.currentEarnings! * 0.3;
+    }
+  }
 
   @override
   void dispose() {
@@ -724,140 +615,119 @@ class _AdvanceRequestFormState extends State<_AdvanceRequestForm> {
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade300,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            Text(
-              'طلب سلفة',
-              style: GoogleFonts.ibmPlexSansArabic(
+            const Text(
+              'طلب سلفة جديد',
+              style: TextStyle(
                 fontSize: 24,
                 fontWeight: FontWeight.bold,
+                color: AppColors.textPrimary,
               ),
-              textAlign: TextAlign.center,
             ),
+            
             const SizedBox(height: 24),
+            
             Container(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: AppColors.primaryOrange.withOpacity(0.1),
+                color: AppColors.surfaceVariant,
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Column(
                 children: [
-                  Text(
-                    'الحد الأقصى للسلفة',
-                    style: GoogleFonts.ibmPlexSansArabic(
-                      fontSize: 14,
-                      color: Colors.grey.shade700,
-                    ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'المرتب الحالي',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                      Text(
+                        widget.currentEarnings != null
+                            ? '${widget.currentEarnings!.toStringAsFixed(0)} جنيه'
+                            : 'جاري التحميل...',
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    '${widget.maxAllowed.toStringAsFixed(0)} جنيه',
-                    style: GoogleFonts.ibmPlexSansArabic(
-                      fontSize: 28,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.primaryOrange,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '(30% من مرتبك الحالي ${widget.currentEarnings.toStringAsFixed(0)} جنيه)',
-                    style: GoogleFonts.ibmPlexSansArabic(
-                      fontSize: 12,
-                      color: Colors.grey.shade600,
-                    ),
-                    textDirection: TextDirection.rtl,
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'الحد الأقصى (30%)',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                      Text(
+                        '${_maxAdvance.toStringAsFixed(0)} جنيه',
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.primaryOrange,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
             ),
+            
             const SizedBox(height: 24),
-            Text(
-              'المبلغ المطلوب',
-              style: GoogleFonts.ibmPlexSansArabic(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-              ),
-              textDirection: TextDirection.rtl,
-            ),
-            const SizedBox(height: 12),
+            
             TextField(
               controller: _amountController,
               keyboardType: TextInputType.number,
-              textDirection: TextDirection.rtl,
-              onChanged: (value) {
-                setState(() {
-                  _selectedAmount = double.tryParse(value) ?? 0;
-                });
-              },
               decoration: InputDecoration(
-                hintText: 'أدخل المبلغ',
-                hintStyle: GoogleFonts.ibmPlexSansArabic(),
+                labelText: 'المبلغ المطلوب',
+                hintText: 'أدخل المبلغ...',
                 suffixText: 'جنيه',
-                suffixStyle: GoogleFonts.ibmPlexSansArabic(),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(
+                    color: AppColors.primaryOrange,
+                    width: 2,
+                  ),
+                ),
               ),
             ),
+            
             const SizedBox(height: 24),
+            
             ElevatedButton(
               onPressed: () {
-                if (_selectedAmount <= 0) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'يرجى إدخال مبلغ صحيح',
-                        style: GoogleFonts.ibmPlexSansArabic(),
-                        textDirection: TextDirection.rtl,
-                      ),
-                    ),
-                  );
-                  return;
-                }
-
-                if (_selectedAmount > widget.maxAllowed) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      backgroundColor: AppColors.danger,
-                      content: Text(
-                        'المبلغ المطلوب أكبر من الحد الأقصى المسموح (${widget.maxAllowed.toStringAsFixed(0)} جنيه)',
-                        style: GoogleFonts.ibmPlexSansArabic(color: Colors.white),
-                        textDirection: TextDirection.rtl,
-                      ),
-                    ),
-                  );
-                  return;
-                }
-
-                Navigator.pop(context, _selectedAmount);
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('✓ تم إرسال طلب السلفة بنجاح'),
+                    backgroundColor: AppColors.success,
+                  ),
+                );
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primaryOrange,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.symmetric(vertical: 16),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
               ),
-              child: Text(
+              child: const Text(
                 'إرسال الطلب',
-                style: GoogleFonts.ibmPlexSansArabic(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
               ),
             ),
           ],
