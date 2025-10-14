@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_colors.dart';
 import 'admin_dashboard_page.dart';
-import 'home_screen.dart';
+import 'employee/employee_main_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -45,7 +45,7 @@ class _LoginScreenState extends State<LoginScreen> {
     FocusScope.of(context).unfocus();
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
-        builder: (_) => HomeScreen(employeeId: employeeId),
+        builder: (_) => EmployeeMainScreen(employeeId: employeeId),
       ),
     );
   }

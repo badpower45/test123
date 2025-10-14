@@ -1,6 +1,12 @@
 class AppConfig {
   const AppConfig._();
 
+  /// API Base URL for employee services
+  static const String apiBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://localhost:3000',
+  );
+
   /// Supabase project URL, e.g. https://xyzcompany.supabase.co
   static const String supabaseUrl = String.fromEnvironment(
     'SUPABASE_URL',

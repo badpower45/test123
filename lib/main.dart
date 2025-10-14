@@ -10,8 +10,12 @@ import 'models/employee.dart';
 import 'models/employee_adjustment.dart';
 import 'models/pulse.dart';
 import 'models/pulse_log_entry.dart';
+import 'models/leave_request.dart';
+import 'models/advance_request.dart';
+import 'models/attendance_request.dart';
 import 'screens/admin_dashboard_page.dart';
 import 'screens/home_screen.dart';
+import 'screens/employee/employee_main_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/splash_screen.dart';
 import 'services/background_pulse_service.dart';
@@ -26,6 +30,9 @@ Future<void> main() async {
   registerPulseLogEntryAdapter();
   registerEmployeeAdapter();
   registerAdjustmentAdapter();
+  registerLeaveRequestAdapter();
+  registerAdvanceRequestAdapter();
+  registerAttendanceRequestAdapter();
   await Hive.openBox<Pulse>(offlinePulsesBox);
   await Hive.openBox<PulseLogEntry>(pulseHistoryBox);
   await Hive.openBox<Employee>(employeesBox);
@@ -113,6 +120,19 @@ class OldiesApp extends StatelessWidget {
           }
           return MaterialPageRoute(
             builder: (_) => HomeScreen(employeeId: employeeId),
+            settings: settings,
+          );
+        }
+        if (settings.name == EmployeeMainScreen.routeName) {
+          final employeeId = settings.arguments as String?;
+          if (employeeId == null) {
+            return MaterialPageRoute(
+              builder: (_) => const SplashScreen(),
+              settings: settings,
+            );
+          }
+          return MaterialPageRoute(
+            builder: (_) => EmployeeMainScreen(employeeId: employeeId),
             settings: settings,
           );
         }
