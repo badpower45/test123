@@ -34,6 +34,9 @@ migrate_working_dir/
 .pub/
 /build/
 /coverage/
+pubspec.lock
+.flutter-plugins
+.flutter-plugins-dependencies
 
 # Symbolication related
 app.*.symbols
