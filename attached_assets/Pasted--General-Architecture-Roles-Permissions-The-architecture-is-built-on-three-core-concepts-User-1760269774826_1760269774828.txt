@@ -1,0 +1,91 @@
+## General Architecture: Roles & Permissions
+The architecture is built on three core concepts:
+
+Users: These are the individual accounts (e.g., the owner, the restaurant manager, the accountant).
+
+Roles: These are "job titles" you can create (e.g., "Super Admin," "Restaurant Manager," "HR Manager"). A role is simply a collection of permissions.
+
+Permissions: These are the specific actions a user can perform in the system (e.g., "view all employees," "edit payroll," "add new employee").
+
+How it works: Instead of assigning permissions directly to each user, you assign a Role to a user. This makes management much easier. If you need to change what a "Restaurant Manager" can do, you edit the role once, and the change applies to all users with that role.
+
+## Default Role Definitions
+Here are the roles you can start with in the system, each with its own set of permissions.
+
+1. Super Admin (System Owner)
+This is the highest-level role with full control over everything. There are typically only one or two Super Admin accounts.
+
+Permissions:
+
+✅ User Management: Can create, edit, and delete all users, including other admins.
+
+✅ Role Management: Can create new roles and define/modify the permissions for each role.
+
+✅ Full Data View: Can see all employee data, reports, pulse logs, and payrolls.
+
+✅ System Settings: Can change critical settings like the geofence radius, hourly pay rate, and system integrations.
+
+✅ Final Approval: Can approve payroll and financial reports.
+
+2. Restaurant Manager
+This role is for the on-site manager who handles daily operations and staff.
+
+Permissions:
+
+✅ Employee Management: Can add new employees and edit their profile information.
+
+✅ Live Monitoring: Can access the dashboard to see which employees are currently checked in.
+
+✅ View Reports: Can view the pulse logs and work-hour reports for all employees.
+
+❌ Financial Access: Cannot see or edit payroll information or pay rates.
+
+❌ Admin Management: Cannot create or modify other admin users or their roles.
+
+3. HR/Payroll Manager
+This role is focused on the financial and human resources aspects, such as an accountant.
+
+Permissions:
+
+✅ Payroll Access: Can access the payroll module to calculate and process employee salaries.
+
+✅ Export Reports: Can generate and export detailed financial and payroll reports.
+
+✅ View Hours: Can see the total worked hours for each employee for calculation purposes.
+
+❌ Live Monitoring: Does not have access to the live monitoring dashboard.
+
+❌ Employee Management: Cannot add or edit employee profiles.
+
+## How the Super Admin Manages Permissions
+The Super Admin's interface should have a dedicated section called "Access Management" or "Roles & Permissions".
+
+Workflow for assigning a new admin:
+
+Create User: The Super Admin creates a new user account with an email and a temporary password.
+
+Assign Role: On the user creation screen, there will be a dropdown menu labeled "Role." The Super Admin selects the appropriate role (e.g., "Restaurant Manager").
+
+Save: Once saved, the new user automatically inherits all the permissions associated with that role.
+
+Workflow for creating a new role (e.g., "Shift Supervisor"):
+
+The Super Admin goes to the "Roles & Permissions" section and clicks "Create New Role."
+
+They name the role "Shift Supervisor."
+
+A checklist of every possible permission in the system appears.
+
+The Super Admin selects only the necessary permissions:
+
+[ ] Add new employee
+
+[X] View live dashboard
+
+[X] View employee pulse logs
+
+[ ] Access payroll
+
+[ ] Export financial reports
+
+They save the new role, and it is now available to be assigned to any user.

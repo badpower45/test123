@@ -1,0 +1,340 @@
+بص بقا علشان اشرحلك الوقت احنا هنشتغل علي حاجه حاجه عايزين نشتغل علي الصفحات بتاعت حد حد هقولك الوقت السيتسم بالكامل تمام
+
+
+
+
+
+بعتلك بردو المشروع علشان تبقي متابع معايا تمام كده
+
+
+
+بص هنشتغل الوقت علي صفحه الموظف تمام
+
+
+
+
+
+انا يهمني الشكل وان كل واحده تكون متقسمه ب api علشان هيكون ليها مخرجات المخرجات دي هتعلم عند ناس كتير كا المدير او الادمن تمام كده
+
+
+
+
+
+عنده انه يعمل حضور
+
+يعمل انصراف
+
+يعمل طلب حضور (يعني في حاله انه اجا واشتغل ونسا يعمل حضور بيعمل طلب حضور المدير بيشوف الطلب ده ولو اتوافق عليه بيرجعله الوقت اللي اشتغله من اول ماقدم الطلب لغايه اما عمل تيشك ان )
+
+
+
+وطلب انصراف انه مشا ف المعاد علشان لو روح بس احنا ممكن نستغني عن دي في حاله لو عملنا ان لما الشيفت بيخلص هوا اوريدي بيعمل تيشك اوت من السيستم ويحسبله عدد الساعات اللي قعدها حرفيا تمام
+
+
+
+
+
+
+
+طلب الاجازة بيكون قبلها ب48 ساعه ولو في حاله طارقه يبقا يوم يعني لو طلب قبلها بيوم لازم يكتب السبب لو اتوافق عليه ميتحسبلوش يوم مجو ش ويتخصمله فاهم
+
+
+
+طلب سلفه اسمع دا سيستم طلب السلفه
+
+
+
+سيستم طلب السلفه كل 5 ايام ليك سلفه من 30% من المرتب الحالي اللي انت عملته تمام بالنسبه بقا للموظفين في حاجه اسمها تقرير الحضور مش بيعرفوا يخشوا عليه الا كل يوم 16 او يوم 1 في الشهر بيكون شيت في رأسي التاريخ
+
+1 يناير
+
+2 يناير
+
+3 يناير
+
+
+
+وهكذا
+
+اما افقي بقا بيكون حضر امتي انصرف امتي عدد الساعات اللي قعدنا السلف اللي اخدها الاجازات الخصومات اللي المدير بيحطها ف الغالب انت محتاج نظام الاجازات
+
+
+
+
+
+نظام الاجازات هوا كدا كدا ليه 100 جنيه بدل اجازة لو اجز يوم ماشي لو اجز يومين ماشي لو غاب اكثر من يومين ميحصلش حاجه مدام حد مديله اجازه بس لو غاب اكثر من يومين مياخدش بدل الاجازات بس مفيش خصم
+
+
+
+لو غاب من غير مايقول للمدير بيتبعت اخطار للمدير علطول ولو المدير قبل الخصم بيتخصمله يويمين عمل
+
+
+
+دي صفحه الموظف عايزله تاسك بار
+
+
+
+تحت ينقله علي كل صفحه اسالني لو محتاج حاجه او في حاجه مش واضحه
+
+
+
+
+Show thinking
+تمام، خطة واضحة وممتازة. اطلعت على ملفات المشروع اللي بعتتهالي، والتقسيم بتاعك للـ screens والـ services هيسهل علينا الشغل جدًا. بما إن كل حاجة لازم تكون مربوطة بـ API عشان تسمّع عند المدير، هنصمم كل شاشة وكل زرار بناءً على المبدأ ده.
+
+خلينا نقسم "جزء الموظف" في التطبيق لمجموعة صفحات واضحة، وهنربطهم تحت بـ Task Bar (أو BottomNavigationBar في Flutter) زي ما طلبت.
+
+الهيكل المقترح لصفحات الموظف
+الـ Task Bar هيكون فيه 4 أيقونات رئيسية:
+
+الرئيسية (Home): خاصة بالحضور والانصراف اليومي.
+
+الطلبات (Requests): لطلبات الحضور المتأخر، الإجازات، والسلف.
+
+التقارير (Reports): لعرض تقرير الحضور الشهري.
+
+ملفي الشخصي (Profile): لعرض البيانات الشخصية وتعديلها.
+
+تفصيل كل صفحة والمخرجات (API Calls) الخاصة بها
+1. الصفحة الرئيسية (Home Screen - home_screen.dart)
+دي الشاشة اللي الموظف هيفتح عليها كل يوم.
+
+مكونات الصفحة:
+
+عرض الحالة الحالية: "أنت خارج العمل" أو "أنت قيد العمل".
+
+عداد مباشر (Live Timer) يحسب ساعات العمل لو هو "قيد العمل".
+
+زر كبير وواضح للحالة التالية (Check-in / Check-out).
+
+زر صغير لـ "طلب حضور" في حالة النسيان.
+
+الأزرار والمخرجات (API Calls):
+
+زر "تسجيل حضور" (Check-in):
+
+الإجراء: عند الضغط عليه، التطبيق يتأكد من موقع الموظف.
+
+المخرج: يرسل طلب POST /api/shifts/check-in للسيرفر. السيرفر يسجل بداية الوردية ويبدأ نظام النبضات.
+
+زر "تسجيل انصراف" (Check-out):
+
+الإجراء: يوقف الخدمة الخلفية للنبضات.
+
+المخرج: يرسل طلب PUT /api/shifts/check-out للسيرفر. السيرفر يغلق الوردية ويحسب إجمالي الساعات.
+
+زر "طلب حضور":
+
+الإجراء: يفتح نافذة منبثقة (Dialog) للموظف يكتب فيها سبب النسيان.
+
+المخرج: يرسل طلب POST /api/requests/attendance يحتوي على (هوية الموظف، السبب، الوقت الحالي). الطلب ده هيظهر عند المدير للموافقة.
+
+2. صفحة الطلبات (Requests Screen - requests_screen.dart - جديدة)
+دي هتكون صفحة مركزية لكل الطلبات اللي بيقدمها الموظف.
+
+مكونات الصفحة:
+
+واجهة مقسمة (Tabs) لـ: "الإجازات" و "السلف".
+
+قائمة تعرض الطلبات السابقة وحالتها (تحت المراجعة، تمت الموافقة، مرفوض).
+
+زر عائم (+) لإنشاء طلب جديد.
+
+الأزرار والمخرجات (API Calls):
+
+إنشاء "طلب إجازة":
+
+الإجراء: يفتح فورم فيه حقول (تاريخ الإجازة، نوعها "عادي/طارئ"، خانة للسبب لو طارئ). التطبيق يتحقق من قاعدة الـ 48 ساعة والـ 24 ساعة.
+
+المخرج: يرسل طلب POST /api/requests/leave بكل التفاصيل.
+
+إنشاء "طلب سلفة":
+
+الإجراء: قبل فتح الفورم، التطبيق يسأل السيرفر عن المرتب الحالي للموظف (GET /api/me/earnings). الفورم يعرض الحد الأقصى للسلفة (30%) ويمنع الموظف من طلب أكثر.
+
+المخرج: يرسل طلب POST /api/requests/advance بالمبلغ المطلوب.
+
+3. صفحة التقارير (Reports Screen - reports_screen.dart - جديدة)
+مكونات الصفحة:
+
+عنوان "تقرير الحضور والراتب".
+
+زر "عرض التقرير". هذا الزر يكون غير فعال ولا يمكن الضغط عليه إلا يوم 1 ويوم 16 في الشهر.
+
+عند الضغط عليه (في الأيام المسموحة)، يتم فتح صفحة جديدة تعرض التقرير.
+
+الأزرار والمخرجات (API Calls):
+
+زر "عرض التقرير":
+
+الإجراء: عند الضغط، التطبيق يطلب التقرير من السيرفر.
+
+المخرج: يرسل طلب GET /api/me/report?period=mid-month (لو يوم 16) أو GET /api/me/report?period=full-month (لو يوم 1).
+
+السيرفر يرجع البيانات جاهزة للعرض في الجدول اللي وصفته (التاريخ، الحضور، الانصراف، الساعات، السلف، إلخ).
+
+منطق الإجازات والخصومات (Backend Logic)
+كل القواعد المعقدة اللي ذكرتها هتكون موجودة على السيرفر ومش في التطبيق:
+
+بدل الإجازة (100 جنيه): السيرفر هو اللي هيحسب لو الموظف غاب أكتر من يومين بموافقة ويقرر إذا كان يستحق البدل أم لا.
+
+الغياب بدون إذن: لما السيرفر يكتشف إن الموظف لم يسجل حضور في يوم عمل، يرسل إشعار (Notification) تلقائي للمدير. لو المدير وافق على الخصم من خلال لوحة التحكم بتاعته، السيرفر يقوم بخصم يومين من الراتب.
+
+بهذا التقسيم، يكون التطبيق منظم، كل جزء له وظيفته، وكل إجراء له مخرج API واضح بيسمّع عند الأدمن عشان ياخد القرار المناسب.
+
+التقسيم ده واضح بالنسبة لك؟ لو موافق عليه، ممكن نبدأ نفصّل أكتر في أول وأهم شاشة، وهي "الصفحة الرئيسية".
+
+
+
+
+
+
+
+
+هاتلي بقا كل التفاصيل دي في برومبت طويل شامل كل اللي قولته علشان ابعته لريبليت
+
+
+
+Show thinking
+بالتأكيد. هذا برومبت شامل ومفصل جدًا، يجمع كل النقاط والميزات التي ناقشناها بخصوص "صفحة الموظف" والسيستم بالكامل. هو مصمم ليكون "الخطة النهائية" التي تعطيها لـ Replit AI ليبني لك الأساس الكامل للمشروع على Supabase.
+
+Prompt for Replit AI (Final & Comprehensive Version)
+Project Title: "Oldies" - Full Employee & Admin Management System Backend
+
+Objective:
+Build the complete Supabase backend for a sophisticated employee management system. The system must handle real-time attendance, a multi-step request/approval workflow, and detailed payroll reporting. The entire system must be API-driven and secure.
+
+Core Technology Stack:
+
+Backend & Database: Supabase (PostgreSQL, Auth, Edge Functions, Triggers, PostGIS).
+
+1. Database Schema Setup
+Generate the SQL schema for the following tables. Establish all foreign key relationships and default values as specified.
+
+Table: profiles
+
+id (uuid, Primary Key, references auth.users.id)
+
+full_name (text)
+
+employee_id (text, unique)
+
+role (text, default: 'employee')
+
+Table: shifts
+
+id (uuid, PK, default: gen_random_uuid())
+
+user_id (uuid, FK to profiles.id)
+
+check_in_time (timestampz, default: now())
+
+check_out_time (timestampz, nullable)
+
+status (text, e.g., 'active', 'completed', 'auto_closed')
+
+created_by_request_id (uuid, nullable, FK to requests.id)
+
+Table: pulses
+
+id (uuid, PK, default: gen_random_uuid())
+
+shift_id (uuid, FK to shifts.id)
+
+location (geography(Point), for Lat/Lon)
+
+is_within_geofence (boolean, to be set by a trigger)
+
+created_at (timestampz, default: now())
+
+Table: requests (Central table for all employee requests)
+
+id (uuid, PK, default: gen_random_uuid())
+
+user_id (uuid, FK to profiles.id)
+
+type (text, e.g., 'ATTENDANCE', 'LEAVE', 'ADVANCE')
+
+status (text, default: 'PENDING')
+
+details (jsonb, to store request-specific data like {"leave_date": "...", "reason": "..."} or {"amount": 500})
+
+created_at (timestampz, default: now())
+
+Table: deductions (For manager-added penalties)
+
+id (uuid, PK, default: gen_random_uuid())
+
+user_id (uuid, FK to profiles.id)
+
+amount (numeric)
+
+reason (text)
+
+created_at (timestampz, default: now())
+
+2. Automated Server-Side Logic (PostgreSQL Functions & Triggers)
+Automated Pulse Geofence Check:
+
+Create a PostgreSQL function check_geofence that uses postgis's ST_DWithin to check if an incoming pulse location is within a 100-meter radius of a fixed restaurant coordinate.
+
+Create a Trigger that executes this function BEFORE INSERT on the pulses table, automatically setting the is_within_geofence field. The client app should not be able to set this value.
+
+New Request Notification Trigger:
+
+Create a PostgreSQL function and trigger that, AFTER INSERT on the requests table, inserts a new notification into a notifications table for the relevant admin/manager.
+
+3. Core API Logic (Supabase Edge Functions)
+Create the following serverless Edge Functions to handle all business logic securely.
+
+Function: submit-request
+
+Input: request_type ('LEAVE' or 'ADVANCE'), details (jsonb).
+
+Logic:
+
+For 'LEAVE': Validate the request against the business rules (48 hours for normal leave, 24 hours for emergency which requires a reason).
+
+For 'ADVANCE': Validate against the business rules (check if the last advance was > 5 days ago, calculate current earnings and check if the requested amount is <= 30%).
+
+Action: If validation passes, insert the new request into the requests table. Otherwise, return a descriptive error.
+
+Function: handle-request-approval (For Admins)
+
+Input: request_id, is_approved (boolean).
+
+Logic:
+
+Update the status of the request in the requests table.
+
+If is_approved is true for an 'ATTENDANCE' request: Create a new record in the shifts table, back-dating the check_in_time to the created_at timestamp of the request. Link it using created_by_request_id.
+
+Function: get-attendance-report
+
+Input: user_id.
+
+Logic:
+
+First, check if the current date is the 1st or 16th of the month. If not, return an error message "Report is not available yet."
+
+If the date is valid, fetch all necessary data for the user for the past period: all shifts, approved leave requests, approved advance requests, and any deductions.
+
+Format this data into a day-by-day JSON structure as requested and return it.
+
+Function: daily-absence-check (Scheduled Function)
+
+This function should run once every day at midnight.
+
+Logic: It scans all employees. For each employee, it checks if they had a shift record or an approved LEAVE request for the previous day.
+
+If an employee has neither, it flags them as an unapproved absence and creates a notification for their manager to review and potentially create a deduction.
+
+4. Row Level Security (RLS) Policies
+Enable RLS on all tables.
+
+General Rule: Employees can only see and manage their own records (profiles, shifts, pulses, requests, deductions).
+
+Admin Rule: Users with the role = 'admin' can access all records in all tables.
+
+Action Request:
+Please generate the complete SQL for all table schemas, PostgreSQL functions, and triggers. Then, provide the TypeScript code for each of the Supabase Edge Functions. Finally, generate the SQL for all the necessary RLS policies.
