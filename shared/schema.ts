@@ -1,14 +1,159 @@
-import { pgTable, uuid, text, timestamp, boolean, numeric, index, customType } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, timestamp, boolean, numeric, index, doublePrecision, pgEnum, integer, date } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
-// Custom type for PostGIS geography
-const geography = customType<{ data: string }>({
-  dataType() {
-    return 'geography(Point, 4326)';
-  },
+// Employee role enum
+export const employeeRoleEnum = pgEnum('employee_role', ['owner', 'admin', 'manager', 'hr', 'monitor', 'staff']);
+
+// Request status enum
+export const requestStatusEnum = pgEnum('request_status', ['pending', 'approved', 'rejected']);
+
+// Leave type enum
+export const leaveTypeEnum = pgEnum('leave_type', ['regular', 'emergency']);
+
+// Employees table - directory of restaurant employees
+export const employees = pgTable('employees', {
+  id: text('id').primaryKey(),
+  fullName: text('full_name').notNull(),
+  pinHash: text('pin_hash').notNull(),
+  role: employeeRoleEnum('role').default('staff').notNull(),
+  permissions: text('permissions').array().default(sql`'{}'`),
+  branch: text('branch'),
+  monthlySalary: numeric('monthly_salary'),
+  active: boolean('active').default(true).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
-// Profiles table - employee information (no auth.users dependency)
+// Attendance table - daily check-in/check-out records
+export const attendance = pgTable('attendance', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  employeeId: text('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
+  checkInTime: timestamp('check_in_time', { withTimezone: true }),
+  checkOutTime: timestamp('check_out_time', { withTimezone: true }),
+  workHours: numeric('work_hours'),
+  date: date('date').notNull(),
+  status: text('status').default('active').notNull(),
+  isAutoCheckout: boolean('is_auto_checkout').default(false),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  employeeIdIdx: index('idx_attendance_employee_id').on(table.employeeId),
+  dateIdx: index('idx_attendance_date').on(table.date),
+}));
+
+// Attendance requests - for forgotten check-in/out
+export const attendanceRequests = pgTable('attendance_requests', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  employeeId: text('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
+  requestType: text('request_type').notNull(),
+  requestedTime: timestamp('requested_time', { withTimezone: true }).notNull(),
+  reason: text('reason').notNull(),
+  status: requestStatusEnum('status').default('pending').notNull(),
+  reviewedBy: uuid('reviewed_by').references(() => users.id),
+  reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+  reviewNotes: text('review_notes'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  employeeIdIdx: index('idx_attendance_requests_employee_id').on(table.employeeId),
+  statusIdx: index('idx_attendance_requests_status').on(table.status),
+}));
+
+// Leave requests table
+export const leaveRequests = pgTable('leave_requests', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  employeeId: text('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
+  startDate: date('start_date').notNull(),
+  endDate: date('end_date').notNull(),
+  leaveType: leaveTypeEnum('leave_type').notNull(),
+  reason: text('reason'),
+  daysCount: integer('days_count').notNull(),
+  allowanceAmount: numeric('allowance_amount').default('0'),
+  status: requestStatusEnum('status').default('pending').notNull(),
+  reviewedBy: uuid('reviewed_by').references(() => users.id),
+  reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+  reviewNotes: text('review_notes'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  employeeIdIdx: index('idx_leave_requests_employee_id').on(table.employeeId),
+  statusIdx: index('idx_leave_requests_status').on(table.status),
+  startDateIdx: index('idx_leave_requests_start_date').on(table.startDate),
+}));
+
+// Advances (salary advance) table
+export const advances = pgTable('advances', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  employeeId: text('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
+  amount: numeric('amount').notNull(),
+  requestDate: timestamp('request_date', { withTimezone: true }).defaultNow().notNull(),
+  eligibleAmount: numeric('eligible_amount').notNull(),
+  currentSalary: numeric('current_salary').notNull(),
+  status: requestStatusEnum('status').default('pending').notNull(),
+  reviewedBy: uuid('reviewed_by').references(() => users.id),
+  reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+  paidAt: timestamp('paid_at', { withTimezone: true }),
+  deductedAt: timestamp('deducted_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  employeeIdIdx: index('idx_advances_employee_id').on(table.employeeId),
+  statusIdx: index('idx_advances_status').on(table.status),
+  requestDateIdx: index('idx_advances_request_date').on(table.requestDate),
+}));
+
+// Deductions table
+export const deductions = pgTable('deductions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  employeeId: text('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
+  amount: numeric('amount').notNull(),
+  reason: text('reason').notNull(),
+  deductionDate: date('deduction_date').notNull(),
+  deductionType: text('deduction_type').notNull(),
+  appliedBy: uuid('applied_by').references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  employeeIdIdx: index('idx_deductions_employee_id').on(table.employeeId),
+  dateIdx: index('idx_deductions_date').on(table.deductionDate),
+}));
+
+// Absence notifications table
+export const absenceNotifications = pgTable('absence_notifications', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  employeeId: text('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
+  absenceDate: date('absence_date').notNull(),
+  notifiedAt: timestamp('notified_at', { withTimezone: true }).defaultNow().notNull(),
+  status: requestStatusEnum('status').default('pending').notNull(),
+  deductionApplied: boolean('deduction_applied').default(false),
+  deductionAmount: numeric('deduction_amount'),
+  reviewedBy: uuid('reviewed_by').references(() => users.id),
+  reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  employeeIdIdx: index('idx_absence_notifications_employee_id').on(table.employeeId),
+  statusIdx: index('idx_absence_notifications_status').on(table.status),
+  dateIdx: index('idx_absence_notifications_date').on(table.absenceDate),
+}));
+
+// Pulses table - location tracking (from original schema)
+export const pulses = pgTable('pulses', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  employeeId: text('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
+  timestamp: timestamp('timestamp', { withTimezone: true }).defaultNow().notNull(),
+  latitude: doublePrecision('latitude'),
+  longitude: doublePrecision('longitude'),
+  location: text('location'),
+  isWithinGeofence: boolean('is_within_geofence').default(false),
+  isFake: boolean('is_fake').default(false).notNull(),
+  sentFromDevice: boolean('sent_from_device').default(true).notNull(),
+  sentViaSupabase: boolean('sent_via_supabase').default(false).notNull(),
+  offlineBatchId: uuid('offline_batch_id'),
+  source: text('source'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  employeeIdIdx: index('idx_pulses_employee_id').on(table.employeeId),
+  timestampIdx: index('idx_pulses_timestamp').on(table.timestamp),
+  latLonIdx: index('idx_pulses_latitude_longitude').on(table.latitude, table.longitude),
+}));
+
+// Legacy profiles table (kept for compatibility)
 export const profiles = pgTable('profiles', {
   id: uuid('id').primaryKey(),
   fullName: text('full_name').notNull(),
@@ -21,7 +166,7 @@ export const profiles = pgTable('profiles', {
   roleIdx: index('idx_profiles_role').on(table.role),
 }));
 
-// Shifts table - records each work shift
+// Legacy shifts table (kept for compatibility)
 export const shifts = pgTable('shifts', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
@@ -36,25 +181,8 @@ export const shifts = pgTable('shifts', {
   checkInTimeIdx: index('idx_shifts_check_in_time').on(table.checkInTime),
 }));
 
-// Pulses table - stores periodic location updates with geofencing
-export const pulses = pgTable('pulses', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  shiftId: uuid('shift_id').notNull().references(() => shifts.id, { onDelete: 'cascade' }),
-  latitude: numeric('latitude'),
-  longitude: numeric('longitude'),
-  location: geography('location'),
-  isWithinGeofence: boolean('is_within_geofence').default(false),
-  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
-}, (table) => ({
-  shiftIdIdx: index('idx_pulses_shift_id').on(table.shiftId),
-  latLonIdx: index('idx_pulses_lat_lon').on(table.latitude, table.longitude),
-  geofenceIdx: index('idx_pulses_geofence').on(table.isWithinGeofence),
-  createdAtIdx: index('idx_pulses_created_at').on(table.createdAt),
-}));
-
 // =============================================================================
-// ROLES AND PERMISSIONS TABLES
-// جداول الأدوار والصلاحيات
+// ADMIN USERS AND PERMISSIONS
 // =============================================================================
 
 // Admin users table
@@ -121,14 +249,35 @@ export const userRoles = pgTable('user_roles', {
 }));
 
 // Type exports for TypeScript
+export type Employee = typeof employees.$inferSelect;
+export type NewEmployee = typeof employees.$inferInsert;
+
+export type Attendance = typeof attendance.$inferSelect;
+export type NewAttendance = typeof attendance.$inferInsert;
+
+export type AttendanceRequest = typeof attendanceRequests.$inferSelect;
+export type NewAttendanceRequest = typeof attendanceRequests.$inferInsert;
+
+export type LeaveRequest = typeof leaveRequests.$inferSelect;
+export type NewLeaveRequest = typeof leaveRequests.$inferInsert;
+
+export type Advance = typeof advances.$inferSelect;
+export type NewAdvance = typeof advances.$inferInsert;
+
+export type Deduction = typeof deductions.$inferSelect;
+export type NewDeduction = typeof deductions.$inferInsert;
+
+export type AbsenceNotification = typeof absenceNotifications.$inferSelect;
+export type NewAbsenceNotification = typeof absenceNotifications.$inferInsert;
+
+export type Pulse = typeof pulses.$inferSelect;
+export type NewPulse = typeof pulses.$inferInsert;
+
 export type Profile = typeof profiles.$inferSelect;
 export type NewProfile = typeof profiles.$inferInsert;
 
 export type Shift = typeof shifts.$inferSelect;
 export type NewShift = typeof shifts.$inferInsert;
-
-export type Pulse = typeof pulses.$inferSelect;
-export type NewPulse = typeof pulses.$inferInsert;
 
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
