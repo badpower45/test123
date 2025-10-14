@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import '../models/leave_request.dart';
-import '../models/advance_request.dart';
+import '../models/leave_request.dart' as leave;
+import '../models/advance_request.dart' as advance;
 import '../models/attendance_request.dart';
 import '../config/app_config.dart';
 
@@ -11,7 +11,7 @@ class RequestsApiService {
   static Future<Map<String, dynamic>> createLeaveRequest({
     required String employeeId,
     required DateTime leaveDate,
-    required LeaveType type,
+    required leave.LeaveType type,
     required String reason,
   }) async {
     final url = Uri.parse('$_baseUrl/api/requests/leave');
@@ -22,7 +22,7 @@ class RequestsApiService {
       body: jsonEncode({
         'employee_id': employeeId,
         'leave_date': leaveDate.toIso8601String(),
-        'type': type == LeaveType.normal ? 'normal' : 'emergency',
+        'type': type == leave.LeaveType.normal ? 'normal' : 'emergency',
         'reason': reason,
       }),
     );
@@ -34,7 +34,7 @@ class RequestsApiService {
     }
   }
 
-  static Future<List<LeaveRequest>> getLeaveRequests(String employeeId) async {
+  static Future<List<leave.LeaveRequest>> getLeaveRequests(String employeeId) async {
     final url = Uri.parse('$_baseUrl/api/requests/leave?employee_id=$employeeId');
     
     final response = await http.get(url);
@@ -71,7 +71,7 @@ class RequestsApiService {
     }
   }
 
-  static Future<List<AdvanceRequest>> getAdvanceRequests(String employeeId) async {
+  static Future<List<advance.AdvanceRequest>> getAdvanceRequests(String employeeId) async {
     final url = Uri.parse('$_baseUrl/api/requests/advance?employee_id=$employeeId');
     
     final response = await http.get(url);
@@ -121,14 +121,14 @@ class RequestsApiService {
     }
   }
 
-  static LeaveRequest _parseLeaveRequest(Map<String, dynamic> json) {
-    return LeaveRequest(
+  static leave.LeaveRequest _parseLeaveRequest(Map<String, dynamic> json) {
+    return leave.LeaveRequest(
       id: json['id'] as String,
       employeeId: json['employee_id'] as String,
       leaveDate: DateTime.parse(json['leave_date'] as String),
-      type: json['type'] == 'emergency' ? LeaveType.emergency : LeaveType.normal,
+      type: json['type'] == 'emergency' ? leave.LeaveType.emergency : leave.LeaveType.normal,
       reason: json['reason'] as String,
-      status: _parseRequestStatus(json['status'] as String),
+      status: _parseLeaveRequestStatus(json['status'] as String),
       createdAt: DateTime.parse(json['created_at'] as String),
       reviewedAt: json['reviewed_at'] != null 
           ? DateTime.parse(json['reviewed_at'] as String) 
@@ -138,13 +138,13 @@ class RequestsApiService {
     );
   }
 
-  static AdvanceRequest _parseAdvanceRequest(Map<String, dynamic> json) {
-    return AdvanceRequest(
+  static advance.AdvanceRequest _parseAdvanceRequest(Map<String, dynamic> json) {
+    return advance.AdvanceRequest(
       id: json['id'] as String,
       employeeId: json['employee_id'] as String,
       amount: (json['amount'] as num).toDouble(),
       currentEarnings: (json['current_earnings'] as num).toDouble(),
-      status: _parseAdvanceStatus(json['status'] as String),
+      status: _parseAdvanceRequestStatus(json['status'] as String),
       createdAt: DateTime.parse(json['created_at'] as String),
       reviewedAt: json['reviewed_at'] != null 
           ? DateTime.parse(json['reviewed_at'] as String) 
@@ -154,18 +154,18 @@ class RequestsApiService {
     );
   }
 
-  static RequestStatus _parseRequestStatus(String status) {
+  static leave.RequestStatus _parseLeaveRequestStatus(String status) {
     switch (status.toLowerCase()) {
       case 'approved':
-        return RequestStatus.approved;
+        return leave.RequestStatus.approved;
       case 'rejected':
-        return RequestStatus.rejected;
+        return leave.RequestStatus.rejected;
       default:
-        return RequestStatus.pending;
+        return leave.RequestStatus.pending;
     }
   }
 
-  static advance.RequestStatus _parseAdvanceStatus(String status) {
+  static advance.RequestStatus _parseAdvanceRequestStatus(String status) {
     switch (status.toLowerCase()) {
       case 'approved':
         return advance.RequestStatus.approved;
