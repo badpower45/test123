@@ -1,0 +1,140 @@
+Prompt for Replit AI (Final & Comprehensive Version)
+Project Title: "Oldies" - Full Employee & Admin Management System Backend
+
+Objective:
+Build the complete Supabase backend for a sophisticated employee management system. The system must handle real-time attendance, a multi-step request/approval workflow, and detailed payroll reporting. The entire system must be API-driven and secure.
+
+Core Technology Stack:
+
+Backend & Database: Supabase (PostgreSQL, Auth, Edge Functions, Triggers, PostGIS).
+
+1. Database Schema Setup
+Generate the SQL schema for the following tables. Establish all foreign key relationships and default values as specified.
+
+Table: profiles
+
+id (uuid, Primary Key, references auth.users.id)
+
+full_name (text)
+
+employee_id (text, unique)
+
+role (text, default: 'employee')
+
+Table: shifts
+
+id (uuid, PK, default: gen_random_uuid())
+
+user_id (uuid, FK to profiles.id)
+
+check_in_time (timestampz, default: now())
+
+check_out_time (timestampz, nullable)
+
+status (text, e.g., 'active', 'completed', 'auto_closed')
+
+created_by_request_id (uuid, nullable, FK to requests.id)
+
+Table: pulses
+
+id (uuid, PK, default: gen_random_uuid())
+
+shift_id (uuid, FK to shifts.id)
+
+location (geography(Point), for Lat/Lon)
+
+is_within_geofence (boolean, to be set by a trigger)
+
+created_at (timestampz, default: now())
+
+Table: requests (Central table for all employee requests)
+
+id (uuid, PK, default: gen_random_uuid())
+
+user_id (uuid, FK to profiles.id)
+
+type (text, e.g., 'ATTENDANCE', 'LEAVE', 'ADVANCE')
+
+status (text, default: 'PENDING')
+
+details (jsonb, to store request-specific data like {"leave_date": "...", "reason": "..."} or {"amount": 500})
+
+created_at (timestampz, default: now())
+
+Table: deductions (For manager-added penalties)
+
+id (uuid, PK, default: gen_random_uuid())
+
+user_id (uuid, FK to profiles.id)
+
+amount (numeric)
+
+reason (text)
+
+created_at (timestampz, default: now())
+
+2. Automated Server-Side Logic (PostgreSQL Functions & Triggers)
+Automated Pulse Geofence Check:
+
+Create a PostgreSQL function check_geofence that uses postgis's ST_DWithin to check if an incoming pulse location is within a 100-meter radius of a fixed restaurant coordinate.
+
+Create a Trigger that executes this function BEFORE INSERT on the pulses table, automatically setting the is_within_geofence field. The client app should not be able to set this value.
+
+New Request Notification Trigger:
+
+Create a PostgreSQL function and trigger that, AFTER INSERT on the requests table, inserts a new notification into a notifications table for the relevant admin/manager.
+
+3. Core API Logic (Supabase Edge Functions)
+Create the following serverless Edge Functions to handle all business logic securely.
+
+Function: submit-request
+
+Input: request_type ('LEAVE' or 'ADVANCE'), details (jsonb).
+
+Logic:
+
+For 'LEAVE': Validate the request against the business rules (48 hours for normal leave, 24 hours for emergency which requires a reason).
+
+For 'ADVANCE': Validate against the business rules (check if the last advance was > 5 days ago, calculate current earnings and check if the requested amount is <= 30%).
+
+Action: If validation passes, insert the new request into the requests table. Otherwise, return a descriptive error.
+
+Function: handle-request-approval (For Admins)
+
+Input: request_id, is_approved (boolean).
+
+Logic:
+
+Update the status of the request in the requests table.
+
+If is_approved is true for an 'ATTENDANCE' request: Create a new record in the shifts table, back-dating the check_in_time to the created_at timestamp of the request. Link it using created_by_request_id.
+
+Function: get-attendance-report
+
+Input: user_id.
+
+Logic:
+
+First, check if the current date is the 1st or 16th of the month. If not, return an error message "Report is not available yet."
+
+If the date is valid, fetch all necessary data for the user for the past period: all shifts, approved leave requests, approved advance requests, and any deductions.
+
+Format this data into a day-by-day JSON structure as requested and return it.
+
+Function: daily-absence-check (Scheduled Function)
+
+This function should run once every day at midnight.
+
+Logic: It scans all employees. For each employee, it checks if they had a shift record or an approved LEAVE request for the previous day.
+
+If an employee has neither, it flags them as an unapproved absence and creates a notification for their manager to review and potentially create a deduction.
+
+4. Row Level Security (RLS) Policies
+Enable RLS on all tables.
+
+General Rule: Employees can only see and manage their own records (profiles, shifts, pulses, requests, deductions).
+
+Admin Rule: Users with the role = 'admin' can access all records in all tables.
+
+Action Request:
+Please generate the complete SQL for all table schemas, PostgreSQL functions, and triggers. Then, provide the TypeScript code for each of the Supabase Edge Functions. Finally, generate the SQL for all the necessary RLS policies.

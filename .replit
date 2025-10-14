@@ -35,6 +35,10 @@ waitForPort = 5000
 localPort = 5000
 externalPort = 80
 
+[[ports]]
+localPort = 41329
+externalPort = 3000
+
 [deployment]
 deploymentTarget = "autoscale"
 run = ["dhttpd", "--host", "0.0.0.0", "--port", "5000", "--path", "build/web"]
