@@ -148,7 +148,7 @@ Future<void> _seedDemoDataIfNeeded() async {
     return;
   }
 
-  // Only seed login credentials - NO demo pulse data
+  // Seed demo employees with realistic data
   final employees = [
     Employee(
       id: 'EMP001',
@@ -186,12 +186,99 @@ Future<void> _seedDemoDataIfNeeded() async {
       branch: 'فرع مدينة نصر',
       monthlySalary: 9800,
     ),
+    Employee(
+      id: 'EMP004',
+      fullName: 'أحمد علي',
+      pin: '1111',
+      role: EmployeeRole.staff,
+      permissions: const [],
+      branch: 'الفرع الرئيسي - الزمالك',
+      monthlySalary: 8500,
+    ),
+    Employee(
+      id: 'EMP005',
+      fullName: 'فاطمة محمد',
+      pin: '2222',
+      role: EmployeeRole.staff,
+      permissions: const [],
+      branch: 'فرع المعادي',
+      monthlySalary: 7800,
+    ),
   ];
 
   await employeeBox.putAll({for (final employee in employees) employee.id: employee});
   
-  // NO demo pulse history
-  // NO demo offline pulses
-  // NO demo adjustments
-  // All data will be REAL from actual usage
+  // Add demo pulse history for testing
+  final logBox = Hive.box<PulseLogEntry>(pulseHistoryBox);
+  final now = DateTime.now();
+  
+  final demoPulses = [
+    PulseLogEntry(
+      pulse: Pulse(
+        employeeId: 'EMP004',
+        latitude: 30.0444,
+        longitude: 31.2357,
+        timestamp: now.subtract(const Duration(hours: 2)),
+        isFake: false,
+      ),
+      recordedAt: now.subtract(const Duration(hours: 2)),
+      wasOnline: true,
+      deliveryStatus: PulseDeliveryStatus.sentOnline,
+    ),
+    PulseLogEntry(
+      pulse: Pulse(
+        employeeId: 'EMP004',
+        latitude: 30.0444,
+        longitude: 31.2357,
+        timestamp: now.subtract(const Duration(hours: 1, minutes: 30)),
+        isFake: false,
+      ),
+      recordedAt: now.subtract(const Duration(hours: 1, minutes: 30)),
+      wasOnline: true,
+      deliveryStatus: PulseDeliveryStatus.sentOnline,
+    ),
+    PulseLogEntry(
+      pulse: Pulse(
+        employeeId: 'EMP005',
+        latitude: 30.0444,
+        longitude: 31.2357,
+        timestamp: now.subtract(const Duration(hours: 3)),
+        isFake: false,
+      ),
+      recordedAt: now.subtract(const Duration(hours: 3)),
+      wasOnline: true,
+      deliveryStatus: PulseDeliveryStatus.sentOnline,
+    ),
+  ];
+  
+  for (int i = 0; i < demoPulses.length; i++) {
+    await logBox.add(demoPulses[i]);
+  }
+  
+  // Add demo employee adjustments
+  final adjustmentsBox = Hive.box<EmployeeAdjustment>(employeeAdjustmentsBox);
+  final demoAdjustments = [
+    EmployeeAdjustment(
+      id: 'adj_${now.millisecondsSinceEpoch}_1',
+      employeeId: 'EMP004',
+      type: AdjustmentType.bonus,
+      amount: 500,
+      reason: 'مكافأة تميز في العمل',
+      recordedBy: 'EMP001',
+      createdAt: now.subtract(const Duration(days: 5)),
+    ),
+    EmployeeAdjustment(
+      id: 'adj_${now.millisecondsSinceEpoch}_2',
+      employeeId: 'EMP005',
+      type: AdjustmentType.deduction,
+      amount: 200,
+      reason: 'خصم تأخير',
+      recordedBy: 'EMP001',
+      createdAt: now.subtract(const Duration(days: 3)),
+    ),
+  ];
+  
+  for (final adjustment in demoAdjustments) {
+    await adjustmentsBox.put(adjustment.id, adjustment);
+  }
 }

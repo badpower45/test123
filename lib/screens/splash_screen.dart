@@ -35,7 +35,7 @@ class _SplashScreenState extends State<SplashScreen>
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 3200),
+      duration: const Duration(milliseconds: 2000),
     )..forward();
     _iconFade = CurvedAnimation(
       parent: _controller,
