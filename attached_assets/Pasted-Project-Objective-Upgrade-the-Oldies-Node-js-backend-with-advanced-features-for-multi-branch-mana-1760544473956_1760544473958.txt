@@ -1,0 +1,130 @@
+Project Objective:
+Upgrade the "Oldies" Node.js backend with advanced features for multi-branch management, a dynamic salary advance system, and a complete break management system. This upgrade must be seamlessly integrated into the existing database schema and API structure.
+
+Technology Stack:
+
+Backend: Node.js with Express/TypeScript.
+
+Database: Neon PostgreSQL with Drizzle ORM.
+
+Part 1: Multi-Branch Management System
+This is a foundational change. The system must support multiple restaurant locations.
+
+1. Database Schema Modifications (shared/schema.ts):
+
+Create a new branches table:
+
+id (uuid, Primary Key)
+
+name (text, e.g., "Alexandria Branch")
+
+wifi_bssid (text, the unique MAC address for the branch's Wi-Fi)
+
+latitude (numeric)
+
+longitude (numeric)
+
+geofence_radius (integer, in meters, e.g., 100)
+
+Add branch_id to the employees table:
+
+Add a new column branch_id (uuid, Foreign Key referencing branches.id). This links every employee to a specific branch.
+
+Create a branch_managers table (Junction Table):
+
+user_id (uuid, FK to employees.id, for the manager)
+
+branch_id (uuid, FK to branches.id)
+
+This table will define which manager is responsible for which branch.
+
+2. Update Core Logic:
+
+Modify Check-in & Pulse Validation (server/index.ts):
+
+When an employee checks in or sends a pulse, the backend must first look up the employee's assigned branch_id.
+
+It must then use the wifi_bssid and location data from the corresponding branch in the branches table to validate the pulse, not the fixed global constants.
+
+Modify Admin/Manager Data Access:
+
+When a manager requests data (e.g., pending requests, employee lists), the API must first check the branch_managers table.
+
+The API should only return data for employees who are linked to the manager's assigned branch via the branch_id.
+
+Part 2: Dynamic Salary Advance System
+Upgrade the salary advance logic to be based on real-time earnings.
+
+1. API Endpoint: POST /api/advances/request (server/index.ts)
+
+Modify the existing logic:
+
+When a request is received for employee_id, the backend must first calculate the employee's Total Real-time Earnings for the current pay period (e.g., from the 1st of the month until now).
+
+Calculation: This is done by querying the shifts table for that employee in the current period, summing the current_earnings field (which is updated by pulses), or by calculating the total value of all true pulses in that period.
+
+Validation: Calculate the eligible_amount which is 30% of the Total Real-time Earnings.
+
+Compare the requested amount with the eligible_amount. If it's higher, return an error specifying the maximum allowed amount.
+
+The 5-day cooldown rule between requests remains the same.
+
+Part 3: Break Management System
+This is a new system to be built from scratch.
+
+1. Database Schema Modifications (shared/schema.ts):
+
+Create a new breaks table:
+
+id (uuid, Primary Key)
+
+shift_id (uuid, FK to shifts.id)
+
+user_id (uuid, FK to employees.id)
+
+requested_duration_minutes (integer)
+
+status (text, e.g., 'PENDING', 'APPROVED', 'REJECTED', 'ACTIVE', 'COMPLETED')
+
+start_time (timestampz, nullable)
+
+end_time (timestampz, nullable)
+
+approved_by (uuid, nullable, FK to employees.id)
+
+2. Create New API Endpoints (server/index.ts):
+
+POST /api/breaks/request:
+
+Input: user_id, shift_id, duration_minutes.
+
+Action: Creates a new record in the breaks table with status = 'PENDING'. Sends a notification to the employee's branch manager.
+
+POST /api/breaks/:breakId/review (For Manager):
+
+Input: action ('approve' or 'reject').
+
+Action:
+
+If 'approve', update the break status to 'APPROVED' and send a notification back to the employee: "Your break has been approved. You can start it now."
+
+If 'reject', update the status to 'REJECTED'.
+
+POST /api/breaks/:breakId/start (For Employee):
+
+Action: Employee calls this when they are ready to start their approved break.
+
+The backend updates the break status to 'ACTIVE', sets the start_time to now(), and calculates the scheduled end_time.
+
+POST /api/breaks/:breakId/end (For Employee or Auto):
+
+Action: Updates the break status to 'COMPLETED'. This can be called by the employee or a scheduled job.
+
+3. Modify the Pulse System Logic:
+
+When the backend processes a pulse (POST /api/pulses), it must first check if the employee has an 'ACTIVE' break in the breaks table.
+
+If a break is active, even if the pulse validation (Wi-Fi + GPS) is true, the system must not add its value to the employee's current_earnings. The payroll calculation is effectively paused during the break.
+
+Action Request:
+Please implement these three new systems into the existing Node.js backend. Start with the database schema changes, then implement the new API endpoints and update the existing logic as described above. Ensure all new interactions are secure and efficient.
