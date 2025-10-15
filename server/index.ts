@@ -15,7 +15,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5000;
 
 app.use(cors());
 app.use(express.json());
@@ -1053,6 +1053,202 @@ app.get('/api/manager/dashboard', async (req, res) => {
   }
 });
 
+// =============================================================================
+// PAYROLL CALCULATION - حساب الرواتب
+// =============================================================================
+
+// Calculate payroll based on attendance and pulses
+app.post('/api/payroll/calculate', async (req, res) => {
+  try {
+    const { employee_id, start_date, end_date, hourly_rate = 40 } = req.body;
+
+    if (!employee_id || !start_date || !end_date) {
+      return res.status(400).json({ 
+        error: 'employee_id, start_date, and end_date are required' 
+      });
+    }
+
+    // Get employee info
+    const [employee] = await db
+      .select()
+      .from(employees)
+      .where(eq(employees.id, employee_id))
+      .limit(1);
+
+    if (!employee) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    // Fetch all attendance records in the date range
+    const attendanceRecords = await db
+      .select()
+      .from(attendance)
+      .where(and(
+        eq(attendance.employeeId, employee_id),
+        gte(attendance.date, start_date),
+        lte(attendance.date, end_date)
+      ))
+      .orderBy(attendance.date);
+
+    // Fetch all valid pulses in the date range
+    const validPulses = await db
+      .select()
+      .from(pulses)
+      .where(and(
+        eq(pulses.employeeId, employee_id),
+        eq(pulses.isWithinGeofence, true),
+        gte(pulses.timestamp, new Date(start_date)),
+        lte(pulses.timestamp, new Date(end_date))
+      ))
+      .orderBy(pulses.timestamp);
+
+    let totalValidPulses = validPulses.length;
+    let totalWorkHours = 0;
+    const attendanceDetail = [];
+
+    // Process each attendance record
+    for (const record of attendanceRecords) {
+      const workHours = parseFloat(record.workHours || '0');
+      totalWorkHours += workHours;
+
+      // Count pulses for this day
+      const dayStart = new Date(record.date);
+      const dayEnd = new Date(record.date);
+      dayEnd.setHours(23, 59, 59, 999);
+
+      const dayPulses = validPulses.filter(p => {
+        const pulseTime = new Date(p.timestamp);
+        return pulseTime >= dayStart && pulseTime <= dayEnd;
+      });
+
+      attendanceDetail.push({
+        date: record.date,
+        check_in: record.checkInTime,
+        check_out: record.checkOutTime,
+        work_hours: workHours,
+        valid_pulses: dayPulses.length,
+        status: record.status,
+      });
+    }
+
+    // Calculate total pay
+    const totalPay = totalWorkHours * hourly_rate;
+
+    // Calculate pulse-based pay (40 EGP/hour, pulse every 30 seconds = 0.333 EGP per pulse)
+    const pulseValue = (hourly_rate / 3600) * 30;
+    const pulsePay = totalValidPulses * pulseValue;
+
+    res.json({
+      success: true,
+      payroll: {
+        employee_id,
+        employee_name: employee.fullName,
+        period: {
+          start: start_date,
+          end: end_date,
+        },
+        total_attendance_days: attendanceRecords.length,
+        total_valid_pulses: totalValidPulses,
+        total_work_hours: Math.round(totalWorkHours * 100) / 100,
+        hourly_rate,
+        pulse_value: Math.round(pulseValue * 1000) / 1000,
+        total_pay_hours: Math.round(totalPay * 100) / 100,
+        total_pay_pulses: Math.round(pulsePay * 100) / 100,
+        attendance_detail: attendanceDetail,
+      }
+    });
+  } catch (error) {
+    console.error('Payroll calculation error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// =============================================================================
+// PULSE VALIDATION WITH GEOFENCING
+// =============================================================================
+
+// Constants for geofencing
+const RESTAURANT_WIFI_BSSID = 'XX:XX:XX:XX:XX:XX'; // Placeholder
+const RESTAURANT_LATITUDE = 31.2652;
+const RESTAURANT_LONGITUDE = 29.9863;
+const GEOFENCE_RADIUS_METERS = 100;
+
+// Helper function to calculate distance between two coordinates (Haversine formula)
+function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371e3; // Earth's radius in meters
+  const φ1 = (lat1 * Math.PI) / 180;
+  const φ2 = (lat2 * Math.PI) / 180;
+  const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+  const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+
+  const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c; // Distance in meters
+}
+
+// Receive and validate pulse from Flutter app
+app.post('/api/pulses', async (req, res) => {
+  try {
+    const { 
+      employee_id, 
+      wifi_bssid, 
+      latitude, 
+      longitude,
+      timestamp 
+    } = req.body;
+
+    if (!employee_id || latitude === undefined || longitude === undefined) {
+      return res.status(400).json({ 
+        error: 'employee_id, latitude, and longitude are required' 
+      });
+    }
+
+    // Perform Wi-Fi check
+    const wifiValid = wifi_bssid === RESTAURANT_WIFI_BSSID;
+
+    // Perform geofence check
+    const distance = calculateDistance(
+      latitude,
+      longitude,
+      RESTAURANT_LATITUDE,
+      RESTAURANT_LONGITUDE
+    );
+    const geofenceValid = distance <= GEOFENCE_RADIUS_METERS;
+
+    // Pulse is valid only if both checks pass
+    const isWithinGeofence = wifiValid && geofenceValid;
+
+    // Store pulse in database
+    const [pulse] = await db
+      .insert(pulses)
+      .values({
+        employeeId: employee_id,
+        latitude,
+        longitude,
+        isWithinGeofence,
+        timestamp: timestamp ? new Date(timestamp) : new Date(),
+        sentFromDevice: true,
+      })
+      .returning();
+
+    res.json({
+      success: true,
+      pulse: {
+        id: pulse.id,
+        is_valid: isWithinGeofence,
+        wifi_valid: wifiValid,
+        geofence_valid: geofenceValid,
+        distance_meters: Math.round(distance * 100) / 100,
+      }
+    });
+  } catch (error) {
+    console.error('Pulse validation error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`🚀 Oldies Workers API server running on port ${PORT}`);
   console.log(`📍 Health check: http://localhost:${PORT}/health`);
@@ -1062,6 +1258,8 @@ app.listen(PORT, () => {
   console.log(`📝 Requests: http://localhost:${PORT}/api/attendance/requests`);
   console.log(`🏖️  Leaves: http://localhost:${PORT}/api/leave/requests`);
   console.log(`💰 Advances: http://localhost:${PORT}/api/advances`);
+  console.log(`💵 Payroll: http://localhost:${PORT}/api/payroll/calculate`);
+  console.log(`📡 Pulses: http://localhost:${PORT}/api/pulses`);
   console.log(`📊 Reports: http://localhost:${PORT}/api/reports/attendance/:id`);
   console.log(`👨‍💼 Manager Dashboard: http://localhost:${PORT}/manager-dashboard.html`);
 });
