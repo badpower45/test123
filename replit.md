@@ -124,6 +124,19 @@ The app seeds demo employees on first run:
 ### Authentication
 - `POST /api/auth/login` - Employee login with ID and PIN
 
+### Branch Management (NEW)
+- `POST /api/branches` - Create a new branch with geofence configuration
+- `GET /api/branches` - Get all branches
+- `POST /api/branches/:branchId/assign-manager` - Assign manager to branch
+- `GET /api/branches/:branchId/employees` - Get employees by branch
+
+### Break Management (NEW)
+- `POST /api/breaks/request` - Request a break
+- `POST /api/breaks/:breakId/review` - Approve/reject break request
+- `POST /api/breaks/:breakId/start` - Start an approved break
+- `POST /api/breaks/:breakId/end` - End an active break
+- `GET /api/breaks` - Get breaks (filterable by employee_id and status)
+
 ### Attendance Management
 - `POST /api/attendance/check-in` - Check in for work
 - `POST /api/attendance/check-out` - Check out from work
@@ -174,6 +187,12 @@ Constants defined in `server/index.ts`:
    - Pulse value: (40 ÷ 3600) × 30 = 0.333 EGP per pulse
 
 ## Recent Changes (October 2025)
+
+### Advanced Features Implementation (Oct 15, 2025)
+- **✅ COMPLETE**: Successfully implemented three major backend upgrades
+- **Multi-Branch Management**: Support for multiple restaurant locations with branch-specific geofencing
+- **Dynamic Salary Advances**: Real-time earnings calculation based on valid pulses (30% of current period)
+- **Break Management System**: Complete break workflow with pulse exclusion during active breaks
 
 ### Supabase to Neon PostgreSQL Migration Completed (Oct 15, 2025)
 - **✅ MIGRATION COMPLETE**: Successfully migrated from Supabase to Replit's Neon PostgreSQL
