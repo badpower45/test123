@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>لوحة تحكم المدير - Oldies Workers</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 30px;
+        }
+
+        h1 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .summary-card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+
+        .summary-card h3 {
+            color: #667eea;
+            font-size: 2em;
+            margin-bottom: 5px;
+        }
+
+        .summary-card p {
+            color: #666;
+        }
+
+        .section {
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 20px;
+        }
+
+        .section h2 {
+            color: #667eea;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #667eea;
+        }
+
+        .request-card {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 10px;
+            border-right: 4px solid #667eea;
+        }
+
+        .request-card.leave { border-right-color: #28a745; }
+        .request-card.advance { border-right-color: #ffc107; }
+        .request-card.absence { border-right-color: #dc3545; }
+
+        .request-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .employee-name {
+            font-weight: bold;
+            color: #333;
+            font-size: 1.1em;
+        }
+
+        .request-type {
+            background: #667eea;
+            color: white;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+        }
+
+        .request-details {
+            color: #666;
+            margin-bottom: 10px;
+        }
+
+        .actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .btn {
+            padding: 8px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s;
+        }
+
+        .btn-approve {
+            background: #28a745;
+            color: white;
+        }
+
+        .btn-approve:hover {
+            background: #218838;
+        }
+
+        .btn-reject {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn-reject:hover {
+            background: #c82333;
+        }
+
+        .btn-deduct {
+            background: #ffc107;
+            color: #333;
+        }
+
+        .btn-deduct:hover {
+            background: #e0a800;
+        }
+
+        .refresh-btn {
+            background: #667eea;
+            color: white;
+            padding: 10px 30px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: bold;
+            margin-bottom: 20px;
+        }
+
+        .refresh-btn:hover {
+            background: #5568d3;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #667eea;
+            font-size: 1.2em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎯 لوحة تحكم المدير</h1>
+            <p>إدارة طلبات وإخطارات الموظفين</p>
+        </div>
+
+        <button class="refresh-btn" onclick="loadDashboard()">🔄 تحديث البيانات</button>
+
+        <div id="summary" class="summary"></div>
+
+        <div id="attendanceRequests" class="section"></div>
+        <div id="leaveRequests" class="section"></div>
+        <div id="advances" class="section"></div>
+        <div id="absences" class="section"></div>
+    </div>
+
+    <script>
+        const API_URL = window.location.origin;
+
+        async function loadDashboard() {
+            try {
+                const response = await fetch(`${API_URL}/api/manager/dashboard`);
+                const data = await response.json();
+
+                if (data.success) {
+                    renderSummary(data.dashboard.summary);
+                    renderAttendanceRequests(data.dashboard.attendanceRequests);
+                    renderLeaveRequests(data.dashboard.leaveRequests);
+                    renderAdvances(data.dashboard.advances);
+                    renderAbsences(data.dashboard.absences);
+                }
+            } catch (error) {
+                console.error('Error loading dashboard:', error);
+                alert('حدث خطأ في تحميل البيانات');
+            }
+        }
+
+        function renderSummary(summary) {
+            const summaryDiv = document.getElementById('summary');
+            summaryDiv.innerHTML = `
+                <div class="summary-card">
+                    <h3>${summary.totalPendingRequests}</h3>
+                    <p>إجمالي الطلبات المعلقة</p>
+                </div>
+                <div class="summary-card">
+                    <h3>${summary.attendanceRequestsCount}</h3>
+                    <p>طلبات حضور/انصراف</p>
+                </div>
+                <div class="summary-card">
+                    <h3>${summary.leaveRequestsCount}</h3>
+                    <p>طلبات إجازات</p>
+                </div>
+                <div class="summary-card">
+                    <h3>${summary.advancesCount}</h3>
+                    <p>طلبات سلف</p>
+                </div>
+                <div class="summary-card">
+                    <h3>${summary.absencesCount}</h3>
+                    <p>إخطارات غياب</p>
+                </div>
+            `;
+        }
+
+        function renderAttendanceRequests(requests) {
+            const div = document.getElementById('attendanceRequests');
+            if (requests.length === 0) {
+                div.innerHTML = `
+                    <h2>📝 طلبات الحضور والانصراف</h2>
+                    <div class="empty-state">لا توجد طلبات معلقة</div>
+                `;
+                return;
+            }
+
+            const html = `
+                <h2>📝 طلبات الحضور والانصراف (${requests.length})</h2>
+                ${requests.map(req => `
+                    <div class="request-card">
+                        <div class="request-header">
+                            <span class="employee-name">${req.employeeName}</span>
+                            <span class="request-type">${req.requestType === 'check-in' ? 'طلب حضور' : 'طلب انصراف'}</span>
+                        </div>
+                        <div class="request-details">
+                            <p><strong>الوقت المطلوب:</strong> ${new Date(req.requestedTime).toLocaleString('ar-EG')}</p>
+                            <p><strong>السبب:</strong> ${req.reason}</p>
+                            <p><strong>تاريخ الطلب:</strong> ${new Date(req.createdAt).toLocaleString('ar-EG')}</p>
+                        </div>
+                        <div class="actions">
+                            <button class="btn btn-approve" onclick="reviewRequest('${req.id}', 'approve', 'attendance')">✅ موافقة</button>
+                            <button class="btn btn-reject" onclick="reviewRequest('${req.id}', 'reject', 'attendance')">❌ رفض</button>
+                        </div>
+                    </div>
+                `).join('')}
+            `;
+            div.innerHTML = html;
+        }
+
+        function renderLeaveRequests(requests) {
+            const div = document.getElementById('leaveRequests');
+            if (requests.length === 0) {
+                div.innerHTML = `
+                    <h2>🏖️ طلبات الإجازات</h2>
+                    <div class="empty-state">لا توجد طلبات معلقة</div>
+                `;
+                return;
+            }
+
+            const html = `
+                <h2>🏖️ طلبات الإجازات (${requests.length})</h2>
+                ${requests.map(req => `
+                    <div class="request-card leave">
+                        <div class="request-header">
+                            <span class="employee-name">${req.employeeName}</span>
+                            <span class="request-type">${req.leaveType === 'regular' ? 'إجازة عادية' : 'إجازة طارئة'}</span>
+                        </div>
+                        <div class="request-details">
+                            <p><strong>من:</strong> ${req.startDate} <strong>إلى:</strong> ${req.endDate}</p>
+                            <p><strong>عدد الأيام:</strong> ${req.daysCount} يوم</p>
+                            <p><strong>بدل الإجازة:</strong> ${req.allowanceAmount} جنيه</p>
+                            ${req.reason ? `<p><strong>السبب:</strong> ${req.reason}</p>` : ''}
+                        </div>
+                        <div class="actions">
+                            <button class="btn btn-approve" onclick="reviewRequest('${req.id}', 'approve', 'leave')">✅ موافقة</button>
+                            <button class="btn btn-reject" onclick="reviewRequest('${req.id}', 'reject', 'leave')">❌ رفض</button>
+                        </div>
+                    </div>
+                `).join('')}
+            `;
+            div.innerHTML = html;
+        }
+
+        function renderAdvances(requests) {
+            const div = document.getElementById('advances');
+            if (requests.length === 0) {
+                div.innerHTML = `
+                    <h2>💰 طلبات السلف</h2>
+                    <div class="empty-state">لا توجد طلبات معلقة</div>
+                `;
+                return;
+            }
+
+            const html = `
+                <h2>💰 طلبات السلف (${requests.length})</h2>
+                ${requests.map(req => `
+                    <div class="request-card advance">
+                        <div class="request-header">
+                            <span class="employee-name">${req.employeeName}</span>
+                            <span class="request-type">سلفة</span>
+                        </div>
+                        <div class="request-details">
+                            <p><strong>المبلغ المطلوب:</strong> ${req.amount} جنيه</p>
+                            <p><strong>الراتب الشهري:</strong> ${req.currentSalary} جنيه</p>
+                            <p><strong>الحد الأقصى (30%):</strong> ${req.eligibleAmount} جنيه</p>
+                            <p><strong>تاريخ الطلب:</strong> ${new Date(req.requestDate).toLocaleString('ar-EG')}</p>
+                        </div>
+                        <div class="actions">
+                            <button class="btn btn-approve" onclick="reviewRequest('${req.id}', 'approve', 'advance')">✅ موافقة</button>
+                            <button class="btn btn-reject" onclick="reviewRequest('${req.id}', 'reject', 'advance')">❌ رفض</button>
+                        </div>
+                    </div>
+                `).join('')}
+            `;
+            div.innerHTML = html;
+        }
+
+        function renderAbsences(requests) {
+            const div = document.getElementById('absences');
+            if (requests.length === 0) {
+                div.innerHTML = `
+                    <h2>🚨 إخطارات الغياب</h2>
+                    <div class="empty-state">لا توجد إخطارات معلقة</div>
+                `;
+                return;
+            }
+
+            const html = `
+                <h2>🚨 إخطارات الغياب (${requests.length})</h2>
+                ${requests.map(req => `
+                    <div class="request-card absence">
+                        <div class="request-header">
+                            <span class="employee-name">${req.employeeName}</span>
+                            <span class="request-type">غياب</span>
+                        </div>
+                        <div class="request-details">
+                            <p><strong>تاريخ الغياب:</strong> ${req.absenceDate}</p>
+                            <p><strong>وقت الإخطار:</strong> ${new Date(req.notifiedAt).toLocaleString('ar-EG')}</p>
+                        </div>
+                        <div class="actions">
+                            <button class="btn btn-deduct" onclick="applyDeduction('${req.id}', '${req.employeeId}')">💸 تطبيق خصم (يومين عمل)</button>
+                            <button class="btn btn-approve" onclick="dismissAbsence('${req.id}')">✅ تجاهل</button>
+                        </div>
+                    </div>
+                `).join('')}
+            `;
+            div.innerHTML = html;
+        }
+
+        async function reviewRequest(requestId, action, type) {
+            const endpoints = {
+                attendance: `/api/attendance/requests/${requestId}/review`,
+                leave: `/api/leave/requests/${requestId}/review`,
+                advance: `/api/advances/${requestId}/review`
+            };
+
+            try {
+                const response = await fetch(`${API_URL}${endpoints[type]}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action,
+                        reviewer_id: 'MANAGER_ID', // TODO: Replace with actual manager ID
+                        notes: ''
+                    })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    alert(data.message);
+                    loadDashboard();
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('حدث خطأ في معالجة الطلب');
+            }
+        }
+
+        async function applyDeduction(notificationId, employeeId) {
+            try {
+                const response = await fetch(`${API_URL}/api/absence/${notificationId}/apply-deduction`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        reviewer_id: 'MANAGER_ID', // TODO: Replace with actual manager ID
+                        amount: '400' // 2 days work
+                    })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    alert(data.message + ' - المبلغ: ' + data.deductionAmount + ' جنيه');
+                    loadDashboard();
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('حدث خطأ في تطبيق الخصم');
+            }
+        }
+
+        async function dismissAbsence(notificationId) {
+            // TODO: Implement dismiss absence
+            alert('سيتم تجاهل الإخطار');
+        }
+
+        // Load dashboard on page load
+        loadDashboard();
+    </script>
+</body>
+</html>

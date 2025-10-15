@@ -17,19 +17,19 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Flutter Web Server"
+args = "API Server"
 
 [[workflows.workflow]]
-name = "Flutter Web Server"
+name = "API Server"
 author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "export PATH=\"$PATH:$HOME/.pub-cache/bin\" && dhttpd --host 0.0.0.0 --port 5000 --path build/web"
-waitForPort = 5000
+args = "npm run dev"
+waitForPort = 3000
 
 [workflows.workflow.metadata]
-outputType = "webview"
+outputType = "console"
 
 [[ports]]
 localPort = 5000
@@ -38,6 +38,10 @@ externalPort = 80
 [[ports]]
 localPort = 33133
 externalPort = 3001
+
+[[ports]]
+localPort = 3000
+externalPort = 3000
 
 [deployment]
 deploymentTarget = "autoscale"
