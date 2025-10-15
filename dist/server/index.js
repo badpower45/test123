@@ -3,8 +3,8 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { db } from './db.js';
-import { employees, attendance, attendanceRequests, leaveRequests, advances, deductions, absenceNotifications, pulses } from '../shared/schema.js';
-import { eq, and, gte, lte, desc } from 'drizzle-orm';
+import { employees, attendance, attendanceRequests, leaveRequests, advances, deductions, absenceNotifications, pulses, branches, branchManagers, breaks } from '../shared/schema.js';
+import { eq, and, gte, lte, desc, sql } from 'drizzle-orm';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const app = express();
@@ -475,12 +475,25 @@ app.post('/api/advances/request', async (req, res) => {
                 error: 'يمكن طلب سلفة كل 5 أيام فقط'
             });
         }
-        // Calculate current salary (30% of monthly salary)
-        const monthlySalary = parseFloat(employee.monthlySalary || '0');
-        const eligibleAmount = monthlySalary * 0.3;
+        // Calculate real-time earnings based on pulses
+        // Get start of current pay period (1st of current month)
+        const now = new Date();
+        const periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        // Count valid pulses in current period
+        const validPulsesResult = await db
+            .select({ count: sql `count(*)` })
+            .from(pulses)
+            .where(and(eq(pulses.employeeId, employee_id), eq(pulses.isWithinGeofence, true), gte(pulses.timestamp, periodStart), lte(pulses.timestamp, now)));
+        const validPulseCount = validPulsesResult[0]?.count || 0;
+        // Calculate earnings (40 EGP/hour, pulse every 30 seconds = 0.333 EGP per pulse)
+        const HOURLY_RATE = 40;
+        const pulseValue = (HOURLY_RATE / 3600) * 30;
+        const totalRealTimeEarnings = validPulseCount * pulseValue;
+        // Eligible amount is 30% of real-time earnings
+        const eligibleAmount = totalRealTimeEarnings * 0.3;
         if (parseFloat(amount) > eligibleAmount) {
             return res.status(400).json({
-                error: `الحد الأقصى للسلفة هو ${eligibleAmount} جنيه (30% من الراتب)`
+                error: `الحد الأقصى للسلفة هو ${Math.round(eligibleAmount * 100) / 100} جنيه (30% من الأرباح الحالية ${Math.round(totalRealTimeEarnings * 100) / 100} جنيه)`
             });
         }
         const [advance] = await db
@@ -489,7 +502,7 @@ app.post('/api/advances/request', async (req, res) => {
             employeeId: employee_id,
             amount,
             eligibleAmount: eligibleAmount.toString(),
-            currentSalary: monthlySalary.toString(),
+            currentSalary: totalRealTimeEarnings.toString(),
             status: 'pending',
         })
             .returning();
@@ -1002,13 +1015,46 @@ app.post('/api/pulses', async (req, res) => {
                 error: 'employee_id, latitude, and longitude are required'
             });
         }
-        // Perform Wi-Fi check
-        const wifiValid = wifi_bssid === RESTAURANT_WIFI_BSSID;
-        // Perform geofence check
-        const distance = calculateDistance(latitude, longitude, RESTAURANT_LATITUDE, RESTAURANT_LONGITUDE);
-        const geofenceValid = distance <= GEOFENCE_RADIUS_METERS;
+        // Get employee's branch
+        const [employee] = await db
+            .select()
+            .from(employees)
+            .where(eq(employees.id, employee_id))
+            .limit(1);
+        if (!employee) {
+            return res.status(404).json({ error: 'Employee not found' });
+        }
+        let wifiValid = wifi_bssid === RESTAURANT_WIFI_BSSID;
+        let geofenceValid = false;
+        let distance = 0;
+        // Use branch-specific geofence if available
+        if (employee.branchId) {
+            const [branch] = await db
+                .select()
+                .from(branches)
+                .where(eq(branches.id, employee.branchId))
+                .limit(1);
+            if (branch) {
+                wifiValid = branch.wifiBssid ? wifi_bssid === branch.wifiBssid : true;
+                if (branch.latitude && branch.longitude) {
+                    distance = calculateDistance(latitude, longitude, parseFloat(branch.latitude), parseFloat(branch.longitude));
+                    geofenceValid = distance <= (branch.geofenceRadius || 100);
+                }
+            }
+        }
+        else {
+            // Fallback to default location
+            distance = calculateDistance(latitude, longitude, RESTAURANT_LATITUDE, RESTAURANT_LONGITUDE);
+            geofenceValid = distance <= GEOFENCE_RADIUS_METERS;
+        }
         // Pulse is valid only if both checks pass
-        const isWithinGeofence = wifiValid && geofenceValid;
+        let isWithinGeofence = wifiValid && geofenceValid;
+        // Check if employee has an active break
+        const [activeBreak] = await db
+            .select()
+            .from(breaks)
+            .where(and(eq(breaks.employeeId, employee_id), eq(breaks.status, 'ACTIVE')))
+            .limit(1);
         // Store pulse in database
         const [pulse] = await db
             .insert(pulses)
@@ -1016,7 +1062,7 @@ app.post('/api/pulses', async (req, res) => {
             employeeId: employee_id,
             latitude,
             longitude,
-            isWithinGeofence,
+            isWithinGeofence: activeBreak ? false : isWithinGeofence,
             timestamp: timestamp ? new Date(timestamp) : new Date(),
             sentFromDevice: true,
         })
@@ -1025,15 +1071,243 @@ app.post('/api/pulses', async (req, res) => {
             success: true,
             pulse: {
                 id: pulse.id,
-                is_valid: isWithinGeofence,
+                is_valid: activeBreak ? false : isWithinGeofence,
                 wifi_valid: wifiValid,
                 geofence_valid: geofenceValid,
                 distance_meters: Math.round(distance * 100) / 100,
+                on_break: !!activeBreak,
             }
         });
     }
     catch (error) {
         console.error('Pulse validation error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// =============================================================================
+// BRANCH MANAGEMENT - إدارة الفروع
+// =============================================================================
+// Create a new branch
+app.post('/api/branches', async (req, res) => {
+    try {
+        const { name, wifi_bssid, latitude, longitude, geofence_radius } = req.body;
+        if (!name) {
+            return res.status(400).json({ error: 'Branch name is required' });
+        }
+        const [branch] = await db
+            .insert(branches)
+            .values({
+            name,
+            wifiBssid: wifi_bssid,
+            latitude: latitude ? latitude.toString() : null,
+            longitude: longitude ? longitude.toString() : null,
+            geofenceRadius: geofence_radius || 100,
+        })
+            .returning();
+        res.json({
+            success: true,
+            message: 'تم إنشاء الفرع بنجاح',
+            branch,
+        });
+    }
+    catch (error) {
+        console.error('Create branch error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// Get all branches
+app.get('/api/branches', async (req, res) => {
+    try {
+        const branchesList = await db
+            .select()
+            .from(branches)
+            .orderBy(branches.name);
+        res.json({ branches: branchesList });
+    }
+    catch (error) {
+        console.error('Get branches error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// Assign manager to branch
+app.post('/api/branches/:branchId/assign-manager', async (req, res) => {
+    try {
+        const { branchId } = req.params;
+        const { employee_id } = req.body;
+        if (!employee_id) {
+            return res.status(400).json({ error: 'Employee ID is required' });
+        }
+        const [assignment] = await db
+            .insert(branchManagers)
+            .values({
+            employeeId: employee_id,
+            branchId,
+        })
+            .returning();
+        res.json({
+            success: true,
+            message: 'تم تعيين المدير للفرع بنجاح',
+            assignment,
+        });
+    }
+    catch (error) {
+        console.error('Assign manager error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// Get employees by branch for managers
+app.get('/api/branches/:branchId/employees', async (req, res) => {
+    try {
+        const { branchId } = req.params;
+        const employeesList = await db
+            .select()
+            .from(employees)
+            .where(eq(employees.branchId, branchId))
+            .orderBy(employees.fullName);
+        res.json({ employees: employeesList });
+    }
+    catch (error) {
+        console.error('Get branch employees error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// =============================================================================
+// BREAK MANAGEMENT SYSTEM - نظام إدارة الاستراحات
+// =============================================================================
+// Request a break
+app.post('/api/breaks/request', async (req, res) => {
+    try {
+        const { employee_id, shift_id, duration_minutes } = req.body;
+        if (!employee_id || !duration_minutes) {
+            return res.status(400).json({ error: 'employee_id and duration_minutes are required' });
+        }
+        // Create break request
+        const [breakRequest] = await db
+            .insert(breaks)
+            .values({
+            employeeId: employee_id,
+            shiftId: shift_id || null,
+            requestedDurationMinutes: duration_minutes,
+            status: 'PENDING',
+        })
+            .returning();
+        res.json({
+            success: true,
+            message: 'تم إرسال طلب الاستراحة للمراجعة',
+            break: breakRequest,
+        });
+    }
+    catch (error) {
+        console.error('Break request error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// Review break request (approve/reject)
+app.post('/api/breaks/:breakId/review', async (req, res) => {
+    try {
+        const { breakId } = req.params;
+        const { action, manager_id } = req.body;
+        if (!action || !['approve', 'reject'].includes(action)) {
+            return res.status(400).json({ error: 'Action must be approve or reject' });
+        }
+        const [updated] = await db
+            .update(breaks)
+            .set({
+            status: action === 'approve' ? 'APPROVED' : 'REJECTED',
+            approvedBy: manager_id,
+            updatedAt: new Date(),
+        })
+            .where(eq(breaks.id, breakId))
+            .returning();
+        res.json({
+            success: true,
+            message: action === 'approve' ? 'تم الموافقة على الاستراحة' : 'تم رفض الاستراحة',
+            break: updated,
+        });
+    }
+    catch (error) {
+        console.error('Break review error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// Start an approved break
+app.post('/api/breaks/:breakId/start', async (req, res) => {
+    try {
+        const { breakId } = req.params;
+        // Get break details
+        const [breakRecord] = await db
+            .select()
+            .from(breaks)
+            .where(eq(breaks.id, breakId))
+            .limit(1);
+        if (!breakRecord) {
+            return res.status(404).json({ error: 'Break not found' });
+        }
+        if (breakRecord.status !== 'APPROVED') {
+            return res.status(400).json({ error: 'Break must be approved before starting' });
+        }
+        const startTime = new Date();
+        const endTime = new Date(startTime.getTime() + breakRecord.requestedDurationMinutes * 60000);
+        const [updated] = await db
+            .update(breaks)
+            .set({
+            status: 'ACTIVE',
+            startTime,
+            endTime,
+            updatedAt: new Date(),
+        })
+            .where(eq(breaks.id, breakId))
+            .returning();
+        res.json({
+            success: true,
+            message: 'تم بدء الاستراحة',
+            break: updated,
+        });
+    }
+    catch (error) {
+        console.error('Break start error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// End a break
+app.post('/api/breaks/:breakId/end', async (req, res) => {
+    try {
+        const { breakId } = req.params;
+        const [updated] = await db
+            .update(breaks)
+            .set({
+            status: 'COMPLETED',
+            updatedAt: new Date(),
+        })
+            .where(eq(breaks.id, breakId))
+            .returning();
+        res.json({
+            success: true,
+            message: 'تم إنهاء الاستراحة',
+            break: updated,
+        });
+    }
+    catch (error) {
+        console.error('Break end error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// Get breaks for an employee
+app.get('/api/breaks', async (req, res) => {
+    try {
+        const { employee_id, status } = req.query;
+        let query = db.select().from(breaks).$dynamic();
+        if (employee_id) {
+            query = query.where(eq(breaks.employeeId, employee_id));
+        }
+        if (status) {
+            query = query.where(eq(breaks.status, status));
+        }
+        const breaksList = await query.orderBy(desc(breaks.createdAt));
+        res.json({ breaks: breaksList });
+    }
+    catch (error) {
+        console.error('Get breaks error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
@@ -1049,5 +1323,6 @@ app.listen(PORT, () => {
     console.log(`💵 Payroll: http://localhost:${PORT}/api/payroll/calculate`);
     console.log(`📡 Pulses: http://localhost:${PORT}/api/pulses`);
     console.log(`📊 Reports: http://localhost:${PORT}/api/reports/attendance/:id`);
+    console.log(`☕ Breaks: http://localhost:${PORT}/api/breaks`);
     console.log(`👨‍💼 Manager Dashboard: http://localhost:${PORT}/manager-dashboard.html`);
 });

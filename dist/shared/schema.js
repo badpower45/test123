@@ -2,6 +2,21 @@ import { pgTable, uuid, text, timestamp, boolean, numeric, index, doublePrecisio
 import { sql } from 'drizzle-orm';
 // Employee role enum
 export const employeeRoleEnum = pgEnum('employee_role', ['owner', 'admin', 'manager', 'hr', 'monitor', 'staff']);
+// =============================================================================
+// BRANCHES TABLE - Multi-branch management
+// =============================================================================
+export const branches = pgTable('branches', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    wifiBssid: text('wifi_bssid'),
+    latitude: numeric('latitude'),
+    longitude: numeric('longitude'),
+    geofenceRadius: integer('geofence_radius').default(100),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+    nameIdx: index('idx_branches_name').on(table.name),
+}));
 // Request status enum
 export const requestStatusEnum = pgEnum('request_status', ['pending', 'approved', 'rejected']);
 // Leave type enum
@@ -14,11 +29,14 @@ export const employees = pgTable('employees', {
     role: employeeRoleEnum('role').default('staff').notNull(),
     permissions: text('permissions').array().default(sql `'{}'`),
     branch: text('branch'),
+    branchId: uuid('branch_id').references(() => branches.id),
     monthlySalary: numeric('monthly_salary'),
     active: boolean('active').default(true).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (table) => ({
+    branchIdIdx: index('idx_employees_branch_id').on(table.branchId),
+}));
 // Attendance table - daily check-in/check-out records
 export const attendance = pgTable('attendance', {
     id: uuid('id').primaryKey().defaultRandom(),
@@ -227,4 +245,35 @@ export const userRoles = pgTable('user_roles', {
 }, (table) => ({
     userIdIdx: index('idx_user_roles_user_id').on(table.userId),
     roleIdIdx: index('idx_user_roles_role_id').on(table.roleId),
+}));
+// Branch-Managers junction table
+export const branchManagers = pgTable('branch_managers', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    employeeId: text('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
+    branchId: uuid('branch_id').notNull().references(() => branches.id, { onDelete: 'cascade' }),
+    assignedAt: timestamp('assigned_at', { withTimezone: true }).defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+    employeeIdIdx: index('idx_branch_managers_employee_id').on(table.employeeId),
+    branchIdIdx: index('idx_branch_managers_branch_id').on(table.branchId),
+}));
+// =============================================================================
+// BREAKS TABLE - Break Management System
+// =============================================================================
+export const breakStatusEnum = pgEnum('break_status', ['PENDING', 'APPROVED', 'REJECTED', 'ACTIVE', 'COMPLETED']);
+export const breaks = pgTable('breaks', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    shiftId: uuid('shift_id').references(() => shifts.id, { onDelete: 'cascade' }),
+    employeeId: text('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
+    requestedDurationMinutes: integer('requested_duration_minutes').notNull(),
+    status: breakStatusEnum('status').default('PENDING').notNull(),
+    startTime: timestamp('start_time', { withTimezone: true }),
+    endTime: timestamp('end_time', { withTimezone: true }),
+    approvedBy: text('approved_by').references(() => employees.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+    shiftIdIdx: index('idx_breaks_shift_id').on(table.shiftId),
+    employeeIdIdx: index('idx_breaks_employee_id').on(table.employeeId),
+    statusIdx: index('idx_breaks_status').on(table.status),
 }));
