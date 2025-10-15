@@ -1,0 +1,74 @@
+**Project Objective:**
+Upgrade the existing "Oldies" Node.js backend to a full-featured, multi-branch employee management system. You need to implement three major systems: a multi-branch architecture, a dynamic real-time salary advance system, and a complete break management system.
+
+**Technology Stack:**
+* **Backend:** Node.js with Express/TypeScript.
+* **Database:** Neon PostgreSQL with Drizzle ORM.
+
+---
+
+### **Part 1: Implement the Multi-Branch System**
+
+This is a foundational architectural change.
+
+**1. Modify Database Schema (`shared/schema.ts`):**
+* **Create a new `branches` table:** This table will store data for each restaurant location.
+    * `id` (uuid, Primary Key)
+    * `name` (text)
+    * `wifi_bssid` (text, the unique MAC address for the branch's Wi-Fi)
+    * `latitude` (numeric)
+    * `longitude` (numeric)
+    * `geofence_radius` (integer, in meters)
+* **Update the `employees` table:** Add a `branch_id` column (uuid, Foreign Key to `branches.id`) to link each employee to their specific branch.
+* **Create a `branch_managers` table:** This will link managers to branches.
+    * `user_id` (uuid, FK to `employees.id`)
+    * `branch_id` (uuid, FK to `branches.id`)
+
+**2. Refactor Core Logic (`server/index.ts`):**
+* **Dynamic Pulse Validation:** Modify the `POST /api/pulses` endpoint. Instead of using global constants, the logic must first query the employee's `branch_id`, then fetch the correct `wifi_bssid` and location data from the `branches` table to perform the validation.
+* **Branch-Scoped Data for Managers:** Update all manager-level endpoints (e.g., getting pending requests, viewing reports). The logic must now filter data to only show employees and requests associated with the manager's assigned branch.
+
+---
+
+### **Part 2: Implement the Dynamic Salary Advance System**
+
+The salary advance must be based on real-time earnings, not a fixed monthly salary.
+
+**1. Create New Endpoint: `GET /api/employees/:employeeId/current-earnings`**
+* This endpoint is for the Flutter app to call *before* showing the advance form.
+* **Logic:**
+    1.  Calculate the employee's total earnings from the first day of the current month until now.
+    2.  This is done by counting all `true` pulses in the `pulses` table for that employee within the date range and multiplying the count by the pulse value (0.333 EGP).
+    3.  Return a JSON with `current_earnings` and `max_advance_amount` (30% of earnings).
+
+**2. Refactor Endpoint: `POST /api/advances/request`**
+* Replace the old logic. The new logic must call the same calculation as the endpoint above to determine the `max_advance_amount` and validate the user's requested amount against it. The 5-day cooldown rule remains.
+
+---
+
+### **Part 3: Implement the Break Management System**
+
+Build this new system from scratch.
+
+**1. Modify Database Schema (`shared/schema.ts`):**
+* **Create a new `breaks` table:**
+    * `id` (uuid, Primary Key)
+    * `shift_id` (uuid, FK to `shifts.id`)
+    * `user_id` (uuid, FK to `employees.id`)
+    * `requested_duration_minutes` (integer)
+    * `status` (text: 'PENDING', 'APPROVED', 'REJECTED', 'ACTIVE', 'COMPLETED')
+    * `start_time` (timestampz, nullable)
+    * `end_time` (timestampz, nullable)
+
+**2. Create New API Endpoints (`server/index.ts`):**
+* `POST /api/breaks/request`: Allows an employee to request a break of a specific duration.
+* `POST /api/breaks/:breakId/review`: Allows a manager to 'approve' or 'reject' a break request.
+* `POST /api/breaks/:breakId/start`: Allows an employee to start their approved break.
+* `POST /api/breaks/:breakId/end`: Allows an employee to end their break.
+
+**3. Integrate with Pulse System:**
+* Modify the `POST /api/pulses` endpoint logic. Before calculating the earning for a pulse, it must check if the employee currently has a break with `status = 'ACTIVE'`.
+* If a break is active, the system **must not** add any monetary value for that pulse, effectively pausing payroll calculation.
+
+**Action Request:**
+Please implement these three systems into the existing Node.js backend. Start with the database schema modifications, then implement the new API endpoints and refactor the existing logic as described.
