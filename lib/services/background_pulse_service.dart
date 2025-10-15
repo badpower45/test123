@@ -93,8 +93,8 @@ class BackgroundPulseService {
 
       double latitude;
       double longitude;
-      double distance;
-      bool isInside;
+  double distance;
+  bool isInside;
 
       if (config.enforceLocation) {
         final position = await LocationService().tryGetPosition();
@@ -139,13 +139,11 @@ class BackgroundPulseService {
       }
 
       final timestamp = DateTime.now().toUtc();
-      final isFakePulse = config.enforceLocation ? !isInside : false;
       final pulse = Pulse(
         employeeId: config.employeeId,
         latitude: latitude,
         longitude: longitude,
         timestamp: timestamp,
-        isFake: isFakePulse,
         wifiBssid: wifiBssid,
       );
 
@@ -178,7 +176,6 @@ class BackgroundPulseService {
           await PulseHistoryRepository.monthlyPulseCount(DateTime.now());
 
       _statusController.add({
-        'isFake': isFakePulse,
         'timestamp': timestamp.toIso8601String(),
         'latitude': latitude,
         'longitude': longitude,

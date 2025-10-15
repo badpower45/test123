@@ -8,16 +8,16 @@ class Pulse extends HiveObject {
     required this.latitude,
     required this.longitude,
     required this.timestamp,
-    required this.isFake,
     this.wifiBssid,
-  });
+    bool isFake = false,
+  }) : isFake = isFake;
 
   final String employeeId;
   final double latitude;
   final double longitude;
   final DateTime timestamp;
-  final bool isFake;
   final String? wifiBssid;
+  final bool isFake;
 
   Map<String, dynamic> toJson() => {
         'employee_id': employeeId,
@@ -34,7 +34,6 @@ class Pulse extends HiveObject {
         'longitude': longitude,
         'wifi_bssid': wifiBssid,
         'timestamp': timestamp.toIso8601String(),
-        'is_fake': isFake,
       }..removeWhere((key, value) => value == null);
 
   static Pulse fromJson(Map<String, dynamic> json) => Pulse(

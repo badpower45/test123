@@ -17,17 +17,28 @@ class AttendanceApiService {
     required double latitude,
     required double longitude,
   }) async {
-    final response = await http.post(
-      Uri.parse(CHECK_IN_ENDPOINT),
-      headers: _jsonHeaders,
-      body: jsonEncode({
-        'employee_id': employeeId,
-        'latitude': latitude,
-        'longitude': longitude,
-      }),
-    );
+    late http.Response response;
+    late Map<String, dynamic> body;
 
-    final body = _decodeBody(response.body);
+    try {
+      response = await http.post(
+        Uri.parse(CHECK_IN_ENDPOINT),
+        headers: _jsonHeaders,
+        body: jsonEncode({
+          'employee_id': employeeId,
+          'latitude': latitude,
+          'longitude': longitude,
+        }),
+      );
+      body = _decodeBody(response.body);
+    } on FormatException {
+      throw Exception('استجابة غير متوقعة من الخادم عند تسجيل الحضور');
+    } on Exception catch (error) {
+      throw Exception('تعذر الاتصال بالخادم لتسجيل الحضور: $error');
+    } catch (error) {
+      throw Exception('حدث خطأ غير متوقع أثناء تسجيل الحضور: $error');
+    }
+
     if (response.statusCode >= 200 && response.statusCode < 300) {
       return body;
     }
@@ -39,17 +50,28 @@ class AttendanceApiService {
     required double latitude,
     required double longitude,
   }) async {
-    final response = await http.post(
-      Uri.parse(CHECK_OUT_ENDPOINT),
-      headers: _jsonHeaders,
-      body: jsonEncode({
-        'employee_id': employeeId,
-        'latitude': latitude,
-        'longitude': longitude,
-      }),
-    );
+    late http.Response response;
+    late Map<String, dynamic> body;
 
-    final body = _decodeBody(response.body);
+    try {
+      response = await http.post(
+        Uri.parse(CHECK_OUT_ENDPOINT),
+        headers: _jsonHeaders,
+        body: jsonEncode({
+          'employee_id': employeeId,
+          'latitude': latitude,
+          'longitude': longitude,
+        }),
+      );
+      body = _decodeBody(response.body);
+    } on FormatException {
+      throw Exception('استجابة غير متوقعة من الخادم عند تسجيل الانصراف');
+    } on Exception catch (error) {
+      throw Exception('تعذر الاتصال بالخادم لتسجيل الانصراف: $error');
+    } catch (error) {
+      throw Exception('حدث خطأ غير متوقع أثناء تسجيل الانصراف: $error');
+    }
+
     if (response.statusCode >= 200 && response.statusCode < 300) {
       return body;
     }

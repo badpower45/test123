@@ -1,0 +1,8 @@
+- [x] Update `checkIn` in `lib/services/attendance_api_service.dart` to use POST to the new backend with required JSON body.
+- [x] Update `checkOut` in the same file with matching POST request structure and error handling.
+- [x] Verify both methods decode the response and surface errors according to backend contract.
+- [x] Ensure `wifi_info_flutter` dependency exists in `pubspec.yaml` for BSSID access.
+- [x] Refactor `lib/services/background_pulse_service.dart` pulse dispatch to POST to the new backend with required payload and remove obsolete `isFake` logic.
+- [x] Verify `submitLeaveRequest` posts to `/api/leave/request` with required payload and error handling.
+- [x] Verify `submitAdvanceRequest` posts to `/api/advances/request` with proper payload and error handling.
+- [x] Verify `submitAttendanceRequest` posts to `/api/attendance/request-checkin` (and checkout variant) with appropriate payload and errors.
