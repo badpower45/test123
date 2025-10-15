@@ -16,9 +16,10 @@
 - ✅ إحصائيات النبضات والاتصال
 
 #### API Endpoints:
-- `POST /api/shifts/check-in` - تسجيل الحضور
-- `PUT /api/shifts/check-out` - تسجيل الانصراف
-- `POST /api/requests/attendance` - طلب حضور متأخر
+- `POST /api/attendance/check-in` - تسجيل الحضور
+- `POST /api/attendance/check-out` - تسجيل الانصراف
+- `POST /api/attendance/request-checkin` - طلب تسجيل حضور بعد النسيان
+- `POST /api/attendance/request-checkout` - طلب تسجيل انصراف بعد النسيان
 
 ---
 
@@ -38,11 +39,11 @@
    - نظام السلف كل 5 أيام
 
 #### API Endpoints:
-- `POST /api/requests/leave` - طلب إجازة جديد
-- `GET /api/requests/leave?employee_id=X` - جلب طلبات الإجازة
-- `POST /api/requests/advance` - طلب سلفة جديد
-- `GET /api/requests/advance?employee_id=X` - جلب طلبات السلف
-- `GET /api/me/earnings?employee_id=X` - جلب المرتب الحالي
+- `POST /api/leave/request` - طلب إجازة جديد (عادي أو طارئ)
+- `GET /api/leave/requests?employee_id=X` - جلب طلبات الإجازة حسب الموظف
+- `POST /api/advances/request` - طلب سلفة جديدة (بنسبة 30%)
+- `GET /api/advances?employee_id=X` - جلب طلبات السلف
+- `GET /api/absence/notifications?status=pending` - عرض إخطارات الغياب للمدير
 
 #### القواعد المطبقة:
 - الإجازة العادية: قبلها ب48 ساعة على الأقل
@@ -69,8 +70,8 @@
 - الإجازات
 
 #### API Endpoints:
-- `GET /api/me/report?employee_id=X&period=mid-month` - تقرير منتصف الشهر
-- `GET /api/me/report?employee_id=X&period=full-month` - تقرير نهاية الشهر
+- `GET /api/reports/attendance/:employeeId?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD`
+   - التقرير يفتح فقط يوم 1 أو 16 تبعًا للسياسة (يتم رفض الطلب في الأيام الأخرى)
 
 ---
 
@@ -212,14 +213,20 @@ flutter run --dart-define=API_BASE_URL=https://api.oldies.com
 3. ✅ اختبار كل الـ flows
 4. ✅ إضافة معالجة الأخطاء
 
-### APIs المطلوب تطويرها:
-- [ ] POST /api/shifts/check-in
-- [ ] PUT /api/shifts/check-out
-- [ ] POST /api/requests/leave
-- [ ] POST /api/requests/advance
-- [ ] POST /api/requests/attendance
-- [ ] GET /api/me/report
-- [ ] GET /api/me/earnings
+### APIs الرئيسية الحالية:
+- [x] POST /api/attendance/check-in
+- [x] POST /api/attendance/check-out
+- [x] POST /api/attendance/request-checkin
+- [x] POST /api/attendance/request-checkout
+- [x] GET /api/attendance/requests & POST /api/attendance/requests/:id/review
+- [x] POST /api/leave/request & GET /api/leave/requests
+- [x] POST /api/leave/requests/:id/review
+- [x] POST /api/advances/request & GET /api/advances
+- [x] POST /api/advances/:id/review
+- [x] POST /api/absence/notify & GET /api/absence/notifications
+- [x] POST /api/absence/:id/apply-deduction
+- [x] GET /api/reports/attendance/:employeeId
+- [ ] GET /api/me/earnings (قيد التخطيط)
 
 ---
 
