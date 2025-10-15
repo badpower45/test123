@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../../theme/app_colors.dart';
 import '../../models/leave_request.dart';
@@ -96,7 +98,10 @@ class _RequestsPageState extends State<RequestsPage>
       earningsData['totalEarnings'] ?? earningsData['total_earnings'],
     );
     final maxAdvance = _parseAmount(
-          earningsData['eligibleAdvance'] ?? earningsData['eligible_advance'],
+          earningsData['max_advance_amount'] ??
+              earningsData['maxAdvanceAmount'] ??
+              earningsData['eligibleAdvance'] ??
+              earningsData['eligible_advance'],
         ) ??
         (currentEarnings != null ? currentEarnings * 0.3 : null);
 
@@ -225,7 +230,7 @@ class _RequestsPageState extends State<RequestsPage>
                   employeeId: widget.employeeId,
                   onNewRequest: _showAdvanceRequestSheet,
                 ),
-                _BreaksTab(
+                _BreaksView(
                   employeeId: widget.employeeId,
                 ),
               ],
@@ -417,27 +422,50 @@ class _AdvanceRequestsTab extends StatelessWidget {
   }
 }
 
-// Breaks Tab
-class _BreaksTab extends StatefulWidget {
+// Breaks View
+class _BreaksView extends StatefulWidget {
   final String employeeId;
 
-  const _BreaksTab({required this.employeeId});
+  const _BreaksView({required this.employeeId});
 
   @override
-  State<_BreaksTab> createState() => _BreaksTabState();
+  State<_BreaksView> createState() => _BreaksViewState();
 }
 
-class _BreaksTabState extends State<_BreaksTab> {
+class _BreaksViewState extends State<_BreaksView> {
   bool _isLoading = true;
   bool _isRefreshing = false;
   String? _errorMessage;
   List<Break> _breaks = <Break>[];
   String? _actioningBreakId;
+  Timer? _ticker;
 
   @override
   void initState() {
     super.initState();
+    _startTicker();
     _loadBreaks();
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    super.dispose();
+  }
+
+  void _startTicker() {
+    _ticker?.cancel();
+    _ticker = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (!mounted) {
+        return;
+      }
+      final hasActive = _breaks.any(
+        (item) => item.status == BreakStatus.active && item.startTime != null,
+      );
+      if (hasActive) {
+        setState(() {});
+      }
+    });
   }
 
   Future<void> _loadBreaks({bool showLoadingIndicator = true}) async {
@@ -572,7 +600,7 @@ class _BreaksTabState extends State<_BreaksTab> {
           ElevatedButton.icon(
             onPressed: _openBreakRequestSheet,
             icon: const Icon(Icons.add),
-            label: const Text('طلب استراحة جديد'),
+            label: const Text('طلب استراحة'),
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primaryOrange,
               foregroundColor: Colors.white,
@@ -612,6 +640,7 @@ class _BreaksTabState extends State<_BreaksTab> {
     final statusLabel = _statusLabel(breakItem.status);
     final isActioning = _actioningBreakId == breakItem.id;
     final actionButton = _buildActionButton(breakItem, isActioning);
+    final remainingLabel = _remainingTimeLabel(breakItem);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -670,6 +699,17 @@ class _BreaksTabState extends State<_BreaksTab> {
               value: _formatDateTime(breakItem.endTime!),
             ),
           ],
+          if (remainingLabel != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              remainingLabel,
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: AppColors.primaryOrange,
+              ),
+            ),
+          ],
           if (actionButton != null) ...[
             const SizedBox(height: 16),
             actionButton,
@@ -696,7 +736,7 @@ class _BreaksTabState extends State<_BreaksTab> {
                 width: 20,
                 child: CircularProgressIndicator(strokeWidth: 2),
               )
-            : const Text('Start Break'),
+            : const Text('بدء الاستراحة'),
       );
     }
 
@@ -717,11 +757,46 @@ class _BreaksTabState extends State<_BreaksTab> {
                 width: 20,
                 child: CircularProgressIndicator(strokeWidth: 2),
               )
-            : const Text('End Break'),
+            : const Text('إنهاء الاستراحة'),
       );
     }
 
     return null;
+  }
+
+  String? _remainingTimeLabel(Break breakItem) {
+    if (breakItem.status != BreakStatus.active || breakItem.startTime == null) {
+      return null;
+    }
+
+    final requested = breakItem.requestedDuration;
+    final elapsed = DateTime.now().difference(breakItem.startTime!);
+    final remaining = requested - elapsed;
+
+    if (remaining.inSeconds <= 0) {
+      return 'انتهت مدة الاستراحة المقررة';
+    }
+
+    return 'الوقت المتبقي: ${_formatRemainingDuration(remaining)}';
+  }
+
+  String _formatRemainingDuration(Duration duration) {
+    final parts = <String>[];
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes % 60;
+    final seconds = duration.inSeconds % 60;
+
+    if (hours > 0) {
+      parts.add('$hours ساعة');
+    }
+    if (minutes > 0) {
+      parts.add('$minutes دقيقة');
+    }
+    if (parts.isEmpty) {
+      parts.add('$seconds ثانية');
+    }
+
+    return parts.join(' و ');
   }
 
   String _statusLabel(BreakStatus status) {
@@ -1402,7 +1477,9 @@ class _AdvanceRequestSheetState extends State<_AdvanceRequestSheet> {
     if (_maxAdvance > 0 && rawAmount > _maxAdvance) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('الحد الأقصى للسلفة هو ${_maxAdvance.toStringAsFixed(0)} جنيه'),
+          content: Text(
+            'الحد الأقصى للسلفة المتاحة هو ${_maxAdvance.toStringAsFixed(0)} جنيه',
+          ),
           backgroundColor: AppColors.error,
         ),
       );
@@ -1498,7 +1575,7 @@ class _AdvanceRequestSheetState extends State<_AdvanceRequestSheet> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text(
-                        'الحد الأقصى (30%)',
+                        'الحد الأقصى للسلفة المتاحة',
                         style: TextStyle(
                           fontSize: 14,
                           color: AppColors.textSecondary,
@@ -1521,7 +1598,20 @@ class _AdvanceRequestSheetState extends State<_AdvanceRequestSheet> {
             ),
             
             const SizedBox(height: 24),
-            
+
+            if (_maxAdvance > 0)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Text(
+                  'الحد الأقصى للسلفة المتاحة: ${_maxAdvance.toStringAsFixed(0)} جنيه',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.primaryOrange,
+                  ),
+                ),
+              ),
+
             TextField(
               controller: _amountController,
               keyboardType: TextInputType.number,

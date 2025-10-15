@@ -10,9 +10,13 @@ class Break {
   Break({
     required this.id,
     required this.employeeId,
+    this.branchId,
     this.shiftId,
     required this.requestedDurationMinutes,
+    this.actualDurationMinutes,
     required this.status,
+    this.reason,
+    this.notes,
     this.startTime,
     this.endTime,
     this.approvedBy,
@@ -22,14 +26,22 @@ class Break {
 
   final String id;
   final String employeeId;
+  final String? branchId;
   final String? shiftId;
   final int requestedDurationMinutes;
+  final int? actualDurationMinutes;
   final BreakStatus status;
+  final String? reason;
+  final String? notes;
   final DateTime? startTime;
   final DateTime? endTime;
   final String? approvedBy;
   final DateTime createdAt;
   final DateTime updatedAt;
+
+  Duration get requestedDuration => Duration(minutes: requestedDurationMinutes);
+  Duration? get actualDuration =>
+      actualDurationMinutes != null ? Duration(minutes: actualDurationMinutes!) : null;
 
   bool get isPending => status == BreakStatus.pending;
   bool get isApproved => status == BreakStatus.approved;
@@ -38,21 +50,63 @@ class Break {
 
   factory Break.fromJson(Map<String, dynamic> json) {
     return Break(
-      id: (json['id'] ?? '') as String,
-      employeeId: (json['employeeId'] ?? json['employee_id'] ?? '') as String,
-      shiftId: json['shiftId'] as String? ?? json['shift_id'] as String?,
-      requestedDurationMinutes: _parseDuration(json['requestedDurationMinutes'] ?? json['requested_duration_minutes']),
+      id: _readString(json, 'id') ?? '',
+      employeeId:
+          _readString(json, 'employeeId') ?? _readString(json, 'employee_id') ?? '',
+      branchId: _readString(json, 'branchId') ?? _readString(json, 'branch_id'),
+      shiftId: _readString(json, 'shiftId') ?? _readString(json, 'shift_id'),
+      requestedDurationMinutes: _readInt(json, 'requestedDurationMinutes') ??
+          _readInt(json, 'requested_duration_minutes') ??
+          0,
+      actualDurationMinutes: _readInt(json, 'actualDurationMinutes') ??
+          _readInt(json, 'actual_duration_minutes'),
       status: _mapStatus(json['status']),
-      startTime: _parseDateTime(json['startTime'] ?? json['start_time']),
-      endTime: _parseDateTime(json['endTime'] ?? json['end_time']),
-      approvedBy: json['approvedBy'] as String? ?? json['approved_by'] as String?,
-      createdAt: _parseDateTime(json['createdAt'] ?? json['created_at']) ?? DateTime.now(),
-      updatedAt: _parseDateTime(json['updatedAt'] ?? json['updated_at']) ?? DateTime.now(),
+      reason: _readString(json, 'reason'),
+      notes: _readString(json, 'notes') ?? _readString(json, 'note'),
+      startTime: _readDate(json, 'startTime') ?? _readDate(json, 'start_time'),
+      endTime: _readDate(json, 'endTime') ?? _readDate(json, 'end_time'),
+      approvedBy: _readString(json, 'approvedBy') ?? _readString(json, 'approved_by'),
+      createdAt:
+          _readDate(json, 'createdAt') ?? _readDate(json, 'created_at') ?? DateTime.now(),
+      updatedAt:
+          _readDate(json, 'updatedAt') ?? _readDate(json, 'updated_at') ?? DateTime.now(),
     );
+  }
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'id': id,
+      'employee_id': employeeId,
+      if (branchId != null) 'branch_id': branchId,
+      if (shiftId != null) 'shift_id': shiftId,
+      'requested_duration_minutes': requestedDurationMinutes,
+      if (actualDurationMinutes != null)
+        'actual_duration_minutes': actualDurationMinutes,
+      'status': status.name.toUpperCase(),
+      if (reason != null) 'reason': reason,
+      if (notes != null) 'notes': notes,
+      if (startTime != null) 'start_time': startTime!.toIso8601String(),
+      if (endTime != null) 'end_time': endTime!.toIso8601String(),
+      if (approvedBy != null) 'approved_by': approvedBy,
+      'created_at': createdAt.toIso8601String(),
+      'updated_at': updatedAt.toIso8601String(),
+    };
   }
 }
 
-int _parseDuration(Object? value) {
+String? _readString(Map<String, dynamic> json, String key) {
+  final value = json[key];
+  if (value == null) {
+    return null;
+  }
+  if (value is String) {
+    return value;
+  }
+  return value.toString();
+}
+
+int? _readInt(Map<String, dynamic> json, String key) {
+  final value = json[key];
   if (value is int) {
     return value;
   }
@@ -60,37 +114,44 @@ int _parseDuration(Object? value) {
     return value.toInt();
   }
   if (value is String) {
-    return int.tryParse(value) ?? 0;
+    return int.tryParse(value);
   }
-  return 0;
+  return null;
 }
 
-BreakStatus _mapStatus(Object? value) {
-  final normalized = (value?.toString() ?? '').toUpperCase();
-  switch (normalized) {
-    case 'APPROVED':
-      return BreakStatus.approved;
-    case 'REJECTED':
-      return BreakStatus.rejected;
-    case 'ACTIVE':
-      return BreakStatus.active;
-    case 'COMPLETED':
-      return BreakStatus.completed;
-    default:
-      return BreakStatus.pending;
-  }
-}
-
-DateTime? _parseDateTime(Object? value) {
+DateTime? _readDate(Map<String, dynamic> json, String key) {
+  final value = json[key];
   if (value == null) {
     return null;
   }
   if (value is DateTime) {
     return value;
   }
+  if (value is int) {
+    return DateTime.fromMillisecondsSinceEpoch(value);
+  }
   final raw = value.toString();
   if (raw.isEmpty) {
     return null;
   }
   return DateTime.tryParse(raw);
+}
+
+BreakStatus _mapStatus(Object? value) {
+  final normalized = (value ?? '').toString().trim().toUpperCase();
+  switch (normalized) {
+    case 'APPROVED':
+      return BreakStatus.approved;
+    case 'REJECTED':
+      return BreakStatus.rejected;
+    case 'ACTIVE':
+    case 'IN_PROGRESS':
+    case 'STARTED':
+      return BreakStatus.active;
+    case 'COMPLETED':
+    case 'DONE':
+      return BreakStatus.completed;
+    default:
+      return BreakStatus.pending;
+  }
 }
