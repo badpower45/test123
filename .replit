@@ -40,10 +40,10 @@ localPort = 5000
 externalPort = 80
 
 [[ports]]
-localPort = 44755
-externalPort = 3002
+localPort = 36783
+externalPort = 3001
 
 [deployment]
 deploymentTarget = "autoscale"
-run = ["bash", "-c", "export PATH=\"$PATH:$HOME/.pub-cache/bin\" && dhttpd --host 0.0.0.0 --port 5000 --path build/web"]
-build = ["flutter", "build", "web", "--release"]
+run = ["node", "dist/index.js"]
+build = ["npm", "run", "build"]

@@ -291,7 +291,7 @@ app.get('/api/attendance/requests', async (req, res) => {
       })
       .from(attendanceRequests)
       .innerJoin(employees, eq(attendanceRequests.employeeId, employees.id))
-      .where(eq(attendanceRequests.status, status as string))
+      .where(eq(attendanceRequests.status, status as 'pending' | 'approved' | 'rejected'))
       .orderBy(desc(attendanceRequests.createdAt));
 
     res.json({ requests });
@@ -480,7 +480,7 @@ app.get('/api/leave/requests', async (req, res) => {
     }
 
     if (status) {
-      query = query.where(eq(leaveRequests.status, status as string));
+      query = query.where(eq(leaveRequests.status, status as 'pending' | 'approved' | 'rejected'));
     }
 
     const requests = await query.orderBy(desc(leaveRequests.createdAt));
@@ -623,7 +623,7 @@ app.get('/api/advances', async (req, res) => {
     }
 
     if (status) {
-      query = query.where(eq(advances.status, status as string));
+      query = query.where(eq(advances.status, status as 'pending' | 'approved' | 'rejected'));
     }
 
     const advancesList = await query.orderBy(desc(advances.requestDate));
@@ -722,7 +722,7 @@ app.get('/api/absence/notifications', async (req, res) => {
       })
       .from(absenceNotifications)
       .innerJoin(employees, eq(absenceNotifications.employeeId, employees.id))
-      .where(eq(absenceNotifications.status, status as string))
+      .where(eq(absenceNotifications.status, status as 'pending' | 'approved' | 'rejected'))
       .orderBy(desc(absenceNotifications.notifiedAt));
 
     res.json({ notifications });

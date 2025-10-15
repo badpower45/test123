@@ -4,10 +4,11 @@
 **Oldies Workers** (أولديزز وركرز) is a comprehensive Flutter-based employee attendance tracking system with real-time location monitoring and pulse-based verification. The app features a mobile/web client for employees and an administrative dashboard for managers.
 
 ## Project Status
-- **Language**: Dart 3.8.0 / Flutter 3.32.0
+- **Frontend**: Dart 3.8.0 / Flutter 3.32.0
+- **Backend**: Node.js/TypeScript with Express + Neon PostgreSQL
 - **Platform**: Cross-platform (Web, Android, iOS, Desktop)
-- **Current Setup**: Web deployment configured
-- **Backend**: Supabase integration in progress
+- **Current Setup**: Full-stack web deployment configured
+- **Migration Status**: ✅ Successfully migrated from Supabase to Neon PostgreSQL (Oct 15, 2025)
 
 ## Core Features
 
@@ -35,12 +36,14 @@
 - **HTTP Client**: http package
 - **Fonts**: Google Fonts (IBM Plex Sans Arabic)
 
-### Backend Stack (In Development)
-- **Database**: Supabase (PostgreSQL with PostGIS)
-- **Authentication**: Supabase Auth
-- **Real-time**: Supabase Realtime subscriptions
-- **Edge Functions**: TypeScript-based serverless functions
-- **Geofencing**: PostGIS spatial queries for location validation
+### Backend Stack (Production Ready)
+- **Runtime**: Node.js with TypeScript
+- **Framework**: Express.js
+- **Database**: Neon PostgreSQL (Replit-managed)
+- **ORM**: Drizzle ORM with Drizzle Kit
+- **Authentication**: PIN-based employee authentication
+- **Geofencing**: Haversine formula + Wi-Fi BSSID validation
+- **Payroll**: Pulse-based real-time salary calculation
 
 ### Key Dependencies
 ```yaml
@@ -108,14 +111,81 @@ The app seeds demo employees on first run:
 ## Replit Environment
 
 ### Workflows
-- **Flutter Web Server**: Serves the built web app on port 5000 using dhttpd
+- **API Server**: Express.js backend API running on port 5000 (webview output)
+- Serves both API endpoints and static manager dashboard
 
 ### Deployment
-- **Type**: Autoscale (stateless web app)
-- **Build**: `flutter build web --release`
-- **Run**: `dhttpd --host 0.0.0.0 --port 5000 --path build/web`
+- **Type**: Autoscale (stateless API + web app)
+- **Build**: `npm run build` (compiles TypeScript to JavaScript)
+- **Run**: `node dist/index.js` (production) or `npm run dev` (development)
+
+## Backend API Endpoints
+
+### Authentication
+- `POST /api/auth/login` - Employee login with ID and PIN
+
+### Attendance Management
+- `POST /api/attendance/check-in` - Check in for work
+- `POST /api/attendance/check-out` - Check out from work
+- `POST /api/attendance/request-checkin` - Request forgotten check-in
+- `POST /api/attendance/request-checkout` - Request forgotten check-out
+- `GET /api/attendance/requests` - Get pending attendance requests
+- `POST /api/attendance/requests/:id/review` - Approve/reject request
+
+### Leave Management
+- `POST /api/leave/request` - Submit leave request
+- `GET /api/leave/requests` - Get leave requests
+- `POST /api/leave/requests/:id/review` - Approve/reject leave
+
+### Salary Advances
+- `POST /api/advances/request` - Request salary advance
+- `GET /api/advances` - Get advance requests
+- `POST /api/advances/:id/review` - Approve/reject advance
+
+### Absence & Deductions
+- `POST /api/absence/notify` - Notify about absence
+- `GET /api/absence/notifications` - Get absence notifications
+- `POST /api/absence/:id/apply-deduction` - Apply deduction for absence
+
+### Payroll & Pulses (NEW)
+- `POST /api/payroll/calculate` - Calculate employee payroll for a period
+- `POST /api/pulses` - Submit location pulse with geofencing validation
+
+### Reports & Dashboard
+- `GET /api/reports/attendance/:employeeId` - Get attendance report
+- `GET /api/manager/dashboard` - Get manager dashboard data
+
+## Geofencing & Pulse System
+
+### Configuration
+Constants defined in `server/index.ts`:
+- `RESTAURANT_WIFI_BSSID`: Wi-Fi MAC address for validation
+- `RESTAURANT_LATITUDE`: 31.2652 (Alexandria, Egypt)
+- `RESTAURANT_LONGITUDE`: 29.9863
+- `GEOFENCE_RADIUS_METERS`: 100
+
+### Validation Logic
+1. **Wi-Fi Check**: Compares device Wi-Fi BSSID with restaurant Wi-Fi
+2. **Geofence Check**: Uses Haversine formula to calculate distance
+3. **Pulse Status**: Valid only if BOTH checks pass
+4. **Salary Calculation**: 
+   - Hourly rate: 40 EGP/hour
+   - Pulse frequency: Every 30 seconds
+   - Pulse value: (40 ÷ 3600) × 30 = 0.333 EGP per pulse
 
 ## Recent Changes (October 2025)
+
+### Supabase to Neon PostgreSQL Migration Completed (Oct 15, 2025)
+- **✅ MIGRATION COMPLETE**: Successfully migrated from Supabase to Replit's Neon PostgreSQL
+- Installed Node.js/TypeScript backend with Express.js framework
+- Implemented Drizzle ORM for type-safe database queries
+- Pushed complete database schema to Neon PostgreSQL
+- Migrated Supabase edge function to Express endpoint: `POST /api/payroll/calculate`
+- Added geofencing validation with Haversine distance calculation
+- Implemented pulse validation endpoint: `POST /api/pulses`
+- Configured Wi-Fi BSSID + GPS geofence validation (both must pass)
+- Server running on port 5000 with webview output type
+- **Action Required**: Create employee records before testing pulse/payroll endpoints
 
 ### Replit Environment Setup Completed (Oct 14, 2025)
 - **✅ SETUP COMPLETE**: Successfully configured Flutter app to run on Replit
