@@ -1,7 +1,12 @@
-import 'package:flutter/material.dart';
 import 'dart:async';
-import '../../theme/app_colors.dart';
+
+import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
+
+import '../../constants/restaurant_config.dart';
 import '../../services/attendance_api_service.dart';
+import '../../services/location_service.dart';
+import '../../theme/app_colors.dart';
 
 class EmployeeHomePage extends StatefulWidget {
   final String employeeId;
@@ -59,7 +64,32 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
     setState(() => _isLoading = true);
     
     try {
-      await AttendanceApiService.checkIn(widget.employeeId);
+      final locationService = LocationService();
+      final position = await locationService.tryGetPosition();
+
+      if (RestaurantConfig.enforceLocation) {
+        if (position == null) {
+          throw Exception('تعذر تحديد موقعك، يرجى تفعيل خدمة تحديد الموقع والمحاولة مرة أخرى.');
+        }
+        final distance = Geolocator.distanceBetween(
+          RestaurantConfig.latitude,
+          RestaurantConfig.longitude,
+          position.latitude,
+          position.longitude,
+        );
+        if (distance > RestaurantConfig.allowedRadiusInMeters) {
+          throw Exception('أنت خارج نطاق الموقع المسموح للمطعم.');
+        }
+      }
+
+      final latitude = position?.latitude ?? RestaurantConfig.latitude;
+      final longitude = position?.longitude ?? RestaurantConfig.longitude;
+
+      await AttendanceApiService.checkIn(
+        employeeId: widget.employeeId,
+        latitude: latitude,
+        longitude: longitude,
+      );
       
       setState(() {
         _isCheckedIn = true;
@@ -96,7 +126,32 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
     setState(() => _isLoading = true);
     
     try {
-      await AttendanceApiService.checkOut(widget.employeeId, 'shift_id');
+      final locationService = LocationService();
+      final position = await locationService.tryGetPosition();
+
+      if (RestaurantConfig.enforceLocation) {
+        if (position == null) {
+          throw Exception('تعذر تحديد موقعك، يرجى تفعيل خدمة تحديد الموقع والمحاولة مرة أخرى.');
+        }
+        final distance = Geolocator.distanceBetween(
+          RestaurantConfig.latitude,
+          RestaurantConfig.longitude,
+          position.latitude,
+          position.longitude,
+        );
+        if (distance > RestaurantConfig.allowedRadiusInMeters) {
+          throw Exception('أنت خارج نطاق الموقع المسموح للمطعم.');
+        }
+      }
+
+      final latitude = position?.latitude ?? RestaurantConfig.latitude;
+      final longitude = position?.longitude ?? RestaurantConfig.longitude;
+
+      await AttendanceApiService.checkOut(
+        employeeId: widget.employeeId,
+        latitude: latitude,
+        longitude: longitude,
+      );
       
       setState(() {
         _isCheckedIn = false;

@@ -15,6 +15,8 @@ class AdvanceRequest extends HiveObject {
     required this.amount,
     required this.currentEarnings,
     this.status = RequestStatus.pending,
+    this.eligibleAmount,
+    DateTime? requestDate,
     DateTime? createdAt,
     DateTime? reviewedAt,
     this.reviewedBy,
@@ -27,6 +29,8 @@ class AdvanceRequest extends HiveObject {
   double amount;
   double currentEarnings;
   RequestStatus status;
+  double? eligibleAmount;
+  DateTime? requestDate;
   DateTime createdAt;
   DateTime? reviewedAt;
   String? reviewedBy;
@@ -35,8 +39,32 @@ class AdvanceRequest extends HiveObject {
   bool get isPending => status == RequestStatus.pending;
   bool get isApproved => status == RequestStatus.approved;
   bool get isRejected => status == RequestStatus.rejected;
-  
+
   double get maxAllowedAmount => currentEarnings * 0.30;
+
+  factory AdvanceRequest.fromJson(Map<String, dynamic> json) {
+    final statusValue = (json['status'] ?? '') as String;
+    return AdvanceRequest(
+      id: (json['id'] ?? '') as String,
+      employeeId: (json['employeeId'] ?? json['employee_id'] ?? '') as String,
+      amount: ((json['amount']) as num).toDouble(),
+      currentEarnings:
+          ((json['currentSalary'] ?? json['current_earnings'] ?? 0) as num).toDouble(),
+      eligibleAmount: (json['eligibleAmount'] != null)
+          ? (json['eligibleAmount'] as num).toDouble()
+          : ((json['eligible_amount']) as num?)?.toDouble(),
+      status: _mapStatus(statusValue),
+      requestDate: (json['requestDate'] ?? json['request_date']) != null
+          ? DateTime.parse((json['requestDate'] ?? json['request_date']) as String)
+          : null,
+      createdAt: DateTime.parse((json['createdAt'] ?? json['created_at']) as String),
+      reviewedAt: (json['reviewedAt'] ?? json['reviewed_at']) != null
+          ? DateTime.parse((json['reviewedAt'] ?? json['reviewed_at']) as String)
+          : null,
+      reviewedBy: (json['reviewedBy'] ?? json['reviewed_by']) as String?,
+      rejectionReason: (json['reviewNotes'] ?? json['rejection_reason']) as String?,
+    );
+  }
 }
 
 class AdvanceRequestAdapter extends TypeAdapter<AdvanceRequest> {
@@ -56,6 +84,8 @@ class AdvanceRequestAdapter extends TypeAdapter<AdvanceRequest> {
       amount: (fields[2] as num).toDouble(),
       currentEarnings: (fields[3] as num).toDouble(),
       status: RequestStatus.values[fields[4] as int? ?? 0],
+      eligibleAmount: (fields[9] as num?)?.toDouble(),
+      requestDate: fields[10] != null ? DateTime.parse(fields[10] as String) : null,
       createdAt: DateTime.tryParse(fields[5] as String? ?? '') ?? DateTime.now(),
       reviewedAt: fields[6] != null ? DateTime.parse(fields[6] as String) : null,
       reviewedBy: fields[7] as String?,
@@ -66,7 +96,7 @@ class AdvanceRequestAdapter extends TypeAdapter<AdvanceRequest> {
   @override
   void write(BinaryWriter writer, AdvanceRequest obj) {
     writer
-      ..writeByte(9)
+      ..writeByte(11)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -84,12 +114,27 @@ class AdvanceRequestAdapter extends TypeAdapter<AdvanceRequest> {
       ..writeByte(7)
       ..write(obj.reviewedBy)
       ..writeByte(8)
-      ..write(obj.rejectionReason);
+      ..write(obj.rejectionReason)
+      ..writeByte(9)
+      ..write(obj.eligibleAmount)
+      ..writeByte(10)
+      ..write(obj.requestDate?.toIso8601String());
   }
 }
 
 void registerAdvanceRequestAdapter() {
   if (!Hive.isAdapterRegistered(11)) {
     Hive.registerAdapter(AdvanceRequestAdapter());
+  }
+}
+
+RequestStatus _mapStatus(String value) {
+  switch (value.toLowerCase()) {
+    case 'approved':
+      return RequestStatus.approved;
+    case 'rejected':
+      return RequestStatus.rejected;
+    default:
+      return RequestStatus.pending;
   }
 }

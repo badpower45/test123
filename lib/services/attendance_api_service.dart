@@ -1,78 +1,89 @@
 import 'dart:convert';
+
 import 'package:http/http.dart' as http;
+
+import '../constants/api_endpoints.dart';
 import '../models/attendance_report.dart';
-import '../config/app_config.dart';
 
 class AttendanceApiService {
-  static const String _baseUrl = AppConfig.apiBaseUrl;
+  AttendanceApiService._();
 
-  static Future<Map<String, dynamic>> checkIn(String employeeId) async {
-    final url = Uri.parse('$_baseUrl/api/shifts/check-in');
-    
+  static const Map<String, String> _jsonHeaders = {
+    'Content-Type': 'application/json',
+  };
+
+  static Future<Map<String, dynamic>> checkIn({
+    required String employeeId,
+    required double latitude,
+    required double longitude,
+  }) async {
     final response = await http.post(
-      url,
-      headers: {'Content-Type': 'application/json'},
+      Uri.parse(CHECK_IN_ENDPOINT),
+      headers: _jsonHeaders,
       body: jsonEncode({
         'employee_id': employeeId,
-        'timestamp': DateTime.now().toIso8601String(),
+        'latitude': latitude,
+        'longitude': longitude,
       }),
     );
 
-    if (response.statusCode == 200 || response.statusCode == 201) {
-      return jsonDecode(response.body) as Map<String, dynamic>;
-    } else {
-      throw Exception('فشل تسجيل الحضور: ${response.body}');
+    final body = _decodeBody(response.body);
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return body;
     }
+    throw Exception(body['error'] ?? 'تعذر تسجيل الحضور (${response.statusCode})');
   }
 
-  static Future<Map<String, dynamic>> checkOut(String employeeId, String shiftId) async {
-    final url = Uri.parse('$_baseUrl/api/shifts/check-out');
-    
-    final response = await http.put(
-      url,
-      headers: {'Content-Type': 'application/json'},
+  static Future<Map<String, dynamic>> checkOut({
+    required String employeeId,
+    required double latitude,
+    required double longitude,
+  }) async {
+    final response = await http.post(
+      Uri.parse(CHECK_OUT_ENDPOINT),
+      headers: _jsonHeaders,
       body: jsonEncode({
         'employee_id': employeeId,
-        'shift_id': shiftId,
-        'timestamp': DateTime.now().toIso8601String(),
+        'latitude': latitude,
+        'longitude': longitude,
       }),
     );
 
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body) as Map<String, dynamic>;
-    } else {
-      throw Exception('فشل تسجيل الانصراف: ${response.body}');
+    final body = _decodeBody(response.body);
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return body;
     }
+    throw Exception(body['error'] ?? 'تعذر تسجيل الانصراف (${response.statusCode})');
   }
 
-  static Future<AttendanceReport> getReport({
+  static Future<AttendanceReport> fetchAttendanceReport({
     required String employeeId,
-    required String period,
+    required DateTime startDate,
+    required DateTime endDate,
   }) async {
-    final url = Uri.parse('$_baseUrl/api/me/report?employee_id=$employeeId&period=$period');
-    
-    final response = await http.get(url);
+    final uri = Uri.parse('$ATTENDANCE_REPORT_ENDPOINT/$employeeId').replace(
+      queryParameters: {
+        'start_date': _formatDate(startDate),
+        'end_date': _formatDate(endDate),
+      },
+    );
 
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
-      return AttendanceReport.fromJson(data);
-    } else {
-      throw Exception('فشل تحميل التقرير');
+    final response = await http.get(uri);
+    final body = _decodeBody(response.body);
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return AttendanceReport.fromJson(body);
     }
+
+    throw Exception(body['error'] ?? 'تعذر تحميل تقرير الحضور (${response.statusCode})');
   }
 
-  static Future<List<Map<String, dynamic>>> getRecentShifts({
-    required String employeeId,
-    int limit = 10,
-  }) async {
-    final url = Uri.parse('$_baseUrl/api/shifts/recent?employee_id=$employeeId&limit=$limit');
-    
-    final response = await http.get(url);
-
-    if (response.statusCode == 200) {
-      return List<Map<String, dynamic>>.from(jsonDecode(response.body) as List);
-    } else {
-      throw Exception('فشل تحميل الورديات الأخيرة');
+  static Map<String, dynamic> _decodeBody(String rawBody) {
+    if (rawBody.isEmpty) {
+      return <String, dynamic>{};
     }
+    return jsonDecode(rawBody) as Map<String, dynamic>;
   }
+
+  static String _formatDate(DateTime value) => value.toIso8601String().split('T').first;
 }

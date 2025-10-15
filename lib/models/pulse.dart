@@ -9,6 +9,7 @@ class Pulse extends HiveObject {
     required this.longitude,
     required this.timestamp,
     required this.isFake,
+    this.wifiBssid,
   });
 
   final String employeeId;
@@ -16,21 +17,35 @@ class Pulse extends HiveObject {
   final double longitude;
   final DateTime timestamp;
   final bool isFake;
+  final String? wifiBssid;
 
   Map<String, dynamic> toJson() => {
-        'employeeId': employeeId,
+        'employee_id': employeeId,
         'latitude': latitude,
         'longitude': longitude,
+        'wifi_bssid': wifiBssid,
         'timestamp': timestamp.toIso8601String(),
-        'isFake': isFake,
-      };
+        'is_fake': isFake,
+      }..removeWhere((key, value) => value == null);
+
+  Map<String, dynamic> toApiPayload() => {
+        'employee_id': employeeId,
+        'latitude': latitude,
+        'longitude': longitude,
+        'wifi_bssid': wifiBssid,
+        'timestamp': timestamp.toIso8601String(),
+        'is_fake': isFake,
+      }..removeWhere((key, value) => value == null);
 
   static Pulse fromJson(Map<String, dynamic> json) => Pulse(
-        employeeId: json['employeeId'] as String,
+        employeeId: (json['employee_id'] ?? json['employeeId']) as String,
         latitude: (json['latitude'] as num).toDouble(),
         longitude: (json['longitude'] as num).toDouble(),
-        timestamp: DateTime.parse(json['timestamp'] as String),
-        isFake: json['isFake'] as bool,
+        timestamp: DateTime.parse(
+          (json['timestamp'] ?? json['createdAt']) as String,
+        ),
+        isFake: (json['is_fake'] ?? json['isFake'] ?? false) as bool,
+        wifiBssid: (json['wifi_bssid'] ?? json['wifiBssid']) as String?,
       );
 }
 
@@ -49,14 +64,15 @@ class PulseAdapter extends TypeAdapter<Pulse> {
       latitude: fields[1] as double,
       longitude: fields[2] as double,
       timestamp: DateTime.parse(fields[3] as String),
-      isFake: fields[4] as bool,
+      isFake: fields[4] as bool? ?? false,
+      wifiBssid: fields[5] as String?,
     );
   }
 
   @override
   void write(BinaryWriter writer, Pulse obj) {
     writer
-      ..writeByte(5)
+      ..writeByte(6)
       ..writeByte(0)
       ..write(obj.employeeId)
       ..writeByte(1)
@@ -66,7 +82,9 @@ class PulseAdapter extends TypeAdapter<Pulse> {
       ..writeByte(3)
       ..write(obj.timestamp.toIso8601String())
       ..writeByte(4)
-      ..write(obj.isFake);
+      ..write(obj.isFake)
+      ..writeByte(5)
+      ..write(obj.wifiBssid);
   }
 }
 

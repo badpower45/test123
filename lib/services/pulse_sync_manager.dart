@@ -1,12 +1,9 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:hive/hive.dart';
-import 'package:http/http.dart' as http;
 
 import '../models/pulse.dart';
-import '../constants/api_endpoints.dart';
 import 'pulse_backend_client.dart';
 
 class PulseSyncManager {
@@ -65,12 +62,6 @@ class PulseSyncManager {
       final success = await PulseBackendClient.sendBulk(pulses);
       if (success) {
         await box.clear();
-        unawaited(_mirrorToBackup(
-          uri: Uri.parse(ApiEndpoints.backupOfflineSync),
-          payload: jsonEncode({
-            'pulses': pulses.map((pulse) => pulse.toJson()).toList(),
-          }),
-        ));
       }
     } catch (_) {
       // Leave items in the box to retry on the next connectivity update.
@@ -85,17 +76,5 @@ class PulseSyncManager {
     final box = await Hive.openBox<Pulse>(offlinePulsesBox);
     await box.clear();
     await box.close();
-  }
-}
-
-Future<void> _mirrorToBackup({required Uri uri, required String payload}) async {
-  try {
-    await http.post(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: payload,
-    );
-  } catch (_) {
-    // Ignore backup errors.
   }
 }

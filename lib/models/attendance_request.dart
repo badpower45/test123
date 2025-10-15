@@ -8,12 +8,18 @@ enum RequestStatus {
   rejected,
 }
 
+enum AttendanceRequestType {
+  checkIn,
+  checkOut,
+}
+
 class AttendanceRequest extends HiveObject {
   AttendanceRequest({
     required this.id,
     required this.employeeId,
-    required this.forgottenTime,
+    required this.requestedTime,
     required this.reason,
+    this.requestType = AttendanceRequestType.checkIn,
     this.status = RequestStatus.pending,
     DateTime? createdAt,
     DateTime? reviewedAt,
@@ -24,8 +30,9 @@ class AttendanceRequest extends HiveObject {
 
   String id;
   String employeeId;
-  DateTime forgottenTime;
+  DateTime requestedTime;
   String reason;
+  AttendanceRequestType requestType;
   RequestStatus status;
   DateTime createdAt;
   DateTime? reviewedAt;
@@ -35,6 +42,23 @@ class AttendanceRequest extends HiveObject {
   bool get isPending => status == RequestStatus.pending;
   bool get isApproved => status == RequestStatus.approved;
   bool get isRejected => status == RequestStatus.rejected;
+
+  factory AttendanceRequest.fromJson(Map<String, dynamic> json) {
+    return AttendanceRequest(
+      id: (json['id'] ?? '') as String,
+      employeeId: (json['employeeId'] ?? json['employee_id'] ?? '') as String,
+      requestedTime: DateTime.parse((json['requestedTime'] ?? json['requested_time']) as String),
+      reason: (json['reason'] ?? '') as String,
+      requestType: _mapRequestType(json['requestType'] ?? json['request_type']),
+      status: _mapStatus(json['status'] as String? ?? ''),
+      createdAt: DateTime.parse((json['createdAt'] ?? json['created_at']) as String),
+      reviewedAt: (json['reviewedAt'] ?? json['reviewed_at']) != null
+          ? DateTime.parse((json['reviewedAt'] ?? json['reviewed_at']) as String)
+          : null,
+      reviewedBy: (json['reviewedBy'] ?? json['reviewed_by']) as String?,
+      rejectionReason: (json['reviewNotes'] ?? json['rejection_reason']) as String?,
+    );
+  }
 }
 
 class AttendanceRequestAdapter extends TypeAdapter<AttendanceRequest> {
@@ -51,8 +75,11 @@ class AttendanceRequestAdapter extends TypeAdapter<AttendanceRequest> {
     return AttendanceRequest(
       id: fields[0] as String,
       employeeId: fields[1] as String,
-      forgottenTime: DateTime.parse(fields[2] as String),
+      requestedTime: DateTime.parse(fields[2] as String),
       reason: fields[3] as String,
+      requestType: fields.containsKey(9)
+          ? AttendanceRequestType.values[fields[9] as int? ?? 0]
+          : AttendanceRequestType.checkIn,
       status: RequestStatus.values[fields[4] as int? ?? 0],
       createdAt: DateTime.tryParse(fields[5] as String? ?? '') ?? DateTime.now(),
       reviewedAt: fields[6] != null ? DateTime.parse(fields[6] as String) : null,
@@ -64,13 +91,13 @@ class AttendanceRequestAdapter extends TypeAdapter<AttendanceRequest> {
   @override
   void write(BinaryWriter writer, AttendanceRequest obj) {
     writer
-      ..writeByte(9)
+      ..writeByte(10)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
       ..write(obj.employeeId)
       ..writeByte(2)
-      ..write(obj.forgottenTime.toIso8601String())
+      ..write(obj.requestedTime.toIso8601String())
       ..writeByte(3)
       ..write(obj.reason)
       ..writeByte(4)
@@ -82,12 +109,36 @@ class AttendanceRequestAdapter extends TypeAdapter<AttendanceRequest> {
       ..writeByte(7)
       ..write(obj.reviewedBy)
       ..writeByte(8)
-      ..write(obj.rejectionReason);
+      ..write(obj.rejectionReason)
+      ..writeByte(9)
+      ..write(obj.requestType.index);
   }
 }
 
 void registerAttendanceRequestAdapter() {
   if (!Hive.isAdapterRegistered(12)) {
     Hive.registerAdapter(AttendanceRequestAdapter());
+  }
+}
+
+AttendanceRequestType _mapRequestType(Object? value) {
+  final normalized = (value?.toString() ?? '').toLowerCase();
+  switch (normalized) {
+    case 'check-out':
+    case 'checkout':
+      return AttendanceRequestType.checkOut;
+    default:
+      return AttendanceRequestType.checkIn;
+  }
+}
+
+RequestStatus _mapStatus(String value) {
+  switch (value.toLowerCase()) {
+    case 'approved':
+      return RequestStatus.approved;
+    case 'rejected':
+      return RequestStatus.rejected;
+    default:
+      return RequestStatus.pending;
   }
 }

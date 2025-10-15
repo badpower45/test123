@@ -16,8 +16,6 @@ class RequestsPage extends StatefulWidget {
 class _RequestsPageState extends State<RequestsPage>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  double? _currentEarnings;
-  bool _isLoadingEarnings = false;
 
   @override
   void initState() {
@@ -31,39 +29,45 @@ class _RequestsPageState extends State<RequestsPage>
     super.dispose();
   }
 
-  Future<void> _loadCurrentEarnings() async {
-    if (_currentEarnings != null) return;
-    
-    setState(() => _isLoadingEarnings = true);
-    try {
-      final earnings = await RequestsApiService.getCurrentEarnings(widget.employeeId);
-      setState(() {
-        _currentEarnings = earnings;
-        _isLoadingEarnings = false;
-      });
-    } catch (e) {
-      setState(() => _isLoadingEarnings = false);
-    }
-  }
-
-  void _showLeaveRequestSheet() {
-    showModalBottomSheet(
+  Future<void> _showLeaveRequestSheet() async {
+    final result = await showModalBottomSheet<LeaveRequest>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => _LeaveRequestSheet(employeeId: widget.employeeId),
     );
+
+    if (!mounted || result == null) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('✓ تم إرسال طلب الإجازة بنجاح'),
+        backgroundColor: AppColors.success,
+      ),
+    );
   }
 
-  void _showAdvanceRequestSheet() {
-    _loadCurrentEarnings();
-    showModalBottomSheet(
+  Future<void> _showAdvanceRequestSheet() async {
+    final result = await showModalBottomSheet<AdvanceRequest>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => _AdvanceRequestSheet(
         employeeId: widget.employeeId,
-        currentEarnings: _currentEarnings,
+        currentEarnings: null,
+      ),
+    );
+
+    if (!mounted || result == null) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('✓ تم إرسال طلب السلفة بنجاح'),
+        backgroundColor: AppColors.success,
       ),
     );
   }
@@ -354,8 +358,10 @@ class _LeaveRequestSheet extends StatefulWidget {
 
 class _LeaveRequestSheetState extends State<_LeaveRequestSheet> {
   LeaveType _selectedType = LeaveType.normal;
-  DateTime? _selectedDate;
+  DateTime? _startDate;
+  DateTime? _endDate;
   final _reasonController = TextEditingController();
+  bool _isSubmitting = false;
 
   @override
   void dispose() {
@@ -363,12 +369,13 @@ class _LeaveRequestSheetState extends State<_LeaveRequestSheet> {
     super.dispose();
   }
 
-  Future<void> _selectDate() async {
+  Future<void> _selectStartDate() async {
+    final now = DateTime.now();
     final date = await showDatePicker(
       context: context,
-      initialDate: DateTime.now().add(const Duration(days: 2)),
-      firstDate: DateTime.now(),
-      lastDate: DateTime.now().add(const Duration(days: 365)),
+      initialDate: _startDate ?? now.add(const Duration(days: 2)),
+      firstDate: now,
+      lastDate: now.add(const Duration(days: 365)),
       builder: (context, child) {
         return Theme(
           data: Theme.of(context).copyWith(
@@ -380,9 +387,89 @@ class _LeaveRequestSheetState extends State<_LeaveRequestSheet> {
         );
       },
     );
-    
+
     if (date != null) {
-      setState(() => _selectedDate = date);
+      setState(() {
+        _startDate = date;
+        if (_endDate != null && _endDate!.isBefore(date)) {
+          _endDate = date;
+        }
+      });
+    }
+  }
+
+  Future<void> _selectEndDate() async {
+    final baseDate = _startDate ?? DateTime.now();
+    final date = await showDatePicker(
+      context: context,
+      initialDate: _endDate ?? baseDate,
+      firstDate: baseDate,
+      lastDate: baseDate.add(const Duration(days: 365)),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: AppColors.primaryOrange,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (date != null) {
+      setState(() => _endDate = date);
+    }
+  }
+
+  Future<void> _submit() async {
+    if (_startDate == null || _endDate == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('يرجى اختيار تاريخ البداية والنهاية'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
+    final reason = _reasonController.text.trim();
+    if (_selectedType == LeaveType.emergency && reason.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('السبب مطلوب للإجازة الطارئة'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
+    setState(() => _isSubmitting = true);
+
+    try {
+      final request = await RequestsApiService.submitLeaveRequest(
+        employeeId: widget.employeeId,
+        startDate: _startDate!,
+        endDate: _endDate!,
+        reason: reason.isEmpty ? null : reason,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      Navigator.pop(context, request);
+    } catch (error) {
+      setState(() => _isSubmitting = false);
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('تعذر إرسال الطلب: $error'),
+          backgroundColor: AppColors.error,
+        ),
+      );
     }
   }
 
@@ -448,12 +535,12 @@ class _LeaveRequestSheetState extends State<_LeaveRequestSheet> {
             const SizedBox(height: 24),
             
             OutlinedButton.icon(
-              onPressed: _selectDate,
+              onPressed: _isSubmitting ? null : _selectStartDate,
               icon: const Icon(Icons.calendar_today),
               label: Text(
-                _selectedDate != null
-                    ? '${_selectedDate!.day}/${_selectedDate!.month}/${_selectedDate!.year}'
-                    : 'اختر التاريخ',
+                _startDate != null
+                    ? '${_startDate!.day}/${_startDate!.month}/${_startDate!.year}'
+                    : 'تاريخ البداية',
               ),
               style: OutlinedButton.styleFrom(
                 foregroundColor: AppColors.primaryOrange,
@@ -464,41 +551,58 @@ class _LeaveRequestSheetState extends State<_LeaveRequestSheet> {
                 ),
               ),
             ),
-            
-            if (_selectedType == LeaveType.emergency) ...[
-              const SizedBox(height: 16),
-              TextField(
-                controller: _reasonController,
-                decoration: InputDecoration(
-                  labelText: 'السبب (إلزامي للطوارئ)',
-                  hintText: 'اكتب سبب الإجازة الطارئة...',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(
-                      color: AppColors.primaryOrange,
-                      width: 2,
-                    ),
+
+            const SizedBox(height: 16),
+
+            OutlinedButton.icon(
+              onPressed: (_startDate == null || _isSubmitting)
+                  ? null
+                  : _selectEndDate,
+              icon: const Icon(Icons.calendar_month),
+              label: Text(
+                _endDate != null
+                    ? '${_endDate!.day}/${_endDate!.month}/${_endDate!.year}'
+                    : 'تاريخ النهاية',
+              ),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.primaryOrange,
+                side: const BorderSide(color: AppColors.primaryOrange),
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            const SizedBox(height: 16),
+
+            TextField(
+              controller: _reasonController,
+              decoration: InputDecoration(
+                labelText: _selectedType == LeaveType.emergency
+                    ? 'السبب (إلزامي للطوارئ)'
+                    : 'السبب (اختياري)',
+                hintText: 'اكتب سبب طلب الإجازة...',
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(
+                    color: AppColors.primaryOrange,
+                    width: 2,
                   ),
                 ),
-                maxLines: 3,
               ),
-            ],
+              maxLines: 3,
+            ),
             
             const SizedBox(height: 24),
             
             ElevatedButton(
-              onPressed: () {
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('✓ تم إرسال طلب الإجازة بنجاح'),
-                    backgroundColor: AppColors.success,
-                  ),
-                );
-              },
+              onPressed: _isSubmitting ? null : _submit,
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primaryOrange,
                 padding: const EdgeInsets.symmetric(vertical: 16),
@@ -506,10 +610,17 @@ class _LeaveRequestSheetState extends State<_LeaveRequestSheet> {
                   borderRadius: BorderRadius.circular(12),
                 ),
               ),
-              child: const Text(
-                'إرسال الطلب',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-              ),
+              child: _isSubmitting
+                  ? const SizedBox(
+                      height: 24,
+                      width: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text(
+                      'إرسال الطلب',
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                    ),
             ),
           ],
         ),
@@ -587,6 +698,7 @@ class _AdvanceRequestSheet extends StatefulWidget {
 class _AdvanceRequestSheetState extends State<_AdvanceRequestSheet> {
   final _amountController = TextEditingController();
   double _maxAdvance = 0;
+  bool _isSubmitting = false;
 
   @override
   void initState() {
@@ -600,6 +712,56 @@ class _AdvanceRequestSheetState extends State<_AdvanceRequestSheet> {
   void dispose() {
     _amountController.dispose();
     super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final rawAmount = double.tryParse(_amountController.text.replaceAll(',', '.'));
+
+    if (rawAmount == null || rawAmount <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('يرجى إدخال مبلغ صالح'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
+    if (_maxAdvance > 0 && rawAmount > _maxAdvance) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('الحد الأقصى للسلفة هو ${_maxAdvance.toStringAsFixed(0)} جنيه'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
+    setState(() => _isSubmitting = true);
+
+    try {
+      final request = await RequestsApiService.submitAdvanceRequest(
+        employeeId: widget.employeeId,
+        amount: rawAmount,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      Navigator.pop(context, request);
+    } catch (error) {
+      setState(() => _isSubmitting = false);
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('تعذر إرسال طلب السلفة: $error'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    }
   }
 
   @override
@@ -650,7 +812,7 @@ class _AdvanceRequestSheetState extends State<_AdvanceRequestSheet> {
                       Text(
                         widget.currentEarnings != null
                             ? '${widget.currentEarnings!.toStringAsFixed(0)} جنيه'
-                            : 'جاري التحميل...',
+                            : 'لم يتم تحديده',
                         style: const TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.bold,
@@ -709,15 +871,7 @@ class _AdvanceRequestSheetState extends State<_AdvanceRequestSheet> {
             const SizedBox(height: 24),
             
             ElevatedButton(
-              onPressed: () {
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('✓ تم إرسال طلب السلفة بنجاح'),
-                    backgroundColor: AppColors.success,
-                  ),
-                );
-              },
+              onPressed: _isSubmitting ? null : _submit,
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primaryOrange,
                 padding: const EdgeInsets.symmetric(vertical: 16),
@@ -725,10 +879,17 @@ class _AdvanceRequestSheetState extends State<_AdvanceRequestSheet> {
                   borderRadius: BorderRadius.circular(12),
                 ),
               ),
-              child: const Text(
-                'إرسال الطلب',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-              ),
+              child: _isSubmitting
+                  ? const SizedBox(
+                      height: 24,
+                      width: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text(
+                      'إرسال الطلب',
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                    ),
             ),
           ],
         ),

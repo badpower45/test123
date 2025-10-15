@@ -1,11 +1,8 @@
 import 'dart:async';
-import 'dart:convert';
-
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:http/http.dart' as http;
+import 'package:wifi_info_flutter/wifi_info_flutter.dart';
 
-import '../constants/api_endpoints.dart';
 import '../models/pulse.dart';
 import '../services/location_service.dart';
 import 'pulse_backend_client.dart';
@@ -133,6 +130,14 @@ class BackgroundPulseService {
         isInside = true;
       }
 
+      String? wifiBssid;
+      try {
+        final wifiInfo = WifiInfo();
+        wifiBssid = await wifiInfo.getWifiBSSID();
+      } catch (_) {
+        wifiBssid = null;
+      }
+
       final timestamp = DateTime.now().toUtc();
       final isFakePulse = config.enforceLocation ? !isInside : false;
       final pulse = Pulse(
@@ -141,6 +146,7 @@ class BackgroundPulseService {
         longitude: longitude,
         timestamp: timestamp,
         isFake: isFakePulse,
+        wifiBssid: wifiBssid,
       );
 
       _pulseCounter++;
@@ -193,24 +199,4 @@ class BackgroundPulseService {
   }
 }
 
-Future<bool> _sendPulse(Pulse pulse) async {
-  final payload = jsonEncode(pulse.toJson());
-  final sent = await PulseBackendClient.sendPulse(pulse);
-  unawaited(_mirrorToBackup(
-    uri: Uri.parse(ApiEndpoints.backupHeartbeat),
-    payload: payload,
-  ));
-  return sent;
-}
-
-Future<void> _mirrorToBackup({required Uri uri, required String payload}) async {
-  try {
-    await http.post(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: payload,
-    );
-  } catch (_) {
-    // Backup mirror errors are non-fatal and ignored in production app flow.
-  }
-}
+Future<bool> _sendPulse(Pulse pulse) => PulseBackendClient.sendPulse(pulse);
