@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../theme/app_colors.dart';
 import '../../models/leave_request.dart';
 import '../../models/advance_request.dart';
+import '../../models/break.dart';
 import '../../services/requests_api_service.dart';
 
 class RequestsPage extends StatefulWidget {
@@ -20,7 +21,7 @@ class _RequestsPageState extends State<RequestsPage>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
   }
 
   @override
@@ -50,13 +51,63 @@ class _RequestsPageState extends State<RequestsPage>
   }
 
   Future<void> _showAdvanceRequestSheet() async {
+    final navigator = Navigator.of(context, rootNavigator: true);
+    var loaderVisible = true;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    Map<String, dynamic> earningsData;
+
+    try {
+      earningsData =
+          await RequestsApiService.fetchCurrentEarnings(widget.employeeId);
+    } catch (error) {
+      if (loaderVisible && navigator.canPop()) {
+        navigator.pop();
+        loaderVisible = false;
+      }
+
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('تعذر تحميل بيانات السلفة: $error'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
+    if (loaderVisible && navigator.canPop()) {
+      navigator.pop();
+      loaderVisible = false;
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    final currentEarnings = _parseAmount(
+      earningsData['totalEarnings'] ?? earningsData['total_earnings'],
+    );
+    final maxAdvance = _parseAmount(
+          earningsData['eligibleAdvance'] ?? earningsData['eligible_advance'],
+        ) ??
+        (currentEarnings != null ? currentEarnings * 0.3 : null);
+
     final result = await showModalBottomSheet<AdvanceRequest>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => _AdvanceRequestSheet(
         employeeId: widget.employeeId,
-        currentEarnings: null,
+        currentEarnings: currentEarnings,
+        maxAdvance: maxAdvance,
       ),
     );
 
@@ -70,6 +121,19 @@ class _RequestsPageState extends State<RequestsPage>
         backgroundColor: AppColors.success,
       ),
     );
+  }
+
+  double? _parseAmount(Object? value) {
+    if (value == null) {
+      return null;
+    }
+    if (value is num) {
+      return value.toDouble();
+    }
+    if (value is String) {
+      return double.tryParse(value.replaceAll(',', '.'));
+    }
+    return null;
   }
 
   @override
@@ -137,6 +201,10 @@ class _RequestsPageState extends State<RequestsPage>
                         icon: Icon(Icons.payments),
                         text: 'السلف',
                       ),
+                      Tab(
+                        icon: Icon(Icons.free_breakfast),
+                        text: 'الاستراحات',
+                      ),
                     ],
                   ),
                 ),
@@ -156,6 +224,9 @@ class _RequestsPageState extends State<RequestsPage>
                 _AdvanceRequestsTab(
                   employeeId: widget.employeeId,
                   onNewRequest: _showAdvanceRequestSheet,
+                ),
+                _BreaksTab(
+                  employeeId: widget.employeeId,
                 ),
               ],
             ),
@@ -345,6 +416,606 @@ class _AdvanceRequestsTab extends StatelessWidget {
     );
   }
 }
+
+// Breaks Tab
+class _BreaksTab extends StatefulWidget {
+  final String employeeId;
+
+  const _BreaksTab({required this.employeeId});
+
+  @override
+  State<_BreaksTab> createState() => _BreaksTabState();
+}
+
+class _BreaksTabState extends State<_BreaksTab> {
+  bool _isLoading = true;
+  bool _isRefreshing = false;
+  String? _errorMessage;
+  List<Break> _breaks = <Break>[];
+  String? _actioningBreakId;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBreaks();
+  }
+
+  Future<void> _loadBreaks({bool showLoadingIndicator = true}) async {
+    if (showLoadingIndicator && mounted) {
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+      });
+    }
+
+    try {
+      final breaks =
+          await RequestsApiService.fetchBreaks(employeeId: widget.employeeId);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _breaks = breaks;
+        _errorMessage = null;
+        _isLoading = false;
+        _isRefreshing = false;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _errorMessage = 'تعذر تحميل الاستراحات: $error';
+        _isLoading = false;
+        _isRefreshing = false;
+      });
+    }
+  }
+
+  Future<void> _openBreakRequestSheet() async {
+    final result = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _BreakRequestSheet(
+        employeeId: widget.employeeId,
+      ),
+    );
+
+    if (result == true && mounted) {
+      await _loadBreaks();
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('✓ تم إرسال طلب الاستراحة بنجاح'),
+          backgroundColor: AppColors.success,
+        ),
+      );
+    }
+  }
+
+  Future<void> _handleStartBreak(String breakId) async {
+    setState(() => _actioningBreakId = breakId);
+    try {
+      await RequestsApiService.startBreak(breakId: breakId);
+      await _loadBreaks(showLoadingIndicator: false);
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('تم بدء الاستراحة'),
+          backgroundColor: AppColors.success,
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('تعذر بدء الاستراحة: $error'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _actioningBreakId = null);
+      }
+    }
+  }
+
+  Future<void> _handleEndBreak(String breakId) async {
+    setState(() => _actioningBreakId = breakId);
+    try {
+      await RequestsApiService.endBreak(breakId: breakId);
+      await _loadBreaks(showLoadingIndicator: false);
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('تم إنهاء الاستراحة'),
+          backgroundColor: AppColors.success,
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('تعذر إنهاء الاستراحة: $error'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _actioningBreakId = null);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RefreshIndicator(
+      onRefresh: () {
+        setState(() => _isRefreshing = true);
+        return _loadBreaks(showLoadingIndicator: false);
+      },
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(20),
+        children: [
+          ElevatedButton.icon(
+            onPressed: _openBreakRequestSheet,
+            icon: const Icon(Icons.add),
+            label: const Text('طلب استراحة جديد'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryOrange,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+          const Text(
+            'الاستراحات الحالية والسابقة',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 16),
+          if (_isLoading && !_isRefreshing)
+            const Center(child: CircularProgressIndicator())
+          else if (_errorMessage != null)
+            _BreaksErrorState(
+              message: _errorMessage!,
+              onRetry: _loadBreaks,
+            )
+          else if (_breaks.isEmpty)
+            const _BreaksEmptyState()
+          else
+            ..._breaks.map(_buildBreakCard).toList(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBreakCard(Break breakItem) {
+    final statusLabel = _statusLabel(breakItem.status);
+    final isActioning = _actioningBreakId == breakItem.id;
+    final actionButton = _buildActionButton(breakItem, isActioning);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'مدة الاستراحة: ${breakItem.requestedDurationMinutes} دقيقة',
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              Chip(
+                label: Text(statusLabel),
+                backgroundColor: _statusColor(breakItem.status).withOpacity(0.1),
+                labelStyle: TextStyle(
+                  color: _statusColor(breakItem.status),
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _BreakDetailsRow(
+            label: 'بداية الطلب',
+            value: _formatDateTime(breakItem.createdAt),
+          ),
+          if (breakItem.startTime != null) ...[
+            const SizedBox(height: 8),
+            _BreakDetailsRow(
+              label: 'بدء الاستراحة',
+              value: _formatDateTime(breakItem.startTime!),
+            ),
+          ],
+          if (breakItem.endTime != null) ...[
+            const SizedBox(height: 8),
+            _BreakDetailsRow(
+              label: 'انتهاء الاستراحة',
+              value: _formatDateTime(breakItem.endTime!),
+            ),
+          ],
+          if (actionButton != null) ...[
+            const SizedBox(height: 16),
+            actionButton,
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget? _buildActionButton(Break breakItem, bool isActioning) {
+    if (breakItem.status == BreakStatus.approved) {
+      return ElevatedButton(
+        onPressed: isActioning ? null : () => _handleStartBreak(breakItem.id),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.primaryOrange,
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+        child: isActioning
+            ? const SizedBox(
+                height: 20,
+                width: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Text('Start Break'),
+      );
+    }
+
+    if (breakItem.status == BreakStatus.active) {
+      return OutlinedButton(
+        onPressed: isActioning ? null : () => _handleEndBreak(breakItem.id),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: AppColors.primaryOrange,
+          side: const BorderSide(color: AppColors.primaryOrange, width: 2),
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+        child: isActioning
+            ? const SizedBox(
+                height: 20,
+                width: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Text('End Break'),
+      );
+    }
+
+    return null;
+  }
+
+  String _statusLabel(BreakStatus status) {
+    switch (status) {
+      case BreakStatus.approved:
+        return 'موافق عليه';
+      case BreakStatus.rejected:
+        return 'مرفوض';
+      case BreakStatus.active:
+        return 'قيد التنفيذ';
+      case BreakStatus.completed:
+        return 'مكتمل';
+      case BreakStatus.pending:
+        return 'قيد المراجعة';
+    }
+  }
+
+  Color _statusColor(BreakStatus status) {
+    switch (status) {
+      case BreakStatus.approved:
+        return AppColors.success;
+      case BreakStatus.rejected:
+        return AppColors.error;
+      case BreakStatus.active:
+        return AppColors.primaryOrange;
+      case BreakStatus.completed:
+        return Colors.blueGrey;
+      case BreakStatus.pending:
+        return AppColors.textSecondary;
+    }
+  }
+
+  String _formatDateTime(DateTime dateTime) {
+    final local = dateTime.toLocal();
+    final date = '${local.year}-${_twoDigits(local.month)}-${_twoDigits(local.day)}';
+    final time = '${_twoDigits(local.hour)}:${_twoDigits(local.minute)}';
+    return '$date $time';
+  }
+
+  String _twoDigits(int value) => value.toString().padLeft(2, '0');
+}
+
+class _BreaksEmptyState extends StatelessWidget {
+  const _BreaksEmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(40),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: const Column(
+        children: [
+          Icon(
+            Icons.free_breakfast,
+            size: 64,
+            color: AppColors.textTertiary,
+          ),
+          SizedBox(height: 16),
+          Text(
+            'لا توجد استراحات بعد',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textSecondary,
+            ),
+          ),
+          SizedBox(height: 8),
+          Text(
+            'اطلب أول استراحة لك الآن',
+            style: TextStyle(
+              fontSize: 14,
+              color: AppColors.textTertiary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BreaksErrorState extends StatelessWidget {
+  final String message;
+  final Future<void> Function({bool showLoadingIndicator}) onRetry;
+
+  const _BreaksErrorState({
+    required this.message,
+    required this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        children: [
+          const Icon(
+            Icons.error_outline,
+            size: 48,
+            color: AppColors.error,
+          ),
+          const SizedBox(height: 12),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 14,
+              color: AppColors.textSecondary,
+            ),
+          ),
+          const SizedBox(height: 16),
+          ElevatedButton(
+            onPressed: () => onRetry(),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryOrange,
+            ),
+            child: const Text('إعادة المحاولة'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BreakDetailsRow extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const _BreakDetailsRow({
+    required this.label,
+    required this.value,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 14,
+            color: AppColors.textSecondary,
+          ),
+        ),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textPrimary,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _BreakRequestSheet extends StatefulWidget {
+  final String employeeId;
+
+  const _BreakRequestSheet({required this.employeeId});
+
+  @override
+  State<_BreakRequestSheet> createState() => _BreakRequestSheetState();
+}
+
+class _BreakRequestSheetState extends State<_BreakRequestSheet> {
+  final _durationController = TextEditingController();
+  bool _isSubmitting = false;
+
+  @override
+  void dispose() {
+    _durationController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final minutes = int.tryParse(_durationController.text.trim());
+
+    if (minutes == null || minutes <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('يرجى إدخال مدة صالحة بالدقائق'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
+    setState(() => _isSubmitting = true);
+
+    try {
+      await RequestsApiService.submitBreakRequest(
+        employeeId: widget.employeeId,
+        durationMinutes: minutes,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      Navigator.pop(context, true);
+    } catch (error) {
+      setState(() => _isSubmitting = false);
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('تعذر إرسال طلب الاستراحة: $error'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.only(
+        left: 24,
+        right: 24,
+        top: 24,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+      ),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'طلب استراحة جديد',
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.bold,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 24),
+          TextField(
+            controller: _durationController,
+            keyboardType: TextInputType.number,
+            decoration: InputDecoration(
+              labelText: 'مدة الاستراحة (بالدقائق)',
+              hintText: 'مثال: 15',
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(
+                  color: AppColors.primaryOrange,
+                  width: 2,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+          ElevatedButton(
+            onPressed: _isSubmitting ? null : _submit,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryOrange,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            child: _isSubmitting
+                ? const SizedBox(
+                    height: 24,
+                    width: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text(
+                    'إرسال الطلب',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 
 // Leave Request Sheet
 class _LeaveRequestSheet extends StatefulWidget {
@@ -685,10 +1356,12 @@ class _LeaveRequestSheetState extends State<_LeaveRequestSheet> {
 class _AdvanceRequestSheet extends StatefulWidget {
   final String employeeId;
   final double? currentEarnings;
+  final double? maxAdvance;
 
   const _AdvanceRequestSheet({
     required this.employeeId,
     this.currentEarnings,
+    this.maxAdvance,
   });
 
   @override
@@ -697,15 +1370,14 @@ class _AdvanceRequestSheet extends StatefulWidget {
 
 class _AdvanceRequestSheetState extends State<_AdvanceRequestSheet> {
   final _amountController = TextEditingController();
-  double _maxAdvance = 0;
+  late double _maxAdvance;
   bool _isSubmitting = false;
 
   @override
   void initState() {
     super.initState();
-    if (widget.currentEarnings != null) {
-      _maxAdvance = widget.currentEarnings! * 0.3;
-    }
+    _maxAdvance = widget.maxAdvance ??
+        (widget.currentEarnings != null ? widget.currentEarnings! * 0.3 : 0);
   }
 
   @override
@@ -833,7 +1505,9 @@ class _AdvanceRequestSheetState extends State<_AdvanceRequestSheet> {
                         ),
                       ),
                       Text(
-                        '${_maxAdvance.toStringAsFixed(0)} جنيه',
+                        _maxAdvance > 0
+                            ? '${_maxAdvance.toStringAsFixed(0)} جنيه'
+                            : 'لم يتم تحديده',
                         style: const TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.bold,
