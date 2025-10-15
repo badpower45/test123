@@ -1,0 +1,85 @@
+Project Objective:
+Analyze the existing project files to understand the Flutter frontend's needs. Then, build the Python backend for the "Oldies" employee management system. The backend will be the single source of truth and handle all business logic for attendance, payroll, and leave requests. Remove any unnecessary template files and create a clean Python project structure using FastAPI.
+
+Core Technology Stack:
+
+Backend: Python with FastAPI.
+
+Database: Use a PostgreSQL-compatible setup (like Supabase).
+
+Part 1: The Smart Pulse & Payroll System
+This is the core of the system. Create an API endpoint POST /v1/pulses that receives data from the Flutter app and processes it.
+
+1. Input Data from Flutter App:
+The API endpoint should expect a JSON payload from the Flutter app containing:
+
+user_id: The ID of the employee.
+
+shift_id: The ID of the current active shift.
+
+wifi_bssid: The MAC Address of the Wi-Fi network the phone is connected to.
+
+latitude: The employee's current latitude.
+
+longitude: The employee's current longitude.
+
+2. Backend Validation Logic (The "Smart Pulse"):
+When the backend receives a pulse, it must perform the following checks sequentially:
+
+Define Constants: Inside the code, define the restaurant's official data:
+
+RESTAURANT_WIFI_BSSID = "XX:XX:XX:XX:XX:XX" (Use a placeholder MAC address).
+
+RESTAURANT_LATITUDE = 31.2652
+
+RESTAURANT_LONGITUDE = 29.9863
+
+GEOFENCE_RADIUS_METERS = 100
+
+Wi-Fi Check: Compare the incoming wifi_bssid with RESTAURANT_WIFI_BSSID.
+
+Geofence Check: Calculate the distance between the employee's coordinates and the restaurant's coordinates. Verify if the distance is within the GEOFENCE_RADIUS_METERS.
+
+Pulse Status: If both the Wi-Fi check and the Geofence check are successful, the pulse is considered true. Otherwise, it's false.
+
+3. Real-time Earning Calculation:
+
+Set Hourly Rate: Define the hourly rate: HOURLY_RATE = 40.0 EGP.
+
+Calculate Pulse Value: Since a pulse is sent every 30 seconds, calculate the value of a single true pulse.
+
+Calculation: (40 EGP / 3600 seconds) * 30 seconds = 0.333 EGP per pulse.
+
+Database Action:
+
+Store every incoming pulse in a pulses table with its status (true/false).
+
+If the pulse is true, immediately add its value (0.333) to a current_earnings column in the employee's shifts table. This ensures the salary is calculated and accumulated in real-time.
+
+Part 2: The Leave Request System
+Create API endpoints to manage the entire leave request lifecycle.
+
+1. Create API Endpoint: POST /v1/leave-requests
+
+Input: user_id, leave_date, is_emergency (boolean), reason (text, optional).
+
+Business Logic:
+
+The backend must first calculate the number of days between the current date and the requested leave_date.
+
+Standard Request Rule: If the difference is less than 2 days (48 hours) and is_emergency is false, return an error: "Leave must be requested at least 48 hours in advance."
+
+Emergency Request Rule: If the difference is less than 2 days but is_emergency is true, the backend must check if a reason was provided. If not, return an error: "An emergency reason is required."
+
+Success: If the rules are met, create a new record in the leave_requests table with a status of PENDING.
+
+2. Backend Logic for Leave Bonus (To be used in the final payroll calculation):
+
+Rule: The system should have logic to calculate the leave bonus. When calculating the final monthly salary, it should count the number of approved leave days for that employee.
+
+If the count is 0, 1, or 2, a fixed bonus amount (e.g., 100 EGP) is added to the final salary.
+
+If the count is more than 2, the bonus is not added.
+
+Action Request:
+Start by setting up a new Python project with FastAPI. Analyze the provided Flutter project files to understand the required data models. Then, implement the database schema and the API endpoints with the business logic described above for the Pulse System and the Leave System. Ensure all configurations like MAC address and pay rates are stored as easily modifiable constants.
