@@ -47,7 +47,7 @@ dependencies:
   supabase_flutter: ^2.5.4
   google_fonts: ^6.2.1
   universal_io: ^2.2.2
-  wifi_info_flutter: 2.0.2
+  network_info_plus: ^5.0.0
 
 dev_dependencies:
   flutter_test:

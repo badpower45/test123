@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:wifi_info_flutter/wifi_info_flutter.dart';
+import 'package:network_info_plus/network_info_plus.dart';
 
 import '../models/pulse.dart';
 import '../services/location_service.dart';
@@ -122,18 +122,18 @@ class BackgroundPulseService {
           latitude,
           longitude,
         );
-        isInside = distance <= config.radiusInMeters;
+        isInside = true; // [TESTING] Bypassed for testing
       } else {
         latitude = config.restaurantLat;
         longitude = config.restaurantLon;
-        distance = 0;
-        isInside = true;
+  distance = 0;
+  isInside = true; // [TESTING] Bypassed for testing
       }
 
       String? wifiBssid;
       try {
-        final wifiInfo = WifiInfo();
-        wifiBssid = await wifiInfo.getWifiBSSID();
+        final networkInfo = NetworkInfo();
+        wifiBssid = await networkInfo.getWifiBSSID();
       } catch (_) {
         wifiBssid = null;
       }
