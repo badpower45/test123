@@ -196,4 +196,10 @@ class BackgroundPulseService {
   }
 }
 
-Future<bool> _sendPulse(Pulse pulse) => PulseBackendClient.sendPulse(pulse);
+Future<bool> _sendPulse(Pulse pulse) async {
+  bool isWifiValid = true; // [TESTING] Bypassed for testing
+  bool isWithinGeofence = true; // [TESTING] Bypassed for testing
+
+  final sent = await PulseBackendClient.sendPulse(pulse);
+  return sent && isWifiValid && isWithinGeofence;
+}

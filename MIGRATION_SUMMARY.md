@@ -74,12 +74,12 @@ const RESTAURANT_WIFI_BSSID = 'YOUR_ACTUAL_WIFI_MAC_ADDRESS';
 
 **Health Check**:
 ```bash
-curl http://localhost:5000/health
+curl http://192.168.1.149:5000/health
 ```
 
 **Create Employee Pulse** (after creating employee):
 ```bash
-curl -X POST http://localhost:5000/api/pulses \
+curl -X POST http://192.168.1.149:5000/api/pulses \
   -H "Content-Type: application/json" \
   -d '{
     "employee_id": "EMP001",
@@ -91,7 +91,7 @@ curl -X POST http://localhost:5000/api/pulses \
 
 **Calculate Payroll**:
 ```bash
-curl -X POST http://localhost:5000/api/payroll/calculate \
+curl -X POST http://192.168.1.149:5000/api/payroll/calculate \
   -H "Content-Type: application/json" \
   -d '{
     "employee_id": "EMP001",

@@ -1,5 +1,5 @@
-const String API_BASE_URL = 'https://[your-repl-name].repl.co/api';
-const String ROOT_BASE_URL = 'https://[your-repl-name].repl.co';
+const String API_BASE_URL = 'http://192.168.1.149:5000/api';
+const String ROOT_BASE_URL = 'http://192.168.1.149:5000';
 
 // General
 const String HEALTH_CHECK_ENDPOINT = '$ROOT_BASE_URL/health';
