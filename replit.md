@@ -166,18 +166,41 @@ The server seeds demo employees automatically:
 - `GET /api/advances` - Get advance requests
 - `POST /api/advances/:id/review` - Approve/reject advance
 
-### Absence & Deductions
+### Absence & Deductions (ENHANCED)
 - `POST /api/absence/notify` - Notify about absence
 - `GET /api/absence/notifications` - Get absence notifications
-- `POST /api/absence/:id/apply-deduction` - Apply deduction for absence
+- `POST /api/absence/:notificationId/review` - **NEW**: Smart approve/reject (auto deduction on reject)
+- `POST /api/absence/:id/apply-deduction` - Legacy: Apply deduction for absence
+  - **Smart Deduction Logic**: Reject = 2 days deduction (400 EGP), Approve = no deduction
 
 ### Payroll & Pulses (NEW)
 - `POST /api/payroll/calculate` - Calculate employee payroll for a period
 - `POST /api/pulses` - Submit location pulse with geofencing validation
 
-### Reports & Dashboard
-- `GET /api/reports/attendance/:employeeId` - Get attendance report
-- `GET /api/manager/dashboard` - Get manager dashboard data
+### Reports & Dashboard (ENHANCED)
+- `GET /api/reports/comprehensive/:employeeId` - **NEW**: Complete salary report with pulse calculation
+  - Calculates gross salary from valid pulses (40 EGP/hour)
+  - Includes advances, deductions, leave allowances
+  - Returns net salary = (gross - advances - deductions + leave allowance)
+  - Optional skip_date_check parameter for managers/admins
+- `GET /api/reports/attendance/:employeeId` - Legacy: Basic attendance report
+- `GET /api/manager/dashboard` - Get manager dashboard data with all pending requests
+
+### Hierarchical Approvals (NEW)
+- `GET /api/approvals/pending/:reviewerId` - Smart approval dashboard
+  - **Manager**: Views requests from staff and monitors only
+  - **Owner/Admin**: Views requests from managers, HR, monitors, and staff
+  - Automatically filters requests based on reviewer role
+  - Returns attendance, leave, advances, and absence requests
+
+### Shift Management (NEW)
+- `GET /api/shifts/active` - Get currently working employees (optionally by branch)
+- `POST /api/shifts/auto-checkout` - Force auto-checkout for employee
+- `GET /api/shifts/status/:employeeId` - Get employee's current shift status
+- `GET /api/attendance/daily-sheet` - **NEW**: Complete daily attendance sheet for managers
+  - Shows all employees with their status (غائب, موجود حالياً, انصرف)
+  - Includes check-in/check-out times and work hours
+  - Summary stats: total employees, present, absent, currently working, total hours
 
 ## Geofencing & Pulse System
 
@@ -196,10 +219,43 @@ Constants defined in `server/index.ts`:
    - Hourly rate: 40 EGP/hour
    - Pulse frequency: Every 30 seconds
    - Pulse value: (40 ÷ 3600) × 30 = 0.333 EGP per pulse
+   - Gross salary = Valid pulses × pulse value
+   - Net salary = Gross salary - Advances - Deductions + Leave allowances
+
+### Deduction Rules
+- **Absence without permission**: 2 days salary deduction (400 EGP)
+- **Absence with permission**: No deduction
+- **Leave allowance**: 100 EGP per day for up to 2 days only
+
+### Approval Hierarchy
+- **Staff/Monitor** → Requests go to **Manager**
+- **Manager/HR** → Requests go to **Owner/Admin**
+- **Owner/Admin** → Can approve all requests
 
 ## Recent Changes (October 2025)
 
-### Replit Environment Migration (Oct 17, 2025)
+### Backend Enhancements - Phase 2 (Oct 17, 2025 - Evening)
+- **✅ COMPLETE**: Added advanced backend features for manager/owner workflows
+- **Smart Absence Management**: 
+  - New `/api/absence/:notificationId/review` endpoint
+  - Automatic deduction logic: Approve = no deduction, Reject = 2 days (400 EGP)
+  - Distinguishes between "غياب بإذن" and "غياب بدون إذن"
+- **Comprehensive Reports System**:
+  - New `/api/reports/comprehensive/:employeeId` endpoint
+  - Calculates salary based on valid location pulses (40 EGP/hour)
+  - Includes all financial data: advances, deductions, leave allowances
+  - Returns net salary calculation
+- **Hierarchical Approval System**:
+  - New `/api/approvals/pending/:reviewerId` endpoint
+  - Role-based filtering: Manager → Staff, Owner → Everyone
+  - Consolidates all request types in one dashboard
+- **Shift Management Suite**:
+  - `/api/shifts/active` - View currently working employees
+  - `/api/shifts/auto-checkout` - Force checkout with reason
+  - `/api/shifts/status/:employeeId` - Real-time shift status
+  - `/api/attendance/daily-sheet` - Complete attendance sheet with stats
+
+### Replit Environment Migration (Oct 17, 2025 - Morning)
 - **✅ COMPLETE**: Successfully migrated project to Replit environment
 - Fixed npm script execution issues (tsx and drizzle-kit permission errors)
 - Updated all npm scripts to use `node node_modules/...` for direct execution
