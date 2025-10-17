@@ -1510,6 +1510,93 @@ app.get('/api/shifts/status/:employeeId', async (req, res) => {
   }
 });
 
+// Get daily attendance sheet (for managers)
+app.get('/api/attendance/daily-sheet', async (req, res) => {
+  try {
+    const { date, branch_id } = req.query;
+    const targetDate = date ? date as string : new Date().toISOString().split('T')[0];
+
+    // Get all active employees
+    let employeesQuery = db
+      .select()
+      .from(employees)
+      .where(eq(employees.active, true))
+      .$dynamic();
+
+    if (branch_id) {
+      employeesQuery = employeesQuery.where(eq(employees.branchId, branch_id as string));
+    }
+
+    const allEmployees = await employeesQuery;
+
+    // Get attendance records for the date
+    const attendanceRecords = await db
+      .select()
+      .from(attendance)
+      .where(eq(attendance.date, targetDate));
+
+    // Create attendance map
+    const attendanceMap = new Map();
+    attendanceRecords.forEach(record => {
+      attendanceMap.set(record.employeeId, record);
+    });
+
+    // Build daily sheet
+    const dailySheet = allEmployees.map(employee => {
+      const attendanceRecord = attendanceMap.get(employee.id);
+
+      if (!attendanceRecord) {
+        return {
+          employeeId: employee.id,
+          employeeName: employee.fullName,
+          role: employee.role,
+          branch: employee.branch,
+          status: 'غائب',
+          checkInTime: null,
+          checkOutTime: null,
+          workHours: 0,
+          isActive: false,
+        };
+      }
+
+      return {
+        employeeId: employee.id,
+        employeeName: employee.fullName,
+        role: employee.role,
+        branch: employee.branch,
+        status: attendanceRecord.status === 'active' ? 'موجود حالياً' : 'انصرف',
+        checkInTime: attendanceRecord.checkInTime,
+        checkOutTime: attendanceRecord.checkOutTime,
+        workHours: parseFloat(attendanceRecord.workHours || '0'),
+        isActive: attendanceRecord.status === 'active',
+        isAutoCheckout: attendanceRecord.isAutoCheckout || false,
+      };
+    });
+
+    // Calculate summary
+    const present = dailySheet.filter(emp => emp.status !== 'غائب').length;
+    const absent = dailySheet.filter(emp => emp.status === 'غائب').length;
+    const currentlyWorking = dailySheet.filter(emp => emp.isActive).length;
+    const totalWorkHours = dailySheet.reduce((sum, emp) => sum + emp.workHours, 0);
+
+    res.json({
+      success: true,
+      date: targetDate,
+      dailySheet,
+      summary: {
+        totalEmployees: allEmployees.length,
+        present,
+        absent,
+        currentlyWorking,
+        totalWorkHours: parseFloat(totalWorkHours.toFixed(2)),
+      }
+    });
+  } catch (error) {
+    console.error('Get daily attendance sheet error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // =============================================================================
 // MANAGER DASHBOARD - لوحة تحكم المدير
 // =============================================================================
