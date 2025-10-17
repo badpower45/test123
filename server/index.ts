@@ -941,7 +941,72 @@ app.get('/api/absence/notifications', async (req, res) => {
   }
 });
 
-// Apply deduction for absence
+// Review absence notification (approve/reject with smart deduction logic)
+app.post('/api/absence/:notificationId/review', async (req, res) => {
+  try {
+    const { notificationId } = req.params;
+    const { action, reviewer_id, notes } = req.body;
+
+    if (!action || !['approve', 'reject'].includes(action)) {
+      return res.status(400).json({ error: 'Action must be approve or reject' });
+    }
+
+    // Get notification
+    const [notification] = await db
+      .select()
+      .from(absenceNotifications)
+      .where(eq(absenceNotifications.id, notificationId))
+      .limit(1);
+
+    if (!notification) {
+      return res.status(404).json({ error: 'Notification not found' });
+    }
+
+    let deductionAmount = '0';
+
+    // If rejected → apply 2 days deduction (غياب بدون إذن)
+    if (action === 'reject') {
+      deductionAmount = '400'; // 2 days * 200 EGP/day
+
+      // Create deduction record
+      await db.insert(deductions).values({
+        employeeId: notification.employeeId,
+        amount: deductionAmount,
+        reason: notes || 'غياب بدون إذن - رفض المدير',
+        deductionDate: notification.absenceDate,
+        deductionType: 'absence',
+        appliedBy: reviewer_id,
+      });
+    }
+
+    // Update notification
+    const [updated] = await db
+      .update(absenceNotifications)
+      .set({
+        status: action === 'approve' ? 'approved' : 'rejected',
+        deductionApplied: action === 'reject',
+        deductionAmount: action === 'reject' ? deductionAmount : null,
+        reviewedBy: reviewer_id,
+        reviewedAt: new Date(),
+      })
+      .where(eq(absenceNotifications.id, notificationId))
+      .returning();
+
+    res.json({
+      success: true,
+      message: action === 'approve' 
+        ? 'تم الموافقة على الغياب - غياب بإذن' 
+        : 'تم رفض الغياب - تم تطبيق خصم يومين',
+      notification: updated,
+      deductionAmount: action === 'reject' ? deductionAmount : '0',
+    });
+  } catch (error) {
+    console.error('Review absence error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Apply deduction for absence (legacy - kept for backward compatibility)
 app.post('/api/absence/:notificationId/apply-deduction', async (req, res) => {
   try {
     const { notificationId } = req.params;
