@@ -131,6 +131,74 @@ app.get('/api/branch/:branch/attendance-report', async (req, res) => {
   }
 });
 
+// Manager: Create or update attendance for an employee (check-in/check-out)
+app.post('/api/branch/attendance/edit', async (req, res) => {
+  try {
+    const { employee_id, date, check_in_time, check_out_time } = req.body;
+
+    if (!employee_id || !date) {
+      return res.status(400).json({ error: 'employee_id and date are required' });
+    }
+
+    // Check if attendance exists
+    const [existing] = await db
+      .select()
+      .from(attendance)
+      .where(and(eq(attendance.employeeId, employee_id), eq(attendance.date, date)))
+      .limit(1);
+
+    if (existing) {
+      // Update existing attendance
+      const updateData: any = { updatedAt: new Date() };
+      if (check_in_time !== undefined) updateData.checkInTime = check_in_time;
+      if (check_out_time !== undefined) updateData.checkOutTime = check_out_time;
+
+      // Calculate work hours if both times are available
+      if ((check_in_time || existing.checkInTime) && (check_out_time || existing.checkOutTime)) {
+        const inTime = check_in_time || existing.checkInTime;
+        const outTime = check_out_time || existing.checkOutTime;
+        const diffMs = new Date(`1970-01-01T${outTime}`).getTime() - new Date(`1970-01-01T${inTime}`).getTime();
+        const hours = Math.max(0, diffMs / (1000 * 60 * 60));
+        updateData.workHours = hours.toFixed(2);
+      }
+
+      const [updated] = await db
+        .update(attendance)
+        .set(updateData)
+        .where(eq(attendance.id, existing.id))
+        .returning();
+
+      return res.json({ success: true, message: 'تم تحديث الحضور بنجاح', attendance: updated });
+    } else {
+      // Create new attendance
+      const insertData: any = {
+        employeeId: employee_id,
+        date,
+        checkInTime: check_in_time || null,
+        checkOutTime: check_out_time || null,
+        workHours: '0',
+      };
+
+      // Calculate work hours if both times are provided
+      if (check_in_time && check_out_time) {
+        const diffMs = new Date(`1970-01-01T${check_out_time}`).getTime() - new Date(`1970-01-01T${check_in_time}`).getTime();
+        const hours = Math.max(0, diffMs / (1000 * 60 * 60));
+        insertData.workHours = hours.toFixed(2);
+      }
+
+      const [newAttendance] = await db
+        .insert(attendance)
+        .values(insertData)
+        .returning();
+
+      return res.json({ success: true, message: 'تم إنشاء سجل الحضور بنجاح', attendance: newAttendance });
+    }
+  } catch (err) {
+    console.error('Edit attendance error:', err);
+    res.status(500).json({ error: 'Internal server error', message: err?.message });
+  }
+});
+
 // -----------------------------------------------------------------------------
 // Demo data seeding: branches and employees (for local/dev)
 // -----------------------------------------------------------------------------
@@ -178,6 +246,48 @@ const ensureDemoData = async () => {
     }
 
     console.log('[seed] Demo employees ensured:', demoEmployees.map(d => d.id).join(', '));
+    
+    // Add demo earnings for EMP_MAADI (300 EGP yesterday via pulses)
+    // 300 EGP at 40 EGP/hour = 7.5 hours
+    // 7.5 hours * 120 pulses/hour (30 sec interval) = 900 pulses
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    yesterday.setHours(9, 0, 0, 0); // Start at 9 AM yesterday
+    
+    // Check if pulses already exist for EMP_MAADI yesterday
+    const existingPulses = await db
+      .select()
+      .from(pulses)
+      .where(and(
+        eq(pulses.employeeId, 'EMP_MAADI'),
+        gte(pulses.timestamp, yesterday)
+      ))
+      .limit(1);
+    
+    if (existingPulses.length === 0) {
+      console.log('[seed] Adding 900 demo pulses for EMP_MAADI (300 EGP yesterday)...');
+      const demoPulses = [];
+      for (let i = 0; i < 900; i++) {
+        const pulseTime = new Date(yesterday.getTime() + i * 30 * 1000); // Every 30 seconds
+        demoPulses.push({
+          employeeId: 'EMP_MAADI',
+          timestamp: pulseTime,
+          latitude: 29.9602,
+          longitude: 31.2569,
+          isWithinGeofence: true,
+          isWithinWifi: true,
+          isFake: false,
+        });
+      }
+      
+      // Insert in batches to avoid timeout
+      const batchSize = 100;
+      for (let i = 0; i < demoPulses.length; i += batchSize) {
+        const batch = demoPulses.slice(i, i + batchSize);
+        await db.insert(pulses).values(batch);
+      }
+      console.log('[seed] Added 900 pulses for EMP_MAADI successfully!');
+    }
   } catch (error) {
     console.error('[seed] ensureDemoData failed:', error);
   }
@@ -630,6 +740,7 @@ app.post('/api/leave/request', async (req, res) => {
     res.json({
       success: true,
       message: 'تم إرسال طلب الإجازة للمراجعة',
+      request: leaveRequest,
       leaveRequest,
       allowanceAmount,
     });
@@ -801,6 +912,7 @@ app.post('/api/advances/request', async (req, res) => {
       success: true,
       message: 'تم إرسال طلب السلفة للمراجعة',
       advance,
+      request: advance,
     });
   } catch (error) {
     console.error('Advance request error:', error);
@@ -2299,7 +2411,65 @@ app.get('/api/branches/:branchId/employees', async (req, res) => {
 // =============================================================================
 
 // Request a break
+// Get breaks for an employee
+app.get('/api/breaks', async (req, res) => {
+  try {
+    const { employee_id, status } = req.query;
+
+    let query = db.select().from(breaks).$dynamic();
+
+    if (employee_id) {
+      query = query.where(eq(breaks.employeeId, employee_id as string));
+    }
+
+    if (status) {
+      query = query.where(eq(breaks.status, status as any));
+    }
+
+    const results = await query;
+
+    res.json({
+      success: true,
+      breaks: results,
+    });
+  } catch (error) {
+    console.error('Get breaks error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 app.post('/api/breaks/request', async (req, res) => {
+  try {
+    const { employee_id, shift_id, duration_minutes } = req.body;
+
+    if (!employee_id || !duration_minutes) {
+      return res.status(400).json({ error: 'employee_id and duration_minutes are required' });
+    }
+
+    // Create break request
+    const [breakRequest] = await db
+      .insert(breaks)
+      .values({
+        employeeId: employee_id,
+        shiftId: shift_id || null,
+        requestedDurationMinutes: duration_minutes,
+        status: 'PENDING',
+      })
+      .returning();
+
+    res.json({
+      success: true,
+      message: 'تم إرسال طلب الاستراحة للمراجعة',
+      break: breakRequest,
+    });
+  } catch (error) {
+    console.error('Break request error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Alternative endpoint for break request (POST to /api/breaks directly)
+app.post('/api/breaks', async (req, res) => {
   try {
     const { employee_id, shift_id, duration_minutes } = req.body;
 
@@ -2426,30 +2596,6 @@ app.post('/api/breaks/:breakId/end', async (req, res) => {
     });
   } catch (error) {
     console.error('Break end error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// Get breaks for an employee
-app.get('/api/breaks', async (req, res) => {
-  try {
-    const { employee_id, status } = req.query;
-
-    let query = db.select().from(breaks).$dynamic();
-
-    if (employee_id) {
-      query = query.where(eq(breaks.employeeId, employee_id as string));
-    }
-
-    if (status) {
-      query = query.where(eq(breaks.status, status as any));
-    }
-
-    const breaksList = await query.orderBy(desc(breaks.createdAt));
-
-    res.json({ breaks: breaksList });
-  } catch (error) {
-    console.error('Get breaks error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

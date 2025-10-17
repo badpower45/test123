@@ -5,6 +5,7 @@ import '../services/auth_api_service.dart';
 import '../services/employee_repository.dart';
 import '../models/employee.dart';
 import 'employee/employee_main_screen.dart';
+import 'manager/manager_main_screen.dart';
 import 'branch_manager_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -66,7 +67,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
       // Navigate based on role
       if (employee.role == EmployeeRole.admin || employee.role == EmployeeRole.hr) {
-        // Manager/Admin goes to branch manager screen
+        // Admin/HR goes to branch manager dashboard directly
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (_) => BranchManagerScreen(
@@ -75,11 +76,26 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ),
         );
+      } else if (employee.role == EmployeeRole.manager) {
+        // Manager goes to manager main screen (employee screens + dashboard button)
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => ManagerMainScreen(
+              managerId: employee.id,
+              branch: employee.branch,
+              role: employee.role.name,
+            ),
+          ),
+        );
       } else {
         // Regular employee goes to employee main screen
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
-            builder: (_) => EmployeeMainScreen(employeeId: employee.id),
+            builder: (_) => EmployeeMainScreen(
+              employeeId: employee.id,
+              role: employee.role.name,
+              branch: employee.branch,
+            ),
           ),
         );
       }

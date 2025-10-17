@@ -147,7 +147,7 @@ class AuthApiService {
       case 'monitor':
         return EmployeeRole.monitor;
       case 'manager':
-        return EmployeeRole.admin; // Map manager to admin role for now
+        return EmployeeRole.manager;
       case 'staff':
       default:
         return EmployeeRole.staff;

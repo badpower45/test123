@@ -7,10 +7,12 @@ import '../../models/advance_request.dart';
 import '../../models/break.dart';
 import '../../services/requests_api_service.dart';
 
+
 class RequestsPage extends StatefulWidget {
   final String employeeId;
+  final bool hideBreakTab;
 
-  const RequestsPage({super.key, required this.employeeId});
+  const RequestsPage({super.key, required this.employeeId, this.hideBreakTab = false});
 
   @override
   State<RequestsPage> createState() => _RequestsPageState();
@@ -18,12 +20,13 @@ class RequestsPage extends StatefulWidget {
 
 class _RequestsPageState extends State<RequestsPage>
     with SingleTickerProviderStateMixin {
+
   late TabController _tabController;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: widget.hideBreakTab ? 2 : 3, vsync: this);
   }
 
   @override
@@ -197,43 +200,64 @@ class _RequestsPageState extends State<RequestsPage>
                     labelColor: Colors.white,
                     unselectedLabelColor: AppColors.textSecondary,
                     dividerColor: Colors.transparent,
-                    tabs: const [
-                      Tab(
-                        icon: Icon(Icons.beach_access),
-                        text: 'الإجازات',
-                      ),
-                      Tab(
-                        icon: Icon(Icons.payments),
-                        text: 'السلف',
-                      ),
-                      Tab(
-                        icon: Icon(Icons.free_breakfast),
-                        text: 'الاستراحات',
-                      ),
-                    ],
+                    tabs: widget.hideBreakTab
+                        ? const [
+                            Tab(
+                              icon: Icon(Icons.beach_access),
+                              text: 'الإجازات',
+                            ),
+                            Tab(
+                              icon: Icon(Icons.payments),
+                              text: 'السلف',
+                            ),
+                          ]
+                        : const [
+                            Tab(
+                              icon: Icon(Icons.beach_access),
+                              text: 'الإجازات',
+                            ),
+                            Tab(
+                              icon: Icon(Icons.payments),
+                              text: 'السلف',
+                            ),
+                            Tab(
+                              icon: Icon(Icons.free_breakfast),
+                              text: 'الاستراحات',
+                            ),
+                          ],
                   ),
                 ),
               ],
             ),
           ),
-          
           // Tab Content
           Expanded(
             child: TabBarView(
               controller: _tabController,
-              children: [
-                _LeaveRequestsTab(
-                  employeeId: widget.employeeId,
-                  onNewRequest: _showLeaveRequestSheet,
-                ),
-                _AdvanceRequestsTab(
-                  employeeId: widget.employeeId,
-                  onNewRequest: _showAdvanceRequestSheet,
-                ),
-                _BreaksView(
-                  employeeId: widget.employeeId,
-                ),
-              ],
+              children: widget.hideBreakTab
+                  ? [
+                      _LeaveRequestsTab(
+                        employeeId: widget.employeeId,
+                        onNewRequest: _showLeaveRequestSheet,
+                      ),
+                      _AdvanceRequestsTab(
+                        employeeId: widget.employeeId,
+                        onNewRequest: _showAdvanceRequestSheet,
+                      ),
+                    ]
+                  : [
+                      _LeaveRequestsTab(
+                        employeeId: widget.employeeId,
+                        onNewRequest: _showLeaveRequestSheet,
+                      ),
+                      _AdvanceRequestsTab(
+                        employeeId: widget.employeeId,
+                        onNewRequest: _showAdvanceRequestSheet,
+                      ),
+                      _BreaksView(
+                        employeeId: widget.employeeId,
+                      ),
+                    ],
             ),
           ),
         ],

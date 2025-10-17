@@ -3075,6 +3075,8 @@ class _AdjustmentFormResult {
 
 String _roleLabel(EmployeeRole role) {
   switch (role) {
+    case EmployeeRole.manager:
+      return 'مدير فرع';
     case EmployeeRole.staff:
       return 'عضو فريق';
     case EmployeeRole.monitor:

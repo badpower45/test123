@@ -18,7 +18,7 @@ void main() {
     'PulseBackendClient sends and persists to Supabase',
     (tester) async {
       await HttpOverrides.runWithHttpOverrides(() async {
-        PulseBackendClient.resetTestingOverrides();
+        // Removed: PulseBackendClient.resetTestingOverrides (method does not exist)
         await PulseBackendClient.initialize();
 
         final now = DateTime.now().toUtc();

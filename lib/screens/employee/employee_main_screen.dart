@@ -5,13 +5,17 @@ import 'employee_home_page.dart';
 import 'requests_page.dart';
 import 'reports_page.dart';
 import 'profile_page.dart';
+// import '../../models/employee.dart';
+import '../branch_manager_screen.dart';
 
 class EmployeeMainScreen extends StatefulWidget {
-  const EmployeeMainScreen({super.key, required this.employeeId});
+  const EmployeeMainScreen({super.key, required this.employeeId, this.role = 'staff', this.branch = ''});
 
   static const routeName = '/employee';
 
   final String employeeId;
+  final String role;
+  final String branch;
 
   @override
   State<EmployeeMainScreen> createState() => _EmployeeMainScreenState();
@@ -19,8 +23,8 @@ class EmployeeMainScreen extends StatefulWidget {
 
 class _EmployeeMainScreenState extends State<EmployeeMainScreen> {
   int _currentIndex = 0;
-
   late final List<Widget> _pages;
+  bool get isManager => widget.role.toLowerCase() == 'manager';
 
   @override
   void initState() {
@@ -30,6 +34,8 @@ class _EmployeeMainScreenState extends State<EmployeeMainScreen> {
       RequestsPage(employeeId: widget.employeeId),
       ReportsPage(employeeId: widget.employeeId),
       ProfilePage(employeeId: widget.employeeId),
+      if (isManager)
+        BranchManagerScreen(managerId: widget.employeeId, branchName: widget.branch),
     ];
   }
 
@@ -97,6 +103,14 @@ class _EmployeeMainScreenState extends State<EmployeeMainScreen> {
               ),
               label: 'ملفي',
             ),
+            if (isManager)
+              BottomNavigationBarItem(
+                icon: Icon(
+                  _currentIndex == 4 ? Icons.dashboard : Icons.dashboard_outlined,
+                  size: 28,
+                ),
+                label: 'لوحة المدير',
+              ),
           ],
         ),
       ),

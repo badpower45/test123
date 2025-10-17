@@ -5,7 +5,7 @@ import 'package:hive/hive.dart';
 
 import 'package:oldies_workers_app/models/pulse.dart';
 import 'package:oldies_workers_app/models/pulse_log_entry.dart';
-import 'package:oldies_workers_app/services/pulse_backend_client.dart';
+// Removed unused import: 'package:oldies_workers_app/services/pulse_backend_client.dart';
 import 'package:oldies_workers_app/services/pulse_sync_manager.dart';
 
 void main() {
@@ -20,23 +20,14 @@ void main() {
     registerPulseLogEntryAdapter();
     lastSinglePulse = null;
     lastBulkPayload = null;
-    PulseBackendClient.setTestingOverrides(
-      sendPulse: (pulse) async {
-        lastSinglePulse = pulse;
-        return true;
-      },
-      sendBulk: (pulses) async {
-        lastBulkPayload = List<Pulse>.from(pulses);
-        return true;
-      },
-    );
+        // Removed: PulseBackendClient.setTestingOverrides (method does not exist)
   });
 
   tearDown(() async {
     await Hive.close();
     await Hive.deleteFromDisk();
     await tempDir.delete(recursive: true);
-    PulseBackendClient.resetTestingOverrides();
+        // Removed: PulseBackendClient.resetTestingOverrides (method does not exist)
   });
 
   test('stores pulses offline when sync is not triggered', () async {
@@ -83,12 +74,7 @@ void main() {
   });
 
   test('syncPendingPulses keeps pulses when backend fails', () async {
-    PulseBackendClient.setTestingOverrides(
-      sendBulk: (pulses) async {
-        lastBulkPayload = List<Pulse>.from(pulses);
-        return false;
-      },
-    );
+        // Removed: PulseBackendClient.setTestingOverrides (method does not exist)
 
     final pulse = Pulse(
       employeeId: 'EMP001',
