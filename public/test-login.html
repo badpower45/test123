@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>اختبار تسجيل الدخول - Oldies API</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #FF6B35;
+            text-align: center;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 20px;
+            background: #f9f9f9;
+            border-radius: 5px;
+        }
+        button {
+            background: #FF6B35;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+        }
+        button:hover {
+            background: #E55A2B;
+        }
+        .response {
+            margin-top: 15px;
+            padding: 15px;
+            background: #2c3e50;
+            color: #ecf0f1;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .success {
+            background: #27ae60 !important;
+        }
+        .error {
+            background: #c0392b !important;
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            margin: 5px 0;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 اختبار تسجيل الدخول</h1>
+        
+        <div class="test-section">
+            <h3>1️⃣ Seed الداتا بيز</h3>
+            <button onclick="seedDatabase()">تحميل البيانات التجريبية</button>
+            <div id="seed-response" class="response" style="display:none;"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>2️⃣ تسجيل دخول EMP001</h3>
+            <label>معرف الموظف:</label>
+            <input type="text" id="emp-id" value="EMP001">
+            <label>الرقم السري:</label>
+            <input type="password" id="emp-pin" value="1234">
+            <button onclick="testLogin()">تسجيل الدخول</button>
+            <div id="login-response" class="response" style="display:none;"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>3️⃣ تسجيل دخول خاطئ</h3>
+            <button onclick="testWrongPassword()">اختبار باسورد خطأ</button>
+            <div id="wrong-response" class="response" style="display:none;"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:5000';
+
+        async function seedDatabase() {
+            const responseDiv = document.getElementById('seed-response');
+            responseDiv.style.display = 'block';
+            responseDiv.textContent = '⏳ جاري تحميل البيانات...';
+            responseDiv.className = 'response';
+
+            try {
+                const res = await fetch(`${API_BASE}/api/dev/seed`);
+                const data = await res.json();
+                
+                responseDiv.textContent = JSON.stringify(data, null, 2);
+                responseDiv.className = 'response success';
+            } catch (error) {
+                responseDiv.textContent = `❌ خطأ: ${error.message}`;
+                responseDiv.className = 'response error';
+            }
+        }
+
+        async function testLogin() {
+            const employeeId = document.getElementById('emp-id').value;
+            const pin = document.getElementById('emp-pin').value;
+            const responseDiv = document.getElementById('login-response');
+            
+            responseDiv.style.display = 'block';
+            responseDiv.textContent = '⏳ جاري تسجيل الدخول...';
+            responseDiv.className = 'response';
+
+            try {
+                const res = await fetch(`${API_BASE}/api/auth/login`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        employee_id: employeeId,
+                        pin: pin
+                    })
+                });
+
+                const data = await res.json();
+                
+                if (res.ok && data.success) {
+                    responseDiv.textContent = `✅ تم تسجيل الدخول بنجاح!\n\n` + 
+                        `اسم الموظف: ${data.employee.fullName}\n` +
+                        `المعرف: ${data.employee.id}\n` +
+                        `الدور: ${data.employee.role}\n` +
+                        `الفرع: ${data.employee.branch}\n\n` +
+                        `Response:\n${JSON.stringify(data, null, 2)}`;
+                    responseDiv.className = 'response success';
+                } else {
+                    responseDiv.textContent = `❌ فشل تسجيل الدخول:\n${JSON.stringify(data, null, 2)}`;
+                    responseDiv.className = 'response error';
+                }
+            } catch (error) {
+                responseDiv.textContent = `❌ خطأ في الاتصال: ${error.message}`;
+                responseDiv.className = 'response error';
+            }
+        }
+
+        async function testWrongPassword() {
+            const responseDiv = document.getElementById('wrong-response');
+            responseDiv.style.display = 'block';
+            responseDiv.textContent = '⏳ اختبار باسورد خطأ...';
+            responseDiv.className = 'response';
+
+            try {
+                const res = await fetch(`${API_BASE}/api/auth/login`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        employee_id: 'EMP001',
+                        pin: 'WRONG'
+                    })
+                });
+
+                const data = await res.json();
+                
+                responseDiv.textContent = `Status: ${res.status}\n\n${JSON.stringify(data, null, 2)}`;
+                responseDiv.className = res.status === 401 ? 'response success' : 'response error';
+            } catch (error) {
+                responseDiv.textContent = `❌ خطأ: ${error.message}`;
+                responseDiv.className = 'response error';
+            }
+        }
+    </script>
+</body>
+</html>

@@ -45,6 +45,32 @@ final _seedEmployees = [
     branch: 'فرع مدينة نصر',
     salary: 9800.0,
   ),
+  (
+    id: 'EMP004',
+    name: 'مدير المعادي',
+    email: 'maadi.manager@example.com',
+    pin: '9999',
+    role: 'manager',
+    permissions: [
+      'manageEmployees',
+      'monitorAccess',
+      'viewPayroll',
+    ],
+    branch: 'فرع المعادي',
+    salary: 17000.0,
+  ),
+  (
+    id: 'EMP005',
+    name: 'موظف المعادي',
+    email: 'maadi.staff@example.com',
+    pin: '5555',
+    role: 'staff',
+    permissions: [
+      'viewPayroll',
+    ],
+    branch: 'فرع المعادي',
+    salary: 9000.0,
+  ),
 ];
 
 String _hashPin(String pin) => sha256.convert(utf8.encode(pin)).toString();

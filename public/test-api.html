@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>اختبار API الموظفين</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      max-width: 1200px;
+      margin: 20px auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .container {
+      background: white;
+      padding: 30px;
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #F37021;
+      text-align: center;
+    }
+    .section {
+      margin: 30px 0;
+      padding: 20px;
+      background: #f9f9f9;
+      border-radius: 8px;
+      border-right: 4px solid #F37021;
+    }
+    button {
+      background: #F37021;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 16px;
+      margin: 5px;
+    }
+    button:hover {
+      background: #d45f1a;
+    }
+    .result {
+      margin-top: 15px;
+      padding: 15px;
+      background: white;
+      border-radius: 6px;
+      white-space: pre-wrap;
+      font-family: monospace;
+      max-height: 400px;
+      overflow-y: auto;
+      direction: ltr;
+      text-align: left;
+    }
+    input, textarea {
+      width: 100%;
+      padding: 10px;
+      margin: 10px 0;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    label {
+      display: block;
+      margin-top: 10px;
+      font-weight: bold;
+      color: #333;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🧪 اختبار API الموظفين</h1>
+
+    <!-- Employee Status Section -->
+    <div class="section">
+      <h2>📊 حالة الموظف والنبضات</h2>
+      <label>معرف الموظف:</label>
+      <input type="text" id="employeeId" value="EMP001" placeholder="EMP001">
+      <button onclick="getEmployeeStatus()">عرض حالة الموظف</button>
+      <div id="statusResult" class="result"></div>
+    </div>
+
+    <!-- Delete Attendance Section -->
+    <div class="section">
+      <h2>🗑️ حذف تسجيل الحضور</h2>
+      <label>معرف سجل الحضور (ID من الحضور اليومي):</label>
+      <input type="text" id="attendanceId" placeholder="UUID">
+      <button onclick="deleteAttendance()">حذف سجل الحضور</button>
+      <div id="deleteResult" class="result"></div>
+    </div>
+
+    <!-- Leave Request Section -->
+    <div class="section">
+      <h2>🏖️ طلب إجازة</h2>
+      <label>معرف الموظف:</label>
+      <input type="text" id="leaveEmployeeId" value="EMP001">
+      <label>تاريخ البداية:</label>
+      <input type="date" id="leaveStartDate">
+      <label>تاريخ النهاية:</label>
+      <input type="date" id="leaveEndDate">
+      <label>نوع الإجازة:</label>
+      <select id="leaveType" style="width: 100%; padding: 10px;">
+        <option value="regular">عادية</option>
+        <option value="emergency">طارئة</option>
+      </select>
+      <label>السبب:</label>
+      <textarea id="leaveReason" placeholder="اكتب السبب هنا..."></textarea>
+      <button onclick="requestLeave()">إرسال طلب الإجازة</button>
+      <div id="leaveResult" class="result"></div>
+    </div>
+
+    <!-- Advance Request Section -->
+    <div class="section">
+      <h2>💰 طلب سلفة</h2>
+      <label>معرف الموظف:</label>
+      <input type="text" id="advanceEmployeeId" value="EMP001">
+      <label>المبلغ المطلوب (جنيه):</label>
+      <input type="number" id="advanceAmount" value="500">
+      <button onclick="requestAdvance()">إرسال طلب السلفة</button>
+      <div id="advanceResult" class="result"></div>
+    </div>
+
+    <!-- Test Pulse Section -->
+    <div class="section">
+      <h2>📡 إرسال نبضة اختبار</h2>
+      <label>معرف الموظف:</label>
+      <input type="text" id="pulseEmployeeId" value="EMP001">
+      <button onclick="sendTestPulse()">إرسال نبضة</button>
+      <div id="pulseResult" class="result"></div>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = 'http://localhost:5000';
+
+    async function getEmployeeStatus() {
+      const employeeId = document.getElementById('employeeId').value;
+      const resultDiv = document.getElementById('statusResult');
+      resultDiv.textContent = 'جاري التحميل...';
+
+      try {
+        const response = await fetch(`${API_BASE}/api/employees/${employeeId}/status`);
+        const data = await response.json();
+        resultDiv.textContent = JSON.stringify(data, null, 2);
+      } catch (error) {
+        resultDiv.textContent = 'خطأ: ' + error.message;
+      }
+    }
+
+    async function deleteAttendance() {
+      const attendanceId = document.getElementById('attendanceId').value;
+      const resultDiv = document.getElementById('deleteResult');
+      
+      if (!attendanceId) {
+        resultDiv.textContent = 'الرجاء إدخال معرف سجل الحضور';
+        return;
+      }
+
+      resultDiv.textContent = 'جاري الحذف...';
+
+      try {
+        const response = await fetch(`${API_BASE}/api/attendance/${attendanceId}`, {
+          method: 'DELETE'
+        });
+        const data = await response.json();
+        resultDiv.textContent = JSON.stringify(data, null, 2);
+      } catch (error) {
+        resultDiv.textContent = 'خطأ: ' + error.message;
+      }
+    }
+
+    async function requestLeave() {
+      const resultDiv = document.getElementById('leaveResult');
+      resultDiv.textContent = 'جاري الإرسال...';
+
+      const employeeId = document.getElementById('leaveEmployeeId').value;
+      const startDate = document.getElementById('leaveStartDate').value;
+      const endDate = document.getElementById('leaveEndDate').value;
+      const leaveType = document.getElementById('leaveType').value;
+      const reason = document.getElementById('leaveReason').value;
+
+      if (!employeeId || !startDate || !endDate || !reason) {
+        resultDiv.textContent = 'الرجاء ملء جميع الحقول';
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/api/leave/request`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            employee_id: employeeId,
+            start_date: startDate,
+            end_date: endDate,
+            leave_type: leaveType,
+            reason: reason
+          })
+        });
+        const data = await response.json();
+        resultDiv.textContent = JSON.stringify(data, null, 2);
+      } catch (error) {
+        resultDiv.textContent = 'خطأ: ' + error.message;
+      }
+    }
+
+    async function requestAdvance() {
+      const resultDiv = document.getElementById('advanceResult');
+      resultDiv.textContent = 'جاري الإرسال...';
+
+      const employeeId = document.getElementById('advanceEmployeeId').value;
+      const amount = document.getElementById('advanceAmount').value;
+
+      if (!employeeId || !amount) {
+        resultDiv.textContent = 'الرجاء ملء جميع الحقول';
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/api/advances/request`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            employee_id: employeeId,
+            amount: amount
+          })
+        });
+        const data = await response.json();
+        resultDiv.textContent = JSON.stringify(data, null, 2);
+      } catch (error) {
+        resultDiv.textContent = 'خطأ: ' + error.message;
+      }
+    }
+
+    async function sendTestPulse() {
+      const resultDiv = document.getElementById('pulseResult');
+      resultDiv.textContent = 'جاري الإرسال...';
+
+      const employeeId = document.getElementById('pulseEmployeeId').value;
+
+      if (!employeeId) {
+        resultDiv.textContent = 'الرجاء إدخال معرف الموظف';
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/api/pulses`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            employee_id: employeeId,
+            latitude: 31.2652,
+            longitude: 29.9863,
+            wifi_bssid: 'XX:XX:XX:XX:XX:XX'
+          })
+        });
+        const data = await response.json();
+        resultDiv.textContent = JSON.stringify(data, null, 2);
+      } catch (error) {
+        resultDiv.textContent = 'خطأ: ' + error.message;
+      }
+    }
+
+    // Set default dates
+    const today = new Date();
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    
+    document.getElementById('leaveStartDate').valueAsDate = today;
+    document.getElementById('leaveEndDate').valueAsDate = tomorrow;
+  </script>
+</body>
+</html>

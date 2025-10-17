@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>اختبار تسجيل الدخول - AWS EC2</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 500px;
+            width: 100%;
+        }
+        h1 {
+            color: #667eea;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        .server-info {
+            background: #f0f4ff;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            border-left: 4px solid #667eea;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 20px;
+            background: #f9f9f9;
+            border-radius: 10px;
+        }
+        input {
+            width: 100%;
+            padding: 12px;
+            margin: 10px 0;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        button {
+            width: 100%;
+            padding: 14px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 10px;
+            transition: background 0.3s;
+        }
+        button:hover {
+            background: #5568d3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            display: none;
+        }
+        .success {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .error {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .loading {
+            text-align: center;
+            color: #667eea;
+            font-weight: bold;
+        }
+        pre {
+            background: #2d2d2d;
+            color: #f8f8f2;
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+            direction: ltr;
+            text-align: left;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 اختبار API على AWS EC2</h1>
+        
+        <div class="server-info">
+            <strong>🌐 السيرفر:</strong> http://16.171.208.249:5000<br>
+            <strong>📍 المنطقة:</strong> AWS EU-North-1<br>
+            <strong>⚡ الحالة:</strong> <span id="status">جاري الفحص...</span>
+        </div>
+
+        <div class="test-section">
+            <h3>🔐 اختبار تسجيل الدخول</h3>
+            <input type="text" id="employeeId" value="EMP001" placeholder="معرف الموظف">
+            <input type="password" id="pin" value="1234" placeholder="الرقم السري">
+            <button onclick="testLogin()">تسجيل الدخول</button>
+            <div id="loginResult" class="result"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>🌱 إعادة تعبئة قاعدة البيانات</h3>
+            <button onclick="seedDatabase()">تعبئة البيانات التجريبية</button>
+            <div id="seedResult" class="result"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://16.171.208.249:5000/api';
+
+        // فحص حالة السيرفر عند تحميل الصفحة
+        window.onload = async function() {
+            try {
+                const response = await fetch('http://16.171.208.249:5000/health');
+                if (response.ok) {
+                    document.getElementById('status').innerHTML = '<span style="color: green;">✅ شغال</span>';
+                }
+            } catch (error) {
+                document.getElementById('status').innerHTML = '<span style="color: red;">❌ غير متصل</span>';
+            }
+        };
+
+        async function testLogin() {
+            const employeeId = document.getElementById('employeeId').value;
+            const pin = document.getElementById('pin').value;
+            const resultDiv = document.getElementById('loginResult');
+            
+            resultDiv.style.display = 'block';
+            resultDiv.className = 'result loading';
+            resultDiv.innerHTML = '⏳ جاري تسجيل الدخول...';
+
+            try {
+                const response = await fetch(`${API_BASE}/auth/login`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        employee_id: employeeId,
+                        pin: pin
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    resultDiv.className = 'result success';
+                    resultDiv.innerHTML = `
+                        <strong>✅ تم تسجيل الدخول بنجاح!</strong><br><br>
+                        <strong>👤 الاسم:</strong> ${data.employee.fullName}<br>
+                        <strong>🆔 المعرف:</strong> ${data.employee.id}<br>
+                        <strong>👔 الدور:</strong> ${data.employee.role}<br>
+                        <strong>🏢 الفرع:</strong> ${data.employee.branch}<br><br>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    `;
+                } else {
+                    resultDiv.className = 'result error';
+                    resultDiv.innerHTML = `<strong>❌ فشل تسجيل الدخول</strong><br>${data.message || 'خطأ غير معروف'}`;
+                }
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultDiv.innerHTML = `<strong>❌ خطأ في الاتصال</strong><br>${error.message}`;
+            }
+        }
+
+        async function seedDatabase() {
+            const resultDiv = document.getElementById('seedResult');
+            
+            resultDiv.style.display = 'block';
+            resultDiv.className = 'result loading';
+            resultDiv.innerHTML = '⏳ جاري تعبئة قاعدة البيانات...';
+
+            try {
+                const response = await fetch(`${API_BASE}/dev/seed`);
+                const data = await response.json();
+
+                if (data.success) {
+                    resultDiv.className = 'result success';
+                    resultDiv.innerHTML = `
+                        <strong>✅ تم تعبئة البيانات بنجاح!</strong><br><br>
+                        ${data.message}<br><br>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    `;
+                } else {
+                    resultDiv.className = 'result error';
+                    resultDiv.innerHTML = `<strong>❌ فشل التعبئة</strong><br>${data.message || 'خطأ غير معروف'}`;
+                }
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultDiv.innerHTML = `<strong>❌ خطأ في الاتصال</strong><br>${error.message}`;
+            }
+        }
+
+        // السماح بالضغط على Enter للتسجيل
+        document.getElementById('pin').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                testLogin();
+            }
+        });
+    </script>
+</body>
+</html>

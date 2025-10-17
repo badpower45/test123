@@ -31,6 +31,17 @@ class EmployeeRepository {
     await box.put(employee.id, employee);
   }
 
+  /// Alias for upsert - adds or updates employee
+  static Future<void> addEmployee(Employee employee) async {
+    await upsert(employee);
+  }
+
+  /// Clear all locally cached employees (useful to avoid demo data conflicts)
+  static Future<void> clearAll() async {
+    final box = await _box();
+    await box.clear();
+  }
+
   static Future<void> delete(String id) async {
     final box = await _box();
     await box.delete(id);

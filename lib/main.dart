@@ -37,7 +37,10 @@ Future<void> main() async {
   await Hive.openBox<PulseLogEntry>(pulseHistoryBox);
   await Hive.openBox<Employee>(employeesBox);
   await Hive.openBox<EmployeeAdjustment>(employeeAdjustmentsBox);
-  await _seedDemoDataIfNeeded();
+  // Seed demo data only during debug sessions to avoid overriding real server data
+  if (kDebugMode) {
+    await _seedDemoDataIfNeeded();
+  }
   await PulseSyncManager.initializeForMainIsolate();
   await PulseBackendClient.initialize();
   if (!kIsWeb && Platform.isAndroid) {
@@ -152,19 +155,44 @@ Future<void> _seedDemoDataIfNeeded() async {
   final employees = [
     Employee(
       id: 'EMP001',
-      fullName: 'مريم حسن',
+      fullName: 'أحمد علي',
       pin: '1234',
-      role: EmployeeRole.admin,
-      permissions: const [
-        EmployeePermission.manageEmployees,
-        EmployeePermission.monitorAccess,
-        EmployeePermission.viewPayroll,
-      ],
-      branch: 'الفرع الرئيسي - الزمالك',
-      monthlySalary: 18500,
+      role: EmployeeRole.staff,
+      permissions: const [],
+      branch: 'فرع المعادي',
+      monthlySalary: 8500,
     ),
     Employee(
       id: 'EMP002',
+      fullName: 'سارة أحمد',
+      pin: '2222',
+      role: EmployeeRole.staff,
+      permissions: const [],
+      branch: 'فرع المعادي',
+      monthlySalary: 7800,
+    ),
+    Employee(
+      id: 'EMP003',
+      fullName: 'محمد حسن',
+      pin: '3333',
+      role: EmployeeRole.hr,
+      permissions: const [
+        EmployeePermission.monitorAccess,
+      ],
+      branch: 'فرع المعادي',
+      monthlySalary: 9800,
+    ),
+    Employee(
+      id: 'EMP004',
+      fullName: 'فاطمة محمد',
+      pin: '4444',
+      role: EmployeeRole.staff,
+      permissions: const [],
+      branch: 'فرع المعادي',
+      monthlySalary: 7800,
+    ),
+    Employee(
+      id: 'EMP005',
       fullName: 'عمر سعيد',
       pin: '5678',
       role: EmployeeRole.hr,
@@ -174,35 +202,6 @@ Future<void> _seedDemoDataIfNeeded() async {
       ],
       branch: 'فرع المعادي',
       monthlySalary: 13250,
-    ),
-    Employee(
-      id: 'EMP003',
-      fullName: 'نورة عادل',
-      pin: '2468',
-      role: EmployeeRole.monitor,
-      permissions: const [
-        EmployeePermission.monitorAccess,
-      ],
-      branch: 'فرع مدينة نصر',
-      monthlySalary: 9800,
-    ),
-    Employee(
-      id: 'EMP004',
-      fullName: 'أحمد علي',
-      pin: '1111',
-      role: EmployeeRole.staff,
-      permissions: const [],
-      branch: 'الفرع الرئيسي - الزمالك',
-      monthlySalary: 8500,
-    ),
-    Employee(
-      id: 'EMP005',
-      fullName: 'فاطمة محمد',
-      pin: '2222',
-      role: EmployeeRole.staff,
-      permissions: const [],
-      branch: 'فرع المعادي',
-      monthlySalary: 7800,
     ),
   ];
 

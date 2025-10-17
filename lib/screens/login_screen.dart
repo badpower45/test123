@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../theme/app_colors.dart';
-import 'admin_dashboard_page.dart';
+import '../services/auth_api_service.dart';
+import '../services/employee_repository.dart';
+import '../models/employee.dart';
 import 'employee/employee_main_screen.dart';
+import 'branch_manager_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -15,47 +18,84 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   late final TextEditingController _employeeIdController;
-  late final TextEditingController _passwordController;
+  late final TextEditingController _pinController;
+  bool _isLoading = false;
 
   @override
   void initState() {
     super.initState();
     _employeeIdController = TextEditingController();
-    _passwordController = TextEditingController();
+    _pinController = TextEditingController();
   }
 
   @override
   void dispose() {
     _employeeIdController.dispose();
-    _passwordController.dispose();
+    _pinController.dispose();
     super.dispose();
   }
 
-  void _handleLogin(BuildContext context) {
+  Future<void> _handleLogin(BuildContext context) async {
     final employeeId = _employeeIdController.text.trim();
-    final password = _passwordController.text.trim();
+    final pin = _pinController.text.trim();
 
-    if (employeeId.isEmpty || password.isEmpty) {
+    if (employeeId.isEmpty || pin.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('يرجى إدخال معرّف الموظف والرقم السري.')),
+        const SnackBar(content: Text('يرجى إدخال معرف الموظف والرقم السري.')),
       );
       return;
     }
 
+    setState(() => _isLoading = true);
     FocusScope.of(context).unfocus();
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => EmployeeMainScreen(employeeId: employeeId),
-      ),
-    );
-  }
 
-  void _openDashboard(BuildContext context, DashboardMode mode) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => AdminDashboardPage(mode: mode),
-      ),
-    );
+    try {
+      // Call backend API to authenticate employee
+      final employee = await AuthApiService.login(
+        employeeId: employeeId,
+        pin: pin,
+      );
+
+      // Clear any local/demo employees to avoid stale demo data overriding server state
+      await EmployeeRepository.clearAll();
+
+      // Save employee to local cache (server-authoritative)
+      await EmployeeRepository.addEmployee(employee);
+
+      if (!mounted) return;
+
+      // Navigate based on role
+      if (employee.role == EmployeeRole.admin || employee.role == EmployeeRole.hr) {
+        // Manager/Admin goes to branch manager screen
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => BranchManagerScreen(
+              managerId: employee.id,
+              branchName: employee.branch,
+            ),
+          ),
+        );
+      } else {
+        // Regular employee goes to employee main screen
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => EmployeeMainScreen(employeeId: employee.id),
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      
+      setState(() => _isLoading = false);
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    }
   }
 
   InputDecoration _buildInputDecoration(String hint) {
@@ -75,120 +115,80 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  Widget _buildDashboardPreviewButton({
-    required BuildContext context,
-    required DashboardMode mode,
-    required String label,
-    required IconData icon,
-  }) {
-    return OutlinedButton.icon(
-      onPressed: () => _openDashboard(context, mode),
-      style: OutlinedButton.styleFrom(
-        foregroundColor: Colors.white,
-        side: BorderSide(color: Colors.white.withAlpha((0.35 * 255).round())),
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      ),
-      icon: Icon(icon, size: 20),
-      label: Text(label),
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.primaryOrange,
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 48),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Image.asset(
-                'assets/images/app_icon.png',
-                height: 160,
-                fit: BoxFit.contain,
-                errorBuilder: (context, error, stackTrace) {
-                  return Text(
-                    'أولديزز وركرز',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                          color: AppColors.onPrimary,
-                          fontWeight: FontWeight.bold,
-                        ),
-                  );
-                },
-              ),
-              const SizedBox(height: 48),
-              TextField(
-                controller: _employeeIdController,
-                style: const TextStyle(color: Colors.white),
-                decoration: _buildInputDecoration('معرّف الموظف'),
-                textInputAction: TextInputAction.next,
-              ),
-              const SizedBox(height: 20),
-              TextField(
-                controller: _passwordController,
-                style: const TextStyle(color: Colors.white),
-                decoration: _buildInputDecoration('الرقم السري'),
-                obscureText: true,
-                textInputAction: TextInputAction.done,
-                onSubmitted: (_) => _handleLogin(context),
-              ),
-              const SizedBox(height: 32),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () => _handleLogin(context),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.white,
-                    foregroundColor: AppColors.primaryOrange,
-                    padding: const EdgeInsets.symmetric(vertical: 18),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Image.asset(
+                  'assets/images/app_icon.png',
+                  height: 100,
+                  fit: BoxFit.contain,
+                  errorBuilder: (context, error, stackTrace) {
+                    return Text(
+                      'أولديزز وركرز',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                            color: AppColors.onPrimary,
+                            fontWeight: FontWeight.bold,
+                          ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 32),
+                TextField(
+                  controller: _employeeIdController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: _buildInputDecoration('معرف الموظف'),
+                  textInputAction: TextInputAction.next,
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _pinController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: _buildInputDecoration('الرقم السري'),
+                  obscureText: true,
+                  textInputAction: TextInputAction.done,
+                  onSubmitted: (_) => _handleLogin(context),
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: _isLoading ? null : () => _handleLogin(context),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: AppColors.primaryOrange,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
                     ),
-                  ),
-                  child: const Text(
-                    'تسجيل الدخول',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                    child: _isLoading
+                        ? const SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(AppColors.primaryOrange),
+                            ),
+                          )
+                        : const Text(
+                            'تسجيل الدخول',
+                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                          ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 32),
-              Text(
-                'معاينة لوحات التحكم',
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      color: Colors.white.withAlpha((0.75 * 255).round()),
-                      fontWeight: FontWeight.w600,
-                    ),
-              ),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                alignment: WrapAlignment.center,
-                children: [
-                  _buildDashboardPreviewButton(
-                    context: context,
-                    mode: DashboardMode.admin,
-                    label: 'لوحة الإدارة',
-                    icon: Icons.admin_panel_settings_outlined,
-                  ),
-                  _buildDashboardPreviewButton(
-                    context: context,
-                    mode: DashboardMode.hr,
-                    label: 'شؤون الموظفين',
-                    icon: Icons.badge_outlined,
-                  ),
-                  _buildDashboardPreviewButton(
-                    context: context,
-                    mode: DashboardMode.monitor,
-                    label: 'المراقبة',
-                    icon: Icons.monitor_heart_outlined,
-                  ),
-                ],
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

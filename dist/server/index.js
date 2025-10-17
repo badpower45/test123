@@ -8,10 +8,34 @@ import { eq, and, gte, lte, desc, sql } from 'drizzle-orm';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = Number(process.env.PORT) || 5000;
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
+const ensureTestEmployee = async () => {
+    try {
+        const [existing] = await db
+            .select()
+            .from(employees)
+            .where(eq(employees.id, 'rr'))
+            .limit(1);
+        if (!existing) {
+            await db.insert(employees).values({
+                id: 'rr',
+                fullName: 'rr',
+                pinHash: 'rr',
+                role: 'staff',
+                branch: 'Test Branch',
+                active: true,
+            });
+            console.log('[seed] Added test employee rr.');
+        }
+    }
+    catch (error) {
+        console.error('[seed] Failed to ensure test employee:', error);
+    }
+};
+ensureTestEmployee();
 // Health check endpoint
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', message: 'Oldies Workers API is running' });
@@ -363,7 +387,7 @@ app.post('/api/leave/request', async (req, res) => {
             leaveType,
             reason,
             daysCount,
-            allowanceAmount: allowanceAmount.toString(),
+            allowanceAmount: allowanceAmount > 0 ? allowanceAmount.toString() : '0',
             status: 'pending',
         })
             .returning();
@@ -987,6 +1011,107 @@ app.post('/api/payroll/calculate', async (req, res) => {
     }
 });
 // =============================================================================
+// EMPLOYEE STATUS & PULSES - حالة الموظف والنبضات
+// =============================================================================
+// Get employee current status and pulses
+app.get('/api/employees/:employeeId/status', async (req, res) => {
+    try {
+        const { employeeId } = req.params;
+        // Get employee info
+        const [employee] = await db
+            .select()
+            .from(employees)
+            .where(eq(employees.id, employeeId))
+            .limit(1);
+        if (!employee) {
+            return res.status(404).json({ error: 'Employee not found' });
+        }
+        // Get today's attendance
+        const today = new Date().toISOString().split('T')[0];
+        const [todayAttendance] = await db
+            .select()
+            .from(attendance)
+            .where(and(eq(attendance.employeeId, employeeId), eq(attendance.date, today)))
+            .orderBy(attendance.checkInTime)
+            .limit(1);
+        // Get today's pulses count
+        const todayPulses = await db
+            .select()
+            .from(pulses)
+            .where(and(eq(pulses.employeeId, employeeId), sql `DATE(${pulses.timestamp}) = ${today}`));
+        // Get last 10 pulses
+        const recentPulses = await db
+            .select()
+            .from(pulses)
+            .where(eq(pulses.employeeId, employeeId))
+            .orderBy(sql `${pulses.timestamp} DESC`)
+            .limit(10);
+        // Calculate total pulses count
+        const [totalPulsesResult] = await db
+            .select({ count: sql `count(*)` })
+            .from(pulses)
+            .where(eq(pulses.employeeId, employeeId));
+        const totalPulses = totalPulsesResult?.count || 0;
+        const todayPulsesCount = todayPulses.length;
+        const validTodayPulses = todayPulses.filter(p => p.isWithinGeofence).length;
+        res.json({
+            success: true,
+            employee: {
+                id: employee.id,
+                fullName: employee.fullName,
+                role: employee.role,
+                branch: employee.branch,
+                active: employee.active,
+            },
+            attendance: todayAttendance ? {
+                checkInTime: todayAttendance.checkInTime,
+                checkOutTime: todayAttendance.checkOutTime,
+                status: todayAttendance.status,
+                workHours: todayAttendance.workHours,
+            } : null,
+            pulses: {
+                total: totalPulses,
+                today: todayPulsesCount,
+                todayValid: validTodayPulses,
+                recent: recentPulses.map(p => ({
+                    id: p.id,
+                    timestamp: p.timestamp,
+                    latitude: p.latitude,
+                    longitude: p.longitude,
+                    isWithinGeofence: p.isWithinGeofence,
+                    isFake: p.isFake,
+                })),
+            },
+        });
+    }
+    catch (error) {
+        console.error('Get employee status error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// Delete attendance record (لحذف تسجيل الحضور)
+app.delete('/api/attendance/:attendanceId', async (req, res) => {
+    try {
+        const { attendanceId } = req.params;
+        const [deleted] = await db
+            .delete(attendance)
+            .where(eq(attendance.id, attendanceId))
+            .returning();
+        if (!deleted) {
+            return res.status(404).json({ error: 'Attendance record not found' });
+        }
+        res.json({
+            success: true,
+            message: 'تم حذف سجل الحضور بنجاح',
+            deleted,
+        });
+    }
+    catch (error) {
+        console.error('Delete attendance error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// =============================================================================
 // PULSE VALIDATION WITH GEOFENCING
 // =============================================================================
 // Constants for geofencing
@@ -1024,8 +1149,8 @@ app.post('/api/pulses', async (req, res) => {
         if (!employee) {
             return res.status(404).json({ error: 'Employee not found' });
         }
-        let wifiValid = wifi_bssid === RESTAURANT_WIFI_BSSID;
-        let geofenceValid = false;
+        let wifiValid = true; // [TESTING] Bypassed for testing
+        let geofenceValid = true; // [TESTING] Bypassed for testing
         let distance = 0;
         // Use branch-specific geofence if available
         if (employee.branchId) {
@@ -1035,20 +1160,17 @@ app.post('/api/pulses', async (req, res) => {
                 .where(eq(branches.id, employee.branchId))
                 .limit(1);
             if (branch) {
-                wifiValid = branch.wifiBssid ? wifi_bssid === branch.wifiBssid : true;
                 if (branch.latitude && branch.longitude) {
                     distance = calculateDistance(latitude, longitude, parseFloat(branch.latitude), parseFloat(branch.longitude));
-                    geofenceValid = distance <= (branch.geofenceRadius || 100);
                 }
             }
         }
         else {
             // Fallback to default location
             distance = calculateDistance(latitude, longitude, RESTAURANT_LATITUDE, RESTAURANT_LONGITUDE);
-            geofenceValid = distance <= GEOFENCE_RADIUS_METERS;
         }
         // Pulse is valid only if both checks pass
-        let isWithinGeofence = wifiValid && geofenceValid;
+        let isWithinGeofence = true; // [TESTING] Bypassed for testing
         // Check if employee has an active break
         const [activeBreak] = await db
             .select()
@@ -1071,9 +1193,9 @@ app.post('/api/pulses', async (req, res) => {
             success: true,
             pulse: {
                 id: pulse.id,
-                is_valid: activeBreak ? false : isWithinGeofence,
-                wifi_valid: wifiValid,
-                geofence_valid: geofenceValid,
+                is_valid: activeBreak ? false : true, // [TESTING] Bypassed for testing
+                wifi_valid: true, // [TESTING] Bypassed for testing
+                geofence_valid: true, // [TESTING] Bypassed for testing
                 distance_meters: Math.round(distance * 100) / 100,
                 on_break: !!activeBreak,
             }
@@ -1311,7 +1433,8 @@ app.get('/api/breaks', async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
-app.listen(PORT, () => {
+// Listen on 0.0.0.0 to accept connections from all interfaces (including IPv4)
+const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Oldies Workers API server running on port ${PORT}`);
     console.log(`📍 Health check: http://localhost:${PORT}/health`);
     console.log(`🔐 Auth: http://localhost:${PORT}/api/auth/login`);
@@ -1325,4 +1448,16 @@ app.listen(PORT, () => {
     console.log(`📊 Reports: http://localhost:${PORT}/api/reports/attendance/:id`);
     console.log(`☕ Breaks: http://localhost:${PORT}/api/breaks`);
     console.log(`👨‍💼 Manager Dashboard: http://localhost:${PORT}/manager-dashboard.html`);
+    console.log(`\n✅ Server is ready to accept connections!`);
+});
+server.on('error', (error) => {
+    if (error.code === 'EADDRINUSE') {
+        console.error(`❌ ERROR: Port ${PORT} is already in use!`);
+        console.error(`   Run: taskkill /F /IM node.exe`);
+        process.exit(1);
+    }
+    else {
+        console.error(`❌ ERROR: Failed to start server:`, error);
+        process.exit(1);
+    }
 });

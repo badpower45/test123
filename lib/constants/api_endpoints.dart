@@ -1,5 +1,7 @@
-const String API_BASE_URL = 'http://192.168.1.149:5000/api';
-const String ROOT_BASE_URL = 'http://192.168.1.149:5000';
+// استخدم localhost للتطوير المحلي أو IP الجهاز للاختبار على أجهزة أخرى
+// Production AWS EC2 Server
+const String API_BASE_URL = 'http://16.171.208.249:5000/api';
+const String ROOT_BASE_URL = 'http://16.171.208.249:5000';
 
 // General
 const String HEALTH_CHECK_ENDPOINT = '$ROOT_BASE_URL/health';
