@@ -1,4 +1,4 @@
-// استخدم localhost للتطوير المحلي أو IP الجهاز للاختبار على أجهزة أخرى
+// استخدم عنوان خادم AWS في هذا الوضع
 // Production AWS EC2 Server
 const String API_BASE_URL = 'http://16.171.208.249:5000/api';
 const String ROOT_BASE_URL = 'http://16.171.208.249:5000';
