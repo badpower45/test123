@@ -1463,6 +1463,155 @@ app.get('/api/manager/dashboard', async (req, res) => {
   }
 });
 
+// Hierarchical approval dashboard (Manager/Owner)
+app.get('/api/approvals/pending/:reviewerId', async (req, res) => {
+  try {
+    const { reviewerId } = req.params;
+
+    // Get reviewer info
+    const [reviewer] = await db
+      .select()
+      .from(employees)
+      .where(eq(employees.id, reviewerId))
+      .limit(1);
+
+    if (!reviewer) {
+      return res.status(404).json({ error: 'Reviewer not found' });
+    }
+
+    const reviewerRole = reviewer.role;
+
+    // Define which employee roles this reviewer can approve for
+    let allowedEmployeeRoles: string[] = [];
+    if (reviewerRole === 'owner' || reviewerRole === 'admin') {
+      // Owners/admins can approve requests from managers, hr, monitor, and staff
+      allowedEmployeeRoles = ['manager', 'hr', 'monitor', 'staff'];
+    } else if (reviewerRole === 'manager') {
+      // Managers can only approve requests from staff
+      allowedEmployeeRoles = ['staff', 'monitor'];
+    } else {
+      // Other roles cannot approve
+      return res.status(403).json({ 
+        error: 'هذا الدور لا يملك صلاحيات الموافقة على الطلبات' 
+      });
+    }
+
+    // Get pending attendance requests
+    const attendanceReqs = await db
+      .select({
+        id: attendanceRequests.id,
+        employeeId: attendanceRequests.employeeId,
+        employeeName: employees.fullName,
+        employeeRole: employees.role,
+        requestType: attendanceRequests.requestType,
+        requestedTime: attendanceRequests.requestedTime,
+        reason: attendanceRequests.reason,
+        status: attendanceRequests.status,
+        createdAt: attendanceRequests.createdAt,
+      })
+      .from(attendanceRequests)
+      .innerJoin(employees, eq(attendanceRequests.employeeId, employees.id))
+      .where(eq(attendanceRequests.status, 'pending'))
+      .orderBy(desc(attendanceRequests.createdAt));
+
+    // Get pending leave requests
+    const leaveReqs = await db
+      .select({
+        id: leaveRequests.id,
+        employeeId: leaveRequests.employeeId,
+        employeeName: employees.fullName,
+        employeeRole: employees.role,
+        startDate: leaveRequests.startDate,
+        endDate: leaveRequests.endDate,
+        leaveType: leaveRequests.leaveType,
+        reason: leaveRequests.reason,
+        daysCount: leaveRequests.daysCount,
+        allowanceAmount: leaveRequests.allowanceAmount,
+        status: leaveRequests.status,
+        createdAt: leaveRequests.createdAt,
+      })
+      .from(leaveRequests)
+      .innerJoin(employees, eq(leaveRequests.employeeId, employees.id))
+      .where(eq(leaveRequests.status, 'pending'))
+      .orderBy(desc(leaveRequests.createdAt));
+
+    // Get pending advances
+    const advanceReqs = await db
+      .select({
+        id: advances.id,
+        employeeId: advances.employeeId,
+        employeeName: employees.fullName,
+        employeeRole: employees.role,
+        amount: advances.amount,
+        eligibleAmount: advances.eligibleAmount,
+        currentSalary: advances.currentSalary,
+        status: advances.status,
+        requestDate: advances.requestDate,
+      })
+      .from(advances)
+      .innerJoin(employees, eq(advances.employeeId, employees.id))
+      .where(eq(advances.status, 'pending'))
+      .orderBy(desc(advances.requestDate));
+
+    // Get pending absences
+    const absenceReqs = await db
+      .select({
+        id: absenceNotifications.id,
+        employeeId: absenceNotifications.employeeId,
+        employeeName: employees.fullName,
+        employeeRole: employees.role,
+        absenceDate: absenceNotifications.absenceDate,
+        status: absenceNotifications.status,
+        deductionApplied: absenceNotifications.deductionApplied,
+        notifiedAt: absenceNotifications.notifiedAt,
+      })
+      .from(absenceNotifications)
+      .innerJoin(employees, eq(absenceNotifications.employeeId, employees.id))
+      .where(eq(absenceNotifications.status, 'pending'))
+      .orderBy(desc(absenceNotifications.notifiedAt));
+
+    // Filter requests based on reviewer role
+    const filteredAttendance = attendanceReqs.filter(req => 
+      allowedEmployeeRoles.includes(req.employeeRole as string)
+    );
+    const filteredLeave = leaveReqs.filter(req => 
+      allowedEmployeeRoles.includes(req.employeeRole as string)
+    );
+    const filteredAdvances = advanceReqs.filter(req => 
+      allowedEmployeeRoles.includes(req.employeeRole as string)
+    );
+    const filteredAbsences = absenceReqs.filter(req => 
+      allowedEmployeeRoles.includes(req.employeeRole as string)
+    );
+
+    res.json({
+      success: true,
+      reviewer: {
+        id: reviewer.id,
+        name: reviewer.fullName,
+        role: reviewerRole,
+      },
+      pendingRequests: {
+        attendance: filteredAttendance,
+        leave: filteredLeave,
+        advances: filteredAdvances,
+        absences: filteredAbsences,
+      },
+      summary: {
+        totalPending: filteredAttendance.length + filteredLeave.length + 
+                      filteredAdvances.length + filteredAbsences.length,
+        attendanceCount: filteredAttendance.length,
+        leaveCount: filteredLeave.length,
+        advancesCount: filteredAdvances.length,
+        absencesCount: filteredAbsences.length,
+      }
+    });
+  } catch (error) {
+    console.error('Get pending approvals error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // =============================================================================
 // PAYROLL CALCULATION - حساب الرواتب
 // =============================================================================
