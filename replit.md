@@ -5,10 +5,10 @@
 
 ## Project Status
 - **Frontend**: Dart 3.8.0 / Flutter 3.32.0
-- **Backend**: Node.js/TypeScript with Express + Neon PostgreSQL
+- **Backend**: Node.js/TypeScript with Express + Neon PostgreSQL (Replit-managed)
 - **Platform**: Cross-platform (Web, Android, iOS, Desktop)
-- **Current Setup**: Full-stack web deployment configured
-- **Migration Status**: ✅ Successfully migrated from Supabase to Neon PostgreSQL (Oct 15, 2025)
+- **Current Setup**: ✅ Running on Replit with full API backend
+- **Migration Status**: ✅ Successfully migrated to Replit + Neon PostgreSQL (Oct 17, 2025)
 
 ## Core Features
 
@@ -103,21 +103,32 @@ dhttpd --host 0.0.0.0 --port 5000 --path build/web
 ```
 
 ### Demo Data
-The app seeds demo employees on first run:
-- **Admin**: مريم حسن (EMP001, PIN: 1234)
-- **HR**: عمر سعيد (EMP002, PIN: 5678)  
-- **Monitor**: نورة عادل (EMP003, PIN: 2468)
+The server seeds demo employees automatically:
+- **Staff (Arabic)**: أحمد علي (EMP001, PIN: 1234, Branch: فرع المعادي)
+- **Staff (Arabic)**: سارة أحمد (EMP002, PIN: 2222, Branch: فرع المعادي)
+- **Manager (Arabic)**: محمد حسن (EMP003, PIN: 3333, Branch: فرع المعادي)
+- **Staff (Arabic)**: فاطمة محمد (EMP004, PIN: 4444, Branch: فرع المعادي)
+- **Manager (English)**: Manager Maadi (MGR_MAADI, PIN: 8888, Branch: Maadi)
+- **Staff (English)**: Employee Maadi (EMP_MAADI, PIN: 5555, Branch: Maadi)
 
 ## Replit Environment
 
 ### Workflows
 - **API Server**: Express.js backend API running on port 5000 (webview output)
 - Serves both API endpoints and static manager dashboard
+- **Status**: ✅ Running successfully with Neon PostgreSQL
+
+### Database
+- **Provider**: Neon PostgreSQL (Replit-managed)
+- **ORM**: Drizzle ORM with Drizzle Kit
+- **Schema**: Complete schema pushed successfully
+- **Connection**: Managed via DATABASE_URL environment variable
 
 ### Deployment
 - **Type**: Autoscale (stateless API + web app)
 - **Build**: `npm run build` (compiles TypeScript to JavaScript)
 - **Run**: `node dist/index.js` (production) or `npm run dev` (development)
+- **Database Push**: `npm run db:push` (sync schema changes)
 
 ## Backend API Endpoints
 
@@ -187,6 +198,20 @@ Constants defined in `server/index.ts`:
    - Pulse value: (40 ÷ 3600) × 30 = 0.333 EGP per pulse
 
 ## Recent Changes (October 2025)
+
+### Replit Environment Migration (Oct 17, 2025)
+- **✅ COMPLETE**: Successfully migrated project to Replit environment
+- Fixed npm script execution issues (tsx and drizzle-kit permission errors)
+- Updated all npm scripts to use `node node_modules/...` for direct execution
+- Pushed database schema to Replit's Neon PostgreSQL database
+- Server running successfully on port 5000 with all endpoints operational
+- Seeded demo data (EMP001, EMP002, EMP003, MGR_MAADI, etc.)
+- UTF-8 encoding working correctly for Arabic names
+- **Demo Credentials**:
+  - Staff: `EMP001` / PIN: `1234` (أحمد علي)
+  - Manager: `MGR_MAADI` / PIN: `8888` (Manager Maadi)
+- **API Base URL**: Running on http://localhost:5000 (Replit webview)
+- Legacy Supabase files retained for reference but not in use
 
 ### Advanced Features Implementation (Oct 15, 2025)
 - **✅ COMPLETE**: Successfully implemented three major backend upgrades

@@ -7,13 +7,13 @@
     "@server/*": "./dist/server/*"
   },
   "scripts": {
-    "dev": "tsx watch server/index.ts",
-    "dev:simple": "tsx server/index.ts",
+    "dev": "node node_modules/tsx/dist/cli.mjs watch server/index.ts",
+    "dev:simple": "node node_modules/tsx/dist/cli.mjs server/index.ts",
     "build": "tsc",
     "start": "node dist/server/index.js",
-    "db:generate": "drizzle-kit generate",
-    "db:push": "drizzle-kit push --force",
-    "db:studio": "drizzle-kit studio"
+    "db:generate": "node node_modules/drizzle-kit/bin.cjs generate",
+    "db:push": "node node_modules/drizzle-kit/bin.cjs push --force",
+    "db:studio": "node node_modules/drizzle-kit/bin.cjs studio"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.2",
