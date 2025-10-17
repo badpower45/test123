@@ -1370,6 +1370,147 @@ app.post('/api/employees', async (req, res) => {
 });
 
 // =============================================================================
+// SHIFT MANAGEMENT - إدارة الشيفتات
+// =============================================================================
+
+// Get active shifts (employees currently working)
+app.get('/api/shifts/active', async (req, res) => {
+  try {
+    const { branch_id } = req.query;
+    const today = new Date().toISOString().split('T')[0];
+
+    let query = db
+      .select({
+        attendanceId: attendance.id,
+        employeeId: attendance.employeeId,
+        employeeName: employees.fullName,
+        employeeRole: employees.role,
+        branch: employees.branch,
+        checkInTime: attendance.checkInTime,
+        workHours: attendance.workHours,
+        status: attendance.status,
+      })
+      .from(attendance)
+      .innerJoin(employees, eq(attendance.employeeId, employees.id))
+      .where(and(
+        eq(attendance.date, today),
+        eq(attendance.status, 'active')
+      ))
+      .$dynamic();
+
+    if (branch_id) {
+      query = query.where(eq(employees.branchId, branch_id as string));
+    }
+
+    const activeShifts = await query.orderBy(attendance.checkInTime);
+
+    res.json({
+      success: true,
+      activeShifts,
+      count: activeShifts.length,
+      date: today,
+    });
+  } catch (error) {
+    console.error('Get active shifts error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Auto checkout (force checkout for active shifts)
+app.post('/api/shifts/auto-checkout', async (req, res) => {
+  try {
+    const { employee_id, reason } = req.body;
+
+    if (!employee_id) {
+      return res.status(400).json({ error: 'Employee ID is required' });
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+
+    // Find active attendance record
+    const [activeAttendance] = await db
+      .select()
+      .from(attendance)
+      .where(and(
+        eq(attendance.employeeId, employee_id),
+        eq(attendance.date, today),
+        eq(attendance.status, 'active')
+      ))
+      .limit(1);
+
+    if (!activeAttendance) {
+      return res.status(404).json({ error: 'No active shift found for this employee' });
+    }
+
+    const checkOutTime = new Date();
+    const checkInTime = new Date(activeAttendance.checkInTime!);
+    const workHours = (checkOutTime.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
+
+    const [updated] = await db
+      .update(attendance)
+      .set({
+        checkOutTime,
+        workHours: workHours.toFixed(2),
+        status: 'completed',
+        isAutoCheckout: true,
+      })
+      .where(eq(attendance.id, activeAttendance.id))
+      .returning();
+
+    res.json({
+      success: true,
+      message: 'تم تسجيل الانصراف التلقائي',
+      attendance: updated,
+      workHours: parseFloat(workHours.toFixed(2)),
+      reason: reason || 'Auto checkout',
+    });
+  } catch (error) {
+    console.error('Auto checkout error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get employee current shift status
+app.get('/api/shifts/status/:employeeId', async (req, res) => {
+  try {
+    const { employeeId } = req.params;
+    const today = new Date().toISOString().split('T')[0];
+
+    const [todayAttendance] = await db
+      .select()
+      .from(attendance)
+      .where(and(
+        eq(attendance.employeeId, employeeId),
+        eq(attendance.date, today)
+      ))
+      .limit(1);
+
+    if (!todayAttendance) {
+      return res.json({
+        hasShift: false,
+        status: 'not_checked_in',
+        message: 'لم يتم تسجيل الحضور اليوم',
+      });
+    }
+
+    const isActive = todayAttendance.status === 'active';
+
+    res.json({
+      hasShift: true,
+      status: todayAttendance.status,
+      isActive,
+      checkInTime: todayAttendance.checkInTime,
+      checkOutTime: todayAttendance.checkOutTime,
+      workHours: todayAttendance.workHours,
+      message: isActive ? 'الموظف موجود حالياً في الشيفت' : 'تم تسجيل الانصراف',
+    });
+  } catch (error) {
+    console.error('Get shift status error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// =============================================================================
 // MANAGER DASHBOARD - لوحة تحكم المدير
 // =============================================================================
 
