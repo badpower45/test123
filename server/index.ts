@@ -1065,19 +1065,155 @@ app.post('/api/absence/:notificationId/apply-deduction', async (req, res) => {
 // ATTENDANCE REPORTS - تقارير الحضور
 // =============================================================================
 
-// Get employee attendance report (available on 1st and 16th of month)
+// Get comprehensive employee report (يوم 1 و 16)
+app.get('/api/reports/comprehensive/:employeeId', async (req, res) => {
+  try {
+    const { employeeId } = req.params;
+    const { start_date, end_date, skip_date_check } = req.query;
+
+    // Check if it's 1st or 16th (skip for managers/admins)
+    if (!skip_date_check) {
+      const today = new Date().getDate();
+      if (today !== 1 && today !== 16) {
+        return res.status(403).json({ 
+          error: 'التقارير متاحة فقط يوم 1 و 16 من كل شهر' 
+        });
+      }
+    }
+
+    // Get employee info
+    const [employee] = await db
+      .select()
+      .from(employees)
+      .where(eq(employees.id, employeeId))
+      .limit(1);
+
+    if (!employee) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    // Get attendance records
+    const attendanceRecords = await db
+      .select()
+      .from(attendance)
+      .where(and(
+        eq(attendance.employeeId, employeeId),
+        gte(attendance.date, start_date as string),
+        lte(attendance.date, end_date as string)
+      ))
+      .orderBy(attendance.date);
+
+    // Get valid pulses count for salary calculation
+    const validPulsesResult = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(pulses)
+      .where(and(
+        eq(pulses.employeeId, employeeId),
+        eq(pulses.isWithinGeofence, true),
+        gte(pulses.timestamp, new Date(start_date as string)),
+        lte(pulses.timestamp, new Date(end_date as string))
+      ));
+
+    const validPulseCount = validPulsesResult[0]?.count || 0;
+    
+    // Calculate salary from pulses (40 EGP/hour, pulse every 30 seconds)
+    const HOURLY_RATE = 40;
+    const pulseValue = (HOURLY_RATE / 3600) * 30; // 0.333 EGP per pulse
+    const grossSalary = validPulseCount * pulseValue;
+
+    // Get advances
+    const advancesList = await db
+      .select()
+      .from(advances)
+      .where(and(
+        eq(advances.employeeId, employeeId),
+        eq(advances.status, 'approved'),
+        gte(advances.requestDate, new Date(start_date as string)),
+        lte(advances.requestDate, new Date(end_date as string))
+      ));
+
+    // Get leaves
+    const leaves = await db
+      .select()
+      .from(leaveRequests)
+      .where(and(
+        eq(leaveRequests.employeeId, employeeId),
+        eq(leaveRequests.status, 'approved'),
+        gte(leaveRequests.startDate, start_date as string),
+        lte(leaveRequests.endDate, end_date as string)
+      ));
+
+    // Get deductions
+    const deductionsList = await db
+      .select()
+      .from(deductions)
+      .where(and(
+        eq(deductions.employeeId, employeeId),
+        gte(deductions.deductionDate, start_date as string),
+        lte(deductions.deductionDate, end_date as string)
+      ));
+
+    // Calculate totals
+    const totalWorkHours = attendanceRecords.reduce((sum, record) => 
+      sum + parseFloat(record.workHours || '0'), 0
+    );
+
+    const totalAdvances = advancesList.reduce((sum, advance) => 
+      sum + parseFloat(advance.amount || '0'), 0
+    );
+
+    const totalDeductions = deductionsList.reduce((sum, deduction) => 
+      sum + parseFloat(deduction.amount || '0'), 0
+    );
+
+    const totalLeaveAllowance = leaves.reduce((sum, leave) => 
+      sum + parseFloat(leave.allowanceAmount || '0'), 0
+    );
+
+    // Calculate net salary
+    const netSalary = grossSalary - totalAdvances - totalDeductions + totalLeaveAllowance;
+
+    res.json({
+      employee: {
+        id: employee.id,
+        fullName: employee.fullName,
+        role: employee.role,
+        branch: employee.branch,
+      },
+      period: { 
+        start: start_date, 
+        end: end_date,
+        reportDate: new Date().toISOString()
+      },
+      attendance: attendanceRecords,
+      advances: advancesList,
+      leaves,
+      deductions: deductionsList,
+      salary: {
+        validPulses: validPulseCount,
+        grossSalary: parseFloat(grossSalary.toFixed(2)),
+        totalAdvances: parseFloat(totalAdvances.toFixed(2)),
+        totalDeductions: parseFloat(totalDeductions.toFixed(2)),
+        totalLeaveAllowance: parseFloat(totalLeaveAllowance.toFixed(2)),
+        netSalary: parseFloat(netSalary.toFixed(2)),
+      },
+      summary: {
+        totalWorkHours: parseFloat(totalWorkHours.toFixed(2)),
+        totalWorkDays: attendanceRecords.length,
+        totalLeaveDays: leaves.reduce((sum, leave) => sum + (leave.daysCount || 0), 0),
+      }
+    });
+  } catch (error) {
+    console.error('Get comprehensive report error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get employee attendance report (legacy - kept for backward compatibility)
 app.get('/api/reports/attendance/:employeeId', async (req, res) => {
   try {
     const { employeeId } = req.params;
     const { start_date, end_date } = req.query;
-
-    // Check if it's 1st or 16th
-    const today = new Date().getDate();
-    if (today !== 1 && today !== 16) {
-      return res.status(403).json({ 
-        error: 'التقارير متاحة فقط يوم 1 و 16 من كل شهر' 
-      });
-    }
 
     // Get attendance records
     const attendanceRecords = await db
