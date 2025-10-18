@@ -7,6 +7,7 @@ import '../models/advance_request.dart';
 import '../models/attendance_request.dart';
 import '../models/break.dart';
 import '../models/leave_request.dart';
+import '../models/shift_status.dart';
 
 class RequestsApiService {
   static Future<void> deleteRejectedBreaks(String employeeId) async {
@@ -21,6 +22,62 @@ class RequestsApiService {
     }
     final body = _decodeBody(response.body);
     throw Exception(body['error'] ?? 'تعذر حذف الطلبات المرفوضة (${response.statusCode})');
+  }
+
+  static Future<void> deleteRejectedLeaves(String employeeId) async {
+    final uri = Uri.parse(LEAVE_REQUESTS_DELETE_REJECTED_ENDPOINT);
+    final response = await http.post(
+      uri,
+      headers: _jsonHeaders,
+      body: jsonEncode({'employee_id': employeeId}),
+    );
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return;
+    }
+    final body = _decodeBody(response.body);
+    throw Exception(body['error'] ?? 'تعذر حذف طلبات الإجازة المرفوضة (${response.statusCode})');
+  }
+
+  static Future<void> deleteRejectedAdvances(String employeeId) async {
+    final uri = Uri.parse(ADVANCES_DELETE_REJECTED_ENDPOINT);
+    final response = await http.post(
+      uri,
+      headers: _jsonHeaders,
+      body: jsonEncode({'employee_id': employeeId}),
+    );
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return;
+    }
+    final body = _decodeBody(response.body);
+    throw Exception(body['error'] ?? 'تعذر حذف طلبات السلفة المرفوضة (${response.statusCode})');
+  }
+
+  static Future<ShiftStatus> fetchShiftStatus(String employeeId) async {
+    final uri = Uri.parse('$SHIFT_STATUS_ENDPOINT/$employeeId');
+    final response = await http.get(uri);
+    final body = _decodeBody(response.body);
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      final payload = body['shift'] ?? body['status'] ?? body['data'] ?? body;
+      if (payload is Map<String, dynamic>) {
+        return ShiftStatus.fromJson(payload);
+      }
+      if (payload is Map) {
+        return ShiftStatus.fromJson(Map<String, dynamic>.from(payload));
+      }
+      return ShiftStatus.inactive();
+    }
+
+    throw Exception(body['error'] ?? 'تعذر تحميل حالة المناوبة (${response.statusCode})');
+  }
+
+  static Future<bool> checkActiveShift(String employeeId) async {
+    try {
+      final status = await fetchShiftStatus(employeeId);
+      return status.hasActiveShift;
+    } catch (_) {
+      return false;
+    }
   }
   RequestsApiService._();
 

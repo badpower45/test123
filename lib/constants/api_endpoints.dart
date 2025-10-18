@@ -27,11 +27,15 @@ const String PULSE_ENDPOINT = '$API_BASE_URL/pulses';
 const String LEAVE_REQUEST_ENDPOINT = '$API_BASE_URL/leave/request';
 const String LEAVE_REQUESTS_ENDPOINT = '$API_BASE_URL/leave/requests';
 const String LEAVE_REQUEST_REVIEW_ENDPOINT = '$API_BASE_URL/leave/requests/:requestId/review';
+const String LEAVE_REQUESTS_DELETE_REJECTED_ENDPOINT =
+	'$API_BASE_URL/leave/requests/delete-rejected';
 
 // Advances
 const String ADVANCE_REQUEST_ENDPOINT = '$API_BASE_URL/advances/request';
 const String ADVANCES_ENDPOINT = '$API_BASE_URL/advances';
 const String ADVANCE_REVIEW_ENDPOINT = '$API_BASE_URL/advances/:advanceId/review';
+const String ADVANCES_DELETE_REJECTED_ENDPOINT =
+	'$API_BASE_URL/advances/delete-rejected';
 
 // Absence & deductions
 const String ABSENCE_NOTIFY_ENDPOINT = '$API_BASE_URL/absence/notify';
@@ -56,6 +60,22 @@ const String BREAKS_REQUEST_ENDPOINT = '$API_BASE_URL/breaks/request';
 const String BREAK_REVIEW_ENDPOINT = '$API_BASE_URL/breaks/:breakId/review';
 const String BREAK_START_ENDPOINT = '$API_BASE_URL/breaks/:breakId/start';
 const String BREAK_END_ENDPOINT = '$API_BASE_URL/breaks/:breakId/end';
+const String SHIFT_STATUS_ENDPOINT = '$API_BASE_URL/shifts/status';
+
+// Manager profile
+const String MANAGER_PROFILE_ENDPOINT = '$API_BASE_URL/manager/profile';
+
+// Owner dashboard
+const String OWNER_MANAGER_REQUESTS_ENDPOINT =
+	'$API_BASE_URL/owner/manager-requests';
+const String OWNER_MANAGER_REQUEST_REVIEW_ENDPOINT =
+	'$API_BASE_URL/owner/manager-requests/:requestId/review';
+const String OWNER_HOURLY_RATES_ENDPOINT = '$API_BASE_URL/owner/hourly-rates';
+const String OWNER_EMPLOYEE_HOURLY_RATE_ENDPOINT =
+	'$API_BASE_URL/owner/employees/:employeeId/hourly-rate';
+const String OWNER_PEOPLE_DIRECTORY_ENDPOINT = '$API_BASE_URL/owner/people';
+const String OWNER_PERSON_PROFILE_ENDPOINT = '$API_BASE_URL/owner/people/:personId';
+const String OWNER_FINANCIAL_REPORT_ENDPOINT = '$API_BASE_URL/owner/financial-report';
 
 // Manager dashboard
 const String MANAGER_DASHBOARD_ENDPOINT = '$API_BASE_URL/manager/dashboard';
