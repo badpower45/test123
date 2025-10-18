@@ -18,215 +18,73 @@ class RequestsPage extends StatefulWidget {
   State<RequestsPage> createState() => _RequestsPageState();
 }
 
-class _RequestsPageState extends State<RequestsPage>
-    with SingleTickerProviderStateMixin {
 
-  late TabController _tabController;
+class _RequestsPageState extends State<RequestsPage> with SingleTickerProviderStateMixin {
+          else ..._buildBreaksList(),
 
-  @override
-  void initState() {
-    super.initState();
-    _tabController = TabController(length: widget.hideBreakTab ? 2 : 3, vsync: this);
-  }
-
-  @override
-  void dispose() {
-    _tabController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _showLeaveRequestSheet() async {
-    final result = await showModalBottomSheet<LeaveRequest>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => _LeaveRequestSheet(employeeId: widget.employeeId),
-    );
-
-    if (!mounted || result == null) {
-      return;
-    }
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('✓ تم إرسال طلب الإجازة بنجاح'),
-        backgroundColor: AppColors.success,
-      ),
-    );
-  }
-
-  Future<void> _showAdvanceRequestSheet() async {
-    final navigator = Navigator.of(context, rootNavigator: true);
-    var loaderVisible = true;
-
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const Center(child: CircularProgressIndicator()),
-    );
-
-    Map<String, dynamic> earningsData;
-
-    try {
-      earningsData =
-          await RequestsApiService.fetchCurrentEarnings(widget.employeeId);
-    } catch (error) {
-      if (loaderVisible && navigator.canPop()) {
-        navigator.pop();
-        loaderVisible = false;
-      }
-
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('تعذر تحميل بيانات السلفة: $error'),
-          backgroundColor: AppColors.error,
-        ),
-      );
-      return;
-    }
-
-    if (loaderVisible && navigator.canPop()) {
-      navigator.pop();
-      loaderVisible = false;
-    }
-
-    if (!mounted) {
-      return;
-    }
-
-    final currentEarnings = _parseAmount(
-      earningsData['totalEarnings'] ?? earningsData['total_earnings'],
-    );
-    final maxAdvance = _parseAmount(
-          earningsData['max_advance_amount'] ??
-              earningsData['maxAdvanceAmount'] ??
-              earningsData['eligibleAdvance'] ??
-              earningsData['eligible_advance'],
-        ) ??
-        (currentEarnings != null ? currentEarnings * 0.3 : null);
-
-    final result = await showModalBottomSheet<AdvanceRequest>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => _AdvanceRequestSheet(
-        employeeId: widget.employeeId,
-        currentEarnings: currentEarnings,
-        maxAdvance: maxAdvance,
-      ),
-    );
-
-    if (!mounted || result == null) {
-      return;
-    }
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('✓ تم إرسال طلب السلفة بنجاح'),
-        backgroundColor: AppColors.success,
-      ),
-    );
-  }
-
-  double? _parseAmount(Object? value) {
-    if (value == null) {
-      return null;
-    }
-    if (value is num) {
-      return value.toDouble();
-    }
-    if (value is String) {
-      return double.tryParse(value.replaceAll(',', '.'));
-    }
-    return null;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: Column(
-        children: [
-          // Header
-          Container(
-            padding: const EdgeInsets.fromLTRB(20, 60, 20, 20),
-            decoration: BoxDecoration(
-              gradient: AppColors.subtleGradient,
-              borderRadius: const BorderRadius.vertical(
-                bottom: Radius.circular(24),
+  List<Widget> _buildBreaksList() {
+    final widgets = <Widget>[];
+    if (_breaks.any((b) => b.status == BreakStatus.rejected)) {
+      widgets.add(
+        Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: ElevatedButton.icon(
+            icon: const Icon(Icons.delete),
+            label: const Text('حذف جميع الطلبات المرفوضة'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.error,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
               ),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'الطلبات',
-                  style: TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'إدارة طلبات الإجازات والسلف',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-                const SizedBox(height: 20),
-                Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.05),
-                        blurRadius: 10,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: TabBar(
-                    controller: _tabController,
-                    indicator: BoxDecoration(
-                      color: AppColors.primaryOrange,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    labelColor: Colors.white,
-                    unselectedLabelColor: AppColors.textSecondary,
-                    dividerColor: Colors.transparent,
-                    tabs: widget.hideBreakTab
-                        ? const [
-                            Tab(
-                              icon: Icon(Icons.beach_access),
-                              text: 'الإجازات',
-                            ),
+            onPressed: _deleteRejectedBreaks,
+          ),
+        ),
+      );
+    }
+    widgets.addAll(_breaks.map(_buildBreakCard));
+    return widgets;
+  }
+
+  Future<void> _deleteRejectedBreaks() async {
+    setState(() => _isLoading = true);
+    try {
+      await RequestsApiService.deleteRejectedBreaks(widget.employeeId);
+      await _loadBreaks(showLoadingIndicator: false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('تم حذف جميع الطلبات المرفوضة بنجاح'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('تعذر حذف الطلبات المرفوضة: $e'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
                             Tab(
                               icon: Icon(Icons.payments),
-                              text: 'السلف',
-                            ),
-                          ]
-                        : const [
-                            Tab(
-                              icon: Icon(Icons.beach_access),
-                              text: 'الإجازات',
-                            ),
-                            Tab(
-                              icon: Icon(Icons.payments),
-                              text: 'السلف',
+                              text: 'السلف'
                             ),
                             Tab(
                               icon: Icon(Icons.free_breakfast),
-                              text: 'الاستراحات',
-                            ),
-                          ],
-                  ),
-                ),
+                              text: 'الاستراحات'
+                            )
+                          ]
+                  )
+                )
               ],
             ),
           ),
@@ -265,9 +123,11 @@ class _RequestsPageState extends State<RequestsPage>
     );
   }
 }
+  }
+}
 
 // Leave Requests Tab
-class _LeaveRequestsTab extends StatelessWidget {
+class _LeaveRequestsTab extends StatefulWidget {
   final String employeeId;
   final VoidCallback onNewRequest;
 
@@ -277,44 +137,181 @@ class _LeaveRequestsTab extends StatelessWidget {
   });
 
   @override
+  State<_LeaveRequestsTab> createState() => _LeaveRequestsTabState();
+}
+
+class _LeaveRequestsTabState extends State<_LeaveRequestsTab> {
+  List<LeaveRequest> _requests = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRequests();
+  }
+
+  Future<void> _loadRequests() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      final requests = await RequestsApiService.fetchLeaveRequests(widget.employeeId);
+      if (mounted) {
+        setState(() {
+          _requests = requests;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          ElevatedButton.icon(
-            onPressed: onNewRequest,
-            icon: const Icon(Icons.add),
-            label: const Text('طلب إجازة جديد'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primaryOrange,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+    return RefreshIndicator(
+      onRefresh: _loadRequests,
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ElevatedButton.icon(
+              onPressed: widget.onNewRequest,
+              icon: const Icon(Icons.add),
+              label: const Text('طلب إجازة جديد'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryOrange,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
             ),
-          ),
-          
-          const SizedBox(height: 24),
-          
-          const Text(
-            'الطلبات السابقة',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: AppColors.textPrimary,
+            
+            const SizedBox(height: 24),
+            
+            const Text(
+              'الطلبات السابقة',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: AppColors.textPrimary,
+              ),
+            ),
+            
+            const SizedBox(height: 16),
+            
+            if (_loading)
+              const Center(child: CircularProgressIndicator())
+            else if (_error != null)
+              _buildErrorState(_error!)
+            else if (_requests.isEmpty)
+              _buildEmptyState(
+                icon: Icons.inbox,
+                title: 'لا توجد طلبات سابقة',
+                subtitle: 'سيتم عرض طلباتك هنا',
+              )
+            else
+              ..._requests.map((request) => _buildLeaveRequestCard(request)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLeaveRequestCard(LeaveRequest request) {
+    Color statusColor;
+    String statusText;
+    if (request.isApproved) {
+      statusColor = AppColors.success;
+      statusText = 'موافق عليها';
+    } else if (request.isRejected) {
+      statusColor = AppColors.error;
+      statusText = 'مرفوضة';
+    } else {
+      statusColor = AppColors.pending;
+      statusText = 'قيد الانتظار';
+    }
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.beach_access, color: statusColor),
+                const SizedBox(width: 8),
+                Text(
+                  statusText,
+                  style: TextStyle(
+                    color: statusColor,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text('من: ${request.startDate}'),
+            Text('إلى: ${request.endDate}'),
+            Text('عدد الأيام: ${request.daysCount}'),
+            if (request.allowanceAmount > 0)
+              Text('بدل الإجازة: ${request.allowanceAmount} جنيه'),
+            if (request.reason.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                'السبب: ${request.reason}',
+                style: const TextStyle(fontStyle: FontStyle.italic, color: AppColors.textSecondary),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildErrorState(String error) {
+    return Container(
+      padding: const EdgeInsets.all(40),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        children: [
+          const Icon(Icons.error_outline, size: 64, color: AppColors.error),
+          const SizedBox(height: 16),
+          Text(
+            'حدث خطأ',
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textSecondary,
             ),
           ),
-          
+          const SizedBox(height: 8),
+          Text(
+            error,
+            style: const TextStyle(fontSize: 14, color: AppColors.textTertiary),
+            textAlign: TextAlign.center,
+          ),
           const SizedBox(height: 16),
-          
-          // Placeholder for past requests
-          _buildEmptyState(
-            icon: Icons.inbox,
-            title: 'لا توجد طلبات سابقة',
-            subtitle: 'سيتم عرض طلباتك هنا',
+          ElevatedButton(
+            onPressed: _loadRequests,
+            child: const Text('إعادة المحاولة'),
           ),
         ],
       ),
@@ -363,7 +360,7 @@ class _LeaveRequestsTab extends StatelessWidget {
 }
 
 // Advance Requests Tab
-class _AdvanceRequestsTab extends StatelessWidget {
+class _AdvanceRequestsTab extends StatefulWidget {
   final String employeeId;
   final VoidCallback onNewRequest;
 
@@ -373,71 +370,224 @@ class _AdvanceRequestsTab extends StatelessWidget {
   });
 
   @override
+  State<_AdvanceRequestsTab> createState() => _AdvanceRequestsTabState();
+}
+
+class _AdvanceRequestsTabState extends State<_AdvanceRequestsTab> {
+  List<AdvanceRequest> _requests = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRequests();
+  }
+
+  Future<void> _loadRequests() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      final requests = await RequestsApiService.fetchAdvanceRequests(widget.employeeId);
+      if (mounted) {
+        setState(() {
+          _requests = requests;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          ElevatedButton.icon(
-            onPressed: onNewRequest,
-            icon: const Icon(Icons.add),
-            label: const Text('طلب سلفة جديد'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primaryOrange,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+    return RefreshIndicator(
+      onRefresh: _loadRequests,
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ElevatedButton.icon(
+              onPressed: widget.onNewRequest,
+              icon: const Icon(Icons.add),
+              label: const Text('طلب سلفة جديد'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryOrange,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
             ),
-          ),
-          
-          const SizedBox(height: 24),
-          
-          const Text(
-            'الطلبات السابقة',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: AppColors.textPrimary,
+            
+            const SizedBox(height: 24),
+            
+            const Text(
+              'الطلبات السابقة',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: AppColors.textPrimary,
+              ),
             ),
-          ),
-          
-          const SizedBox(height: 16),
-          
-          // Placeholder
-          Container(
-            padding: const EdgeInsets.all(40),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: const Column(
+            
+            const SizedBox(height: 16),
+            
+            if (_loading)
+              const Center(child: CircularProgressIndicator())
+            else if (_error != null)
+              _buildErrorState(_error!)
+            else if (_requests.isEmpty)
+              _buildEmptyState()
+            else
+              ..._requests.map((request) => _buildAdvanceRequestCard(request)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAdvanceRequestCard(AdvanceRequest request) {
+    Color statusColor;
+    String statusText;
+    if (request.isApproved) {
+      statusColor = AppColors.success;
+      statusText = 'موافق عليها';
+    } else if (request.isRejected) {
+      statusColor = AppColors.error;
+      statusText = 'مرفوضة';
+    } else {
+      statusColor = Colors.orange;
+      statusText = 'قيد الانتظار';
+    }
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Icon(
-                  Icons.inbox,
-                  size: 64,
-                  color: AppColors.textTertiary,
-                ),
-                SizedBox(height: 16),
-                Text(
-                  'لا توجد طلبات سابقة',
+                const Text(
+                  'طلب سلفة',
                   style: TextStyle(
                     fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textSecondary,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
-                SizedBox(height: 8),
-                Text(
-                  'سيتم عرض طلباتك هنا',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: AppColors.textTertiary,
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: statusColor.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: statusColor),
+                  ),
+                  child: Text(
+                    statusText,
+                    style: TextStyle(
+                      color: statusColor,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
                   ),
                 ),
               ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'المبلغ: ${request.amount.toStringAsFixed(2)} جنيه',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.primaryOrange),
+            ),
+            if (request.eligibleAmount != null)
+              Text('الحد الأقصى المتاح: ${request.eligibleAmount!.toStringAsFixed(2)} جنيه'),
+            Text('تاريخ الطلب: ${request.requestDate}'),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildErrorState(String error) {
+    return Container(
+      padding: const EdgeInsets.all(40),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        children: [
+          const Icon(Icons.error_outline, size: 64, color: AppColors.error),
+          const SizedBox(height: 16),
+          const Text(
+            'حدث خطأ',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textSecondary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            error,
+            style: const TextStyle(fontSize: 14, color: AppColors.textTertiary),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 16),
+          ElevatedButton(
+            onPressed: _loadRequests,
+            child: const Text('إعادة المحاولة'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Container(
+      padding: const EdgeInsets.all(40),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: const Column(
+        children: [
+          Icon(
+            Icons.inbox,
+            size: 64,
+            color: AppColors.textTertiary,
+          ),
+          SizedBox(height: 16),
+          Text(
+            'لا توجد طلبات سابقة',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textSecondary,
+            ),
+          ),
+          SizedBox(height: 8),
+          Text(
+            'سيتم عرض طلباتك هنا',
+            style: TextStyle(
+              fontSize: 14,
+              color: AppColors.textTertiary,
             ),
           ),
         ],
@@ -653,8 +803,60 @@ class _BreaksViewState extends State<_BreaksView> {
             )
           else if (_breaks.isEmpty)
             const _BreaksEmptyState()
-          else
-            ..._breaks.map(_buildBreakCard).toList(),
+          else ..._buildBreaksList(),
+
+  List<Widget> _buildBreaksList() {
+    final widgets = <Widget>[];
+    if (_breaks.any((b) => b.status == BreakStatus.rejected)) {
+      widgets.add(
+        Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: ElevatedButton.icon(
+            icon: const Icon(Icons.delete),
+            label: const Text('حذف جميع الطلبات المرفوضة'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.error,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: _deleteRejectedBreaks,
+          ),
+        ),
+      );
+    }
+    widgets.addAll(_breaks.map(_buildBreakCard));
+    return widgets;
+  }
+
+  Future<void> _deleteRejectedBreaks() async {
+    setState(() => _isLoading = true);
+    try {
+      await RequestsApiService.deleteRejectedBreaks(widget.employeeId);
+      await _loadBreaks(showLoadingIndicator: false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('تم حذف جميع الطلبات المرفوضة بنجاح'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('تعذر حذف الطلبات المرفوضة: $e'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
         ],
       ),
     );

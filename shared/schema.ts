@@ -282,7 +282,7 @@ export const branchManagers = pgTable('branch_managers', {
 // =============================================================================
 // BREAKS TABLE - Break Management System
 // =============================================================================
-export const breakStatusEnum = pgEnum('break_status', ['PENDING', 'APPROVED', 'REJECTED', 'ACTIVE', 'COMPLETED']);
+export const breakStatusEnum = pgEnum('break_status', ['PENDING', 'APPROVED', 'REJECTED', 'ACTIVE', 'COMPLETED', 'POSTPONED']);
 
 export const breaks = pgTable('breaks', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -293,6 +293,10 @@ export const breaks = pgTable('breaks', {
   startTime: timestamp('start_time', { withTimezone: true }),
   endTime: timestamp('end_time', { withTimezone: true }),
   approvedBy: text('approved_by').references(() => employees.id),
+  // Payout fields for postponed breaks
+  payoutEligible: boolean('payout_eligible').default(false).notNull(),
+  payoutApplied: boolean('payout_applied').default(false).notNull(),
+  payoutAppliedAt: timestamp('payout_applied_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({

@@ -8,7 +8,7 @@ import {
   deductions, absenceNotifications, pulses, users, roles, permissions, 
   rolePermissions, userRoles, branches, branchManagers, breaks
 } from '../shared/schema.js';
-import { eq, and, gte, lte, desc, sql, between, inArray } from 'drizzle-orm';
+import { eq, and, gte, lte, lt, desc, sql, between, inArray } from 'drizzle-orm';
 import { requirePermission, getUserPermissions, checkUserPermission } from './auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -20,6 +20,30 @@ const PORT = Number(process.env.PORT) || 5000;
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
+
+// =============================================================================
+// UTILITY FUNCTIONS
+// =============================================================================
+
+/**
+ * Convert string numbers to actual numbers in objects
+ * This fixes PostgreSQL returning numeric fields as strings
+ */
+function normalizeNumericFields(obj: any, fields: string[]): any {
+  if (!obj) return obj;
+  
+  const normalized = { ...obj };
+  for (const field of fields) {
+    if (field in normalized && normalized[field] !== null && normalized[field] !== undefined) {
+      const value = normalized[field];
+      if (typeof value === 'string') {
+        const num = parseFloat(value);
+        normalized[field] = isNaN(num) ? value : num;
+      }
+    }
+  }
+  return normalized;
+}
 
 // Force JSON-only API errors (avoid HTML bodies that cause Flutter FormatException)
 // Set JSON content-type for API routes only
@@ -72,13 +96,19 @@ app.get('/api/branch/:branch/requests', async (req, res) => {
       .select()
       .from(absenceNotifications)
       .where(and(inArray(absenceNotifications.employeeId, employeeIds), eq(absenceNotifications.status, 'pending')));
+    // Break requests
+    const breakReqs = await db
+      .select()
+      .from(breaks)
+      .where(and(inArray(breaks.employeeId, employeeIds), eq(breaks.status, 'PENDING')));
 
     res.json({
       success: true,
-      leaveRequests: leaveReqs,
-      advanceRequests: advanceReqs,
+      leaveRequests: leaveReqs.map(r => normalizeNumericFields(r, ['daysCount', 'allowanceAmount'])),
+      advanceRequests: advanceReqs.map(r => normalizeNumericFields(r, ['amount', 'eligibleAmount', 'currentSalary'])),
       attendanceRequests: attReqs,
       absenceNotifications: absenceAlerts,
+      breakRequests: breakReqs.map(r => normalizeNumericFields(r, ['requestedDurationMinutes'])),
     });
   } catch (err) {
     res.status(500).json({ error: 'Internal server error', message: err?.message });
@@ -88,22 +118,51 @@ app.get('/api/branch/:branch/requests', async (req, res) => {
 // Approve/reject a request (leave, advance, attendance, absence)
 app.post('/api/branch/request/:type/:id/:action', async (req, res) => {
   try {
-    const { type, id, action } = req.params;
-    const validTypes = ['leave', 'advance', 'attendance', 'absence'];
-    const validActions = ['approve', 'reject'];
+  let { type, id, action } = req.params as { type: string; id: string; action: 'approve' | 'reject' | 'postpone' };
+    const validTypes = ['leave', 'advance', 'attendance', 'absence', 'break'];
+    // Normalize common plural aliases
+    const typeMap: Record<string, typeof validTypes[number]> = {
+      leaves: 'leave',
+      advances: 'advance',
+      attendances: 'attendance',
+      absences: 'absence',
+      breaks: 'break',
+    } as const;
+    type = (typeMap[type] || type) as any;
+  const validActions = ['approve', 'reject', 'postpone'];
     if (!validTypes.includes(type) || !validActions.includes(action)) {
       return res.status(400).json({ error: 'Invalid type or action' });
     }
-    let table;
-    switch (type) {
-      case 'leave': table = leaveRequests; break;
-      case 'advance': table = advances; break;
-      case 'attendance': table = attendanceRequests; break;
-      case 'absence': table = absenceNotifications; break;
+    if (type === 'break') {
+      const statusUpdate = action === 'approve' ? 'APPROVED' : action === 'reject' ? 'REJECTED' : 'POSTPONED';
+      const payoutEligible = action === 'postpone';
+      const [updated] = await db
+        .update(breaks)
+        .set({
+          status: statusUpdate,
+          payoutEligible,
+          approvedBy: (req.body?.reviewer_id || req.body?.manager_id) ?? null,
+          updatedAt: new Date(),
+        })
+        .where(eq(breaks.id, id))
+        .returning();
+      return res.json({ success: true, updated });
+    } else {
+      let table;
+      switch (type) {
+        case 'leave': table = leaveRequests; break;
+        case 'advance': table = advances; break;
+        case 'attendance': table = attendanceRequests; break;
+        case 'absence': table = absenceNotifications; break;
+      }
+      const status = action === 'approve' ? 'approved' : 'rejected';
+      const [updated] = await db
+        .update(table)
+        .set({ status, reviewedAt: new Date() })
+        .where(eq(table.id, id))
+        .returning();
+      return res.json({ success: true, updated });
     }
-    const status = action === 'approve' ? 'approved' : 'rejected';
-    const [updated] = await db.update(table).set({ status, reviewedAt: new Date() }).where(eq(table.id, id)).returning();
-    res.json({ success: true, updated });
   } catch (err) {
     res.status(500).json({ error: 'Internal server error', message: err?.message });
   }
@@ -247,47 +306,38 @@ const ensureDemoData = async () => {
 
     console.log('[seed] Demo employees ensured:', demoEmployees.map(d => d.id).join(', '));
     
-    // Add demo earnings for EMP_MAADI (300 EGP yesterday via pulses)
+    // Add demo earnings for EMP_MAADI (300 EGP TODAY via pulses for testing)
     // 300 EGP at 40 EGP/hour = 7.5 hours
     // 7.5 hours * 120 pulses/hour (30 sec interval) = 900 pulses
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    yesterday.setHours(9, 0, 0, 0); // Start at 9 AM yesterday
+    const today = new Date();
+    today.setHours(9, 0, 0, 0); // Start at 9 AM today
     
-    // Check if pulses already exist for EMP_MAADI yesterday
-    const existingPulses = await db
-      .select()
-      .from(pulses)
-      .where(and(
-        eq(pulses.employeeId, 'EMP_MAADI'),
-        gte(pulses.timestamp, yesterday)
-      ))
-      .limit(1);
+    // FORCE DELETE all old pulses for EMP_MAADI and recreate fresh
+    console.log('[seed] Deleting old pulses for EMP_MAADI...');
+    await db.delete(pulses).where(eq(pulses.employeeId, 'EMP_MAADI'));
     
-    if (existingPulses.length === 0) {
-      console.log('[seed] Adding 900 demo pulses for EMP_MAADI (300 EGP yesterday)...');
-      const demoPulses = [];
-      for (let i = 0; i < 900; i++) {
-        const pulseTime = new Date(yesterday.getTime() + i * 30 * 1000); // Every 30 seconds
-        demoPulses.push({
-          employeeId: 'EMP_MAADI',
-          timestamp: pulseTime,
-          latitude: 29.9602,
-          longitude: 31.2569,
-          isWithinGeofence: true,
-          isWithinWifi: true,
-          isFake: false,
-        });
-      }
-      
-      // Insert in batches to avoid timeout
-      const batchSize = 100;
-      for (let i = 0; i < demoPulses.length; i += batchSize) {
-        const batch = demoPulses.slice(i, i + batchSize);
-        await db.insert(pulses).values(batch);
-      }
-      console.log('[seed] Added 900 pulses for EMP_MAADI successfully!');
+    console.log('[seed] Adding 900 demo pulses for EMP_MAADI (300 EGP today for testing)...');
+    const demoPulses = [];
+    for (let i = 0; i < 900; i++) {
+      const pulseTime = new Date(today.getTime() + i * 30 * 1000); // Every 30 seconds
+      demoPulses.push({
+        employeeId: 'EMP_MAADI',
+        timestamp: pulseTime,
+        latitude: 29.9602,
+        longitude: 31.2569,
+        isWithinGeofence: true,
+        isWithinWifi: true,
+        isFake: false,
+      });
     }
+    
+    // Insert in batches to avoid timeout
+    const batchSize = 100;
+    for (let i = 0; i < demoPulses.length; i += batchSize) {
+      const batch = demoPulses.slice(i, i + batchSize);
+      await db.insert(pulses).values(batch);
+    }
+    console.log('[seed] Added 900 pulses for EMP_MAADI successfully!');
   } catch (error) {
     console.error('[seed] ensureDemoData failed:', error);
   }
@@ -501,6 +551,97 @@ app.post('/api/attendance/check-out', async (req, res) => {
 });
 
 // =============================================================================
+// PULSES - عدد النبضات والأرباح اللحظية
+// =============================================================================
+
+// Get active employee pulse count for today (shift-based if active, else 0)
+app.get('/api/pulses/active/:employeeId', async (req, res) => {
+  try {
+    const { employeeId } = req.params;
+    const today = new Date().toISOString().split('T')[0];
+
+    const [todayAttendance] = await db
+      .select()
+      .from(attendance)
+      .where(and(eq(attendance.employeeId, employeeId), eq(attendance.date, today)))
+      .limit(1);
+
+    if (!todayAttendance || todayAttendance.status !== 'active') {
+      return res.json({ success: true, active: false, validPulseCount: 0, earnings: 0 });
+    }
+
+    const startTs = new Date(todayAttendance.checkInTime!);
+    const now = new Date();
+
+    const result = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(pulses)
+      .where(and(
+        eq(pulses.employeeId, employeeId),
+        eq(pulses.isWithinGeofence, true),
+        gte(pulses.timestamp, startTs),
+        lte(pulses.timestamp, now)
+      ));
+
+    const validPulseCount = Number(result[0]?.count) || 0;
+    const HOURLY_RATE = 40;
+    const pulseValue = (HOURLY_RATE / 3600) * 30; // قيمة كل نبضة
+    const earnings = validPulseCount * pulseValue;
+
+    res.json({
+      success: true,
+      active: true,
+      validPulseCount,
+      earnings: parseFloat(earnings.toFixed(2)),
+      checkInTime: todayAttendance.checkInTime,
+    });
+  } catch (error) {
+    console.error('Get active pulses error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get pulse count for a custom period
+app.get('/api/pulses/period/:employeeId', async (req, res) => {
+  try {
+    const { employeeId } = req.params;
+    const { start, end } = req.query;
+
+    if (!start || !end) {
+      return res.status(400).json({ error: 'start and end query params are required (ISO date/time)' });
+    }
+
+    const startTs = new Date(String(start));
+    const endTs = new Date(String(end));
+
+    const result = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(pulses)
+      .where(and(
+        eq(pulses.employeeId, employeeId),
+        eq(pulses.isWithinGeofence, true),
+        gte(pulses.timestamp, startTs),
+        lte(pulses.timestamp, endTs)
+      ));
+
+    const validPulseCount = Number(result[0]?.count) || 0;
+    const HOURLY_RATE = 40;
+    const pulseValue = (HOURLY_RATE / 3600) * 30;
+    const earnings = validPulseCount * pulseValue;
+
+    res.json({
+      success: true,
+      validPulseCount,
+      earnings: parseFloat(earnings.toFixed(2)),
+      period: { start: startTs.toISOString(), end: endTs.toISOString() },
+    });
+  } catch (error) {
+    console.error('Get period pulses error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// =============================================================================
 // ATTENDANCE REQUESTS - طلبات الحضور/الانصراف
 // =============================================================================
 
@@ -633,15 +774,37 @@ app.post('/api/attendance/requests/:requestId/review', async (req, res) => {
 
     // If approved, create/update attendance record
     if (action === 'approve') {
-      const requestDate = new Date(request.requestedTime).toISOString().split('T')[0];
+      const requestedDateTime = new Date(request.requestedTime);
+      const requestDate = requestedDateTime.toISOString().split('T')[0];
 
       if (request.requestType === 'check-in') {
-        await db.insert(attendance).values({
-          employeeId: request.employeeId,
-          checkInTime: request.requestedTime,
-          date: requestDate,
-          status: 'active',
-        });
+        // Check if attendance already exists for this date
+        const [existing] = await db
+          .select()
+          .from(attendance)
+          .where(and(
+            eq(attendance.employeeId, request.employeeId),
+            eq(attendance.date, requestDate)
+          ))
+          .limit(1);
+
+        if (!existing) {
+          await db.insert(attendance).values({
+            employeeId: request.employeeId,
+            checkInTime: requestedDateTime,
+            date: requestDate,
+            status: 'active',
+          });
+        } else {
+          // Update existing record with the new check-in time
+          await db
+            .update(attendance)
+            .set({
+              checkInTime: requestedDateTime,
+              status: 'active',
+            })
+            .where(eq(attendance.id, existing.id));
+        }
       } else if (request.requestType === 'check-out') {
         const [activeAttendance] = await db
           .select()
@@ -654,7 +817,7 @@ app.post('/api/attendance/requests/:requestId/review', async (req, res) => {
           .limit(1);
 
         if (activeAttendance) {
-          const checkOutTime = new Date(request.requestedTime);
+          const checkOutTime = requestedDateTime;
           const checkInTime = new Date(activeAttendance.checkInTime!);
           const workHours = (checkOutTime.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
 
@@ -677,7 +840,9 @@ app.post('/api/attendance/requests/:requestId/review', async (req, res) => {
     });
   } catch (error) {
     console.error('Review request error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Error stack:', error?.stack);
+    console.error('Error message:', error?.message);
+    res.status(500).json({ error: 'Internal server error', details: error?.message });
   }
 });
 
@@ -740,8 +905,8 @@ app.post('/api/leave/request', async (req, res) => {
     res.json({
       success: true,
       message: 'تم إرسال طلب الإجازة للمراجعة',
-      request: leaveRequest,
-      leaveRequest,
+      request: normalizeNumericFields(leaveRequest, ['daysCount', 'allowanceAmount']),
+      leaveRequest: normalizeNumericFields(leaveRequest, ['daysCount', 'allowanceAmount']),
       allowanceAmount,
     });
   } catch (error) {
@@ -783,7 +948,9 @@ app.get('/api/leave/requests', async (req, res) => {
 
     const requests = await query.orderBy(desc(leaveRequests.createdAt));
 
-    res.json({ requests });
+    res.json({ 
+      requests: requests.map(r => normalizeNumericFields(r, ['daysCount', 'allowanceAmount']))
+    });
   } catch (error) {
     console.error('Get leave requests error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -804,17 +971,17 @@ app.post('/api/leave/requests/:requestId/review', async (req, res) => {
       .update(leaveRequests)
       .set({
         status: action === 'approve' ? 'approved' : 'rejected',
-        reviewedBy: reviewer_id,
+        reviewedBy: req.body.reviewer_id,
         reviewedAt: new Date(),
-        reviewNotes: notes,
+        reviewNotes: req.body.notes,
       })
-      .where(eq(leaveRequests.id, requestId))
+      .where(eq(leaveRequests.id, req.params.requestId))
       .returning();
 
     res.json({
       success: true,
       message: action === 'approve' ? 'تم الموافقة على الإجازة' : 'تم رفض الإجازة',
-      request: updated,
+      request: normalizeNumericFields(updated, ['daysCount', 'allowanceAmount']),
     });
   } catch (error) {
     console.error('Review leave request error:', error);
@@ -911,8 +1078,8 @@ app.post('/api/advances/request', async (req, res) => {
     res.json({
       success: true,
       message: 'تم إرسال طلب السلفة للمراجعة',
-      advance,
-      request: advance,
+      advance: normalizeNumericFields(advance, ['amount', 'eligibleAmount', 'currentSalary']),
+      request: normalizeNumericFields(advance, ['amount', 'eligibleAmount', 'currentSalary']),
     });
   } catch (error) {
     console.error('Advance request error:', error);
@@ -949,7 +1116,9 @@ app.get('/api/advances', async (req, res) => {
 
     const advancesList = await query.orderBy(desc(advances.requestDate));
 
-    res.json({ advances: advancesList });
+    res.json({ 
+      advances: advancesList.map(a => normalizeNumericFields(a, ['amount', 'eligibleAmount']))
+    });
   } catch (error) {
     console.error('Get advances error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -966,59 +1135,33 @@ app.post('/api/advances/:advanceId/review', async (req, res) => {
       return res.status(400).json({ error: 'Action must be approve or reject' });
     }
 
-    const updateData: any = {
-      status: action === 'approve' ? 'approved' : 'rejected',
-      reviewedBy: reviewer_id,
-      reviewedAt: new Date(),
-    };
-
-    if (action === 'approve') {
-      updateData.paidAt = new Date();
-    }
-
+    // Update advance status
     const [updated] = await db
       .update(advances)
-      .set(updateData)
+      .set({
+        status: action === 'approve' ? 'approved' : 'rejected',
+        reviewedBy: reviewer_id,
+        reviewedAt: new Date(),
+      })
       .where(eq(advances.id, advanceId))
       .returning();
 
-    res.json({
-      success: true,
-      message: action === 'approve' ? 'تم الموافقة على السلفة' : 'تم رفض السلفة',
-      advance: updated,
-    });
-  } catch (error) {
-    console.error('Review advance error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// =============================================================================
-// ABSENCE NOTIFICATIONS & DEDUCTIONS - الغياب والخصومات
-// =============================================================================
-
-// Report absence (auto-notify manager)
-app.post('/api/absence/notify', async (req, res) => {
-  try {
-    const { employee_id, absence_date } = req.body;
-
-    if (!employee_id || !absence_date) {
-      return res.status(400).json({ error: 'Employee ID and absence date are required' });
+    // If approved, deduct the advance amount from salary by creating a deduction record
+    if (action === 'approve' && updated) {
+      await db.insert(deductions).values({
+        employeeId: updated.employeeId,
+        amount: String(updated.amount),
+        reason: 'سلفة معتمدة من المدير',
+        deductionDate: new Date().toISOString().split('T')[0],
+        deductionType: 'advance',
+        appliedBy: reviewer_id,
+      });
     }
 
-    const [notification] = await db
-      .insert(absenceNotifications)
-      .values({
-        employeeId: employee_id,
-        absenceDate: absence_date,
-        status: 'pending',
-      })
-      .returning();
-
     res.json({
       success: true,
-      message: 'تم إرسال إخطار الغياب للمدير',
-      notification,
+      message: action === 'approve' ? 'تم الموافقة على السلفة وخصمها من الراتب' : 'تم رفض السلفة',
+      advance: updated,
     });
   } catch (error) {
     console.error('Absence notification error:', error);
@@ -1448,6 +1591,62 @@ app.get('/api/employees/:id', async (req, res) => {
   }
 });
 
+// Get employee current earnings
+app.get('/api/employees/:id/current-earnings', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Get employee
+    const [employee] = await db
+      .select()
+      .from(employees)
+      .where(eq(employees.id, id))
+      .limit(1);
+
+    if (!employee) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    // Calculate real-time earnings based on pulses
+    const now = new Date();
+    const periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    
+    // Count valid pulses in current period
+    const validPulsesResult = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(pulses)
+      .where(and(
+        eq(pulses.employeeId, id),
+        eq(pulses.isWithinGeofence, true),
+        gte(pulses.timestamp, periodStart),
+        lte(pulses.timestamp, now)
+      ));
+
+    const validPulseCount = Number(validPulsesResult[0]?.count) || 0;
+    
+    // Calculate earnings (40 EGP/hour, pulse every 30 seconds = 0.333 EGP per pulse)
+    const HOURLY_RATE = 40;
+    const pulseValue = (HOURLY_RATE / 3600) * 30;
+    const totalEarnings = validPulseCount * pulseValue;
+    const maxAdvanceAmount = totalEarnings * 0.3;
+
+    res.json({
+      success: true,
+      totalEarnings,
+      total_earnings: totalEarnings,
+      maxAdvanceAmount,
+      max_advance_amount: maxAdvanceAmount,
+      eligibleAdvance: maxAdvanceAmount,
+      eligible_advance: maxAdvanceAmount,
+      validPulseCount,
+      periodStart: periodStart.toISOString(),
+    });
+  } catch (error) {
+    console.error('Get current earnings error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Create employee
 app.post('/api/employees', async (req, res) => {
   try {
@@ -1731,6 +1930,13 @@ app.get('/api/manager/dashboard', async (req, res) => {
       .where(eq(attendanceRequests.status, 'pending'))
       .orderBy(desc(attendanceRequests.createdAt));
 
+    // Ensure status and requestType are sent as strings
+    const normalizedAttendanceRequests = pendingAttendanceRequests.map(a => ({
+      ...a,
+      status: String(a.status),
+      requestType: String(a.requestType)
+    }));
+
     const pendingLeaveRequests = await db
       .select({
         id: leaveRequests.id,
@@ -1781,19 +1987,41 @@ app.get('/api/manager/dashboard', async (req, res) => {
       .where(eq(absenceNotifications.status, 'pending'))
       .orderBy(desc(absenceNotifications.notifiedAt));
 
+    const pendingBreaks = await db
+      .select({
+        id: breaks.id,
+        employeeId: breaks.employeeId,
+        employeeName: employees.fullName,
+        requestedDurationMinutes: breaks.requestedDurationMinutes,
+        status: breaks.status,
+        createdAt: breaks.createdAt,
+      })
+      .from(breaks)
+      .innerJoin(employees, eq(breaks.employeeId, employees.id))
+      .where(eq(breaks.status, 'PENDING'))
+      .orderBy(desc(breaks.createdAt));
+
+    // Ensure status is sent as string
+    const normalizedBreaks = pendingBreaks.map(b => ({
+      ...normalizeNumericFields(b, ['requestedDurationMinutes']),
+      status: String(b.status)
+    }));
+
     res.json({
       success: true,
       dashboard: {
-        attendanceRequests: pendingAttendanceRequests,
+        attendanceRequests: normalizedAttendanceRequests,
         leaveRequests: pendingLeaveRequests,
         advances: pendingAdvances,
         absences: pendingAbsences,
+        breakRequests: normalizedBreaks,
         summary: {
-          totalPendingRequests: pendingAttendanceRequests.length + pendingLeaveRequests.length + pendingAdvances.length + pendingAbsences.length,
+          totalPendingRequests: pendingAttendanceRequests.length + pendingLeaveRequests.length + pendingAdvances.length + pendingAbsences.length + pendingBreaks.length,
           attendanceRequestsCount: pendingAttendanceRequests.length,
           leaveRequestsCount: pendingLeaveRequests.length,
           advancesCount: pendingAdvances.length,
           absencesCount: pendingAbsences.length,
+          breakRequestsCount: pendingBreaks.length,
         }
       }
     });
@@ -2408,6 +2636,21 @@ app.get('/api/branches/:branchId/employees', async (req, res) => {
 
 // =============================================================================
 // BREAK MANAGEMENT SYSTEM - نظام إدارة الاستراحات
+// Delete all rejected breaks for an employee
+app.post('/api/breaks/delete-rejected', async (req, res) => {
+  try {
+    const { employee_id } = req.body;
+    if (!employee_id) {
+      return res.status(400).json({ error: 'employee_id is required' });
+    }
+    const deleted = await db.delete(breaks)
+      .where(and(eq(breaks.employeeId, employee_id), eq(breaks.status, 'REJECTED')));
+    res.json({ success: true, deleted });
+  } catch (error) {
+    console.error('Delete rejected breaks error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 // =============================================================================
 
 // Request a break
@@ -2428,9 +2671,17 @@ app.get('/api/breaks', async (req, res) => {
 
     const results = await query;
 
+    // Ensure numeric fields are numbers, not strings
+    const normalizedResults = results.map(breakItem => ({
+      ...breakItem,
+      requestedDurationMinutes: typeof breakItem.requestedDurationMinutes === 'string' 
+        ? parseInt(breakItem.requestedDurationMinutes) 
+        : breakItem.requestedDurationMinutes,
+    }));
+
     res.json({
       success: true,
-      breaks: results,
+      breaks: normalizedResults,
     });
   } catch (error) {
     console.error('Get breaks error:', error);
@@ -2444,6 +2695,29 @@ app.post('/api/breaks/request', async (req, res) => {
 
     if (!employee_id || !duration_minutes) {
       return res.status(400).json({ error: 'employee_id and duration_minutes are required' });
+    }
+
+    // Prevent duplicate break requests for the same day
+    const today = new Date();
+    today.setHours(0,0,0,0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+
+    const existingBreak = await db
+      .select()
+      .from(breaks)
+      .where(
+        and(
+          eq(breaks.employeeId, employee_id),
+          gte(breaks.createdAt, today),
+          lt(breaks.createdAt, tomorrow),
+          inArray(breaks.status, ['PENDING', 'APPROVED', 'ACTIVE'])
+        )
+      )
+      .limit(1);
+
+    if (existingBreak.length > 0) {
+      return res.status(400).json({ error: 'لا يمكنك تقديم أكثر من طلب استراحة في نفس اليوم' });
     }
 
     // Create break request
@@ -2505,27 +2779,62 @@ app.post('/api/breaks/:breakId/review', async (req, res) => {
     const { breakId } = req.params;
     const { action, manager_id } = req.body;
 
-    if (!action || !['approve', 'reject'].includes(action)) {
-      return res.status(400).json({ error: 'Action must be approve or reject' });
+    if (!action || !['approve', 'reject', 'postpone'].includes(action)) {
+      return res.status(400).json({ error: 'Action must be approve, reject or postpone' });
+    }
+
+    let setData: any = {
+      approvedBy: manager_id,
+      updatedAt: new Date(),
+    };
+
+    if (action === 'approve') {
+      setData.status = 'APPROVED';
+      setData.payoutEligible = false;
+    } else if (action === 'reject') {
+      setData.status = 'REJECTED';
+      setData.payoutEligible = false;
+    } else if (action === 'postpone') {
+      setData.status = 'POSTPONED';
+      setData.payoutEligible = true;
     }
 
     const [updated] = await db
       .update(breaks)
-      .set({
-        status: action === 'approve' ? 'APPROVED' : 'REJECTED',
-        approvedBy: manager_id,
-        updatedAt: new Date(),
-      })
+      .set(setData)
       .where(eq(breaks.id, breakId))
       .returning();
 
     res.json({
       success: true,
-      message: action === 'approve' ? 'تم الموافقة على الاستراحة' : 'تم رفض الاستراحة',
+      message: action === 'approve' ? 'تم الموافقة على الاستراحة' : action === 'reject' ? 'تم رفض الاستراحة' : 'تم تأجيل الاستراحة - متاح صرف الرصيد لاحقًا',
       break: updated,
     });
   } catch (error) {
     console.error('Break review error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Apply payout for a postponed break
+app.post('/api/breaks/:breakId/apply-payout', async (req, res) => {
+  try {
+    const { breakId } = req.params;
+    const { manager_id } = req.body;
+
+    const [br] = await db.select().from(breaks).where(eq(breaks.id, breakId)).limit(1);
+    if (!br) return res.status(404).json({ error: 'Break not found' });
+    if (!br.payoutEligible) return res.status(400).json({ error: 'Payout is not eligible for this break' });
+
+    const [updated] = await db
+      .update(breaks)
+      .set({ payoutApplied: true, payoutAppliedAt: new Date(), updatedAt: new Date(), approvedBy: manager_id })
+      .where(eq(breaks.id, breakId))
+      .returning();
+
+    res.json({ success: true, message: 'تم صرف مستحقات الاستراحة المؤجلة', break: updated });
+  } catch (error) {
+    console.error('Apply payout error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

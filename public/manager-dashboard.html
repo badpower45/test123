@@ -201,6 +201,7 @@
         <div id="leaveRequests" class="section"></div>
         <div id="advances" class="section"></div>
         <div id="absences" class="section"></div>
+        <div id="breakRequests" class="section"></div>
     </div>
 
     <script>
@@ -217,6 +218,7 @@
                     renderLeaveRequests(data.dashboard.leaveRequests);
                     renderAdvances(data.dashboard.advances);
                     renderAbsences(data.dashboard.absences);
+                    renderBreakRequests(data.dashboard.breakRequests || []);
                 }
             } catch (error) {
                 console.error('Error loading dashboard:', error);
@@ -246,6 +248,10 @@
                 <div class="summary-card">
                     <h3>${summary.absencesCount}</h3>
                     <p>إخطارات غياب</p>
+                </div>
+                <div class="summary-card">
+                    <h3>${summary.breakRequestsCount || 0}</h3>
+                    <p>طلبات استراحة</p>
                 </div>
             `;
         }
@@ -381,6 +387,64 @@
                 `).join('')}
             `;
             div.innerHTML = html;
+        }
+
+        function renderBreakRequests(requests) {
+            const div = document.getElementById('breakRequests');
+            if (requests.length === 0) {
+                div.innerHTML = `
+                    <h2>☕ طلبات الاستراحة</h2>
+                    <div class="empty-state">لا توجد طلبات معلقة</div>
+                `;
+                return;
+            }
+
+            const html = `
+                <h2>☕ طلبات الاستراحة (${requests.length})</h2>
+                ${requests.map(req => `
+                    <div class="request-card" style="border-right-color: #17a2b8;">
+                        <div class="request-header">
+                            <span class="employee-name">${req.employeeName}</span>
+                            <span class="request-type" style="background: #17a2b8;">استراحة</span>
+                        </div>
+                        <div class="request-details">
+                            <p><strong>المدة المطلوبة:</strong> ${req.requestedDurationMinutes} دقيقة</p>
+                            <p><strong>الحالة:</strong> ${req.status}</p>
+                            <p><strong>تاريخ الطلب:</strong> ${new Date(req.createdAt).toLocaleString('ar-EG')}</p>
+                        </div>
+                        <div class="actions">
+                            <button class="btn btn-approve" onclick="reviewBreakRequest('${req.id}', 'approve')">✅ موافقة</button>
+                            <button class="btn btn-reject" onclick="reviewBreakRequest('${req.id}', 'reject')">❌ رفض</button>
+                            <button class="btn" style="background: #ffc107;" onclick="reviewBreakRequest('${req.id}', 'postpone')">⏰ تأجيل</button>
+                        </div>
+                    </div>
+                `).join('')}
+            `;
+            div.innerHTML = html;
+        }
+
+        async function reviewBreakRequest(breakId, action) {
+            try {
+                const response = await fetch(`${API_URL}/api/breaks/${breakId}/review`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action,
+                        manager_id: 'MANAGER_ID' // TODO: Replace with actual manager ID
+                    })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    alert(data.message);
+                    loadDashboard();
+                } else {
+                    alert('خطأ: ' + (data.error || 'حدث خطأ'));
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('حدث خطأ في معالجة طلب الاستراحة');
+            }
         }
 
         async function reviewRequest(requestId, action, type) {

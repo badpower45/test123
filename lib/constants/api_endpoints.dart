@@ -52,6 +52,10 @@ const String BRANCH_EMPLOYEES_ENDPOINT =
 
 // Breaks
 const String BREAKS_ENDPOINT = '$API_BASE_URL/breaks';
+const String BREAKS_REQUEST_ENDPOINT = '$API_BASE_URL/breaks/request';
+const String BREAK_REVIEW_ENDPOINT = '$API_BASE_URL/breaks/:breakId/review';
+const String BREAK_START_ENDPOINT = '$API_BASE_URL/breaks/:breakId/start';
+const String BREAK_END_ENDPOINT = '$API_BASE_URL/breaks/:breakId/end';
 
 // Manager dashboard
 const String MANAGER_DASHBOARD_ENDPOINT = '$API_BASE_URL/manager/dashboard';

@@ -107,6 +107,9 @@ String? _readString(Map<String, dynamic> json, String key) {
 
 int? _readInt(Map<String, dynamic> json, String key) {
   final value = json[key];
+  if (value == null) {
+    return null;
+  }
   if (value is int) {
     return value;
   }
@@ -114,9 +117,16 @@ int? _readInt(Map<String, dynamic> json, String key) {
     return value.toInt();
   }
   if (value is String) {
-    return int.tryParse(value);
+    // Try parsing the string as int
+    final parsed = int.tryParse(value);
+    if (parsed != null) return parsed;
+    
+    // If it fails, try as double first then convert to int
+    final doubleValue = double.tryParse(value);
+    return doubleValue?.toInt();
   }
-  return null;
+  // Fallback: try converting to string then parse
+  return int.tryParse(value.toString());
 }
 
 DateTime? _readDate(Map<String, dynamic> json, String key) {

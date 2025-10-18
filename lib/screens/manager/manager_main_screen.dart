@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import '../../theme/app_colors.dart';
-import '../employee/requests_page.dart';
 import '../branch_manager_screen.dart';
+import 'attendance_page.dart';
+import 'attendance_requests_page.dart';
+import 'manager_report_page.dart';
+import 'manager_profile_page.dart';
 
 class ManagerMainScreen extends StatelessWidget {
   final String managerId;
@@ -38,9 +41,54 @@ class ManagerMainScreen extends StatelessWidget {
           ),
         ],
       ),
-      body: RequestsPage(
-        employeeId: managerId,
-        hideBreakTab: true,
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          ListTile(
+            leading: const Icon(Icons.event_available, color: AppColors.primaryOrange),
+            title: const Text('سجلات الحضور والغياب'),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => AttendancePage(managerId: managerId, branch: branch),
+                ),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.event_note, color: AppColors.info),
+            title: const Text('طلبات الحضور والانصراف'),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => AttendanceRequestsPage(managerId: managerId, branch: branch),
+                ),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.bar_chart, color: AppColors.success),
+            title: const Text('التقرير'),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => ManagerReportPage(managerId: managerId, branch: branch),
+                ),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.person, color: AppColors.textPrimary),
+            title: const Text('الملف الشخصي'),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => ManagerProfilePage(managerId: managerId),
+                ),
+              );
+            },
+          ),
+        ],
       ),
     );
   }

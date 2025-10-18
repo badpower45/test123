@@ -285,6 +285,9 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        _buildSectionTitle('طلبات الحضور والانصراف'),
+        _buildAttendanceRequests(),
+        const SizedBox(height: 24),
         _buildSectionTitle('تقرير الحضور اليومي'),
         _buildAttendanceReport(),
       ],
@@ -331,25 +334,25 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  'الموظف: ${breakReq['employeeId'] ?? ''}',
+                  'الموظف: ${breakReq['employeeName'] ?? breakReq['employeeId'] ?? ''}',
                   style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                 ),
                 Chip(
-                  label: Text(breakReq['status'] ?? 'pending'),
+                  label: Text(breakReq['status'] ?? 'PENDING'),
                   backgroundColor: _getStatusColor(breakReq['status']),
                 ),
               ],
             ),
             const SizedBox(height: 8),
-            Text('مدة الاستراحة: ${breakReq['durationMinutes'] ?? ''} دقيقة'),
+            Text('مدة الاستراحة: ${breakReq['requestedDurationMinutes'] ?? breakReq['durationMinutes'] ?? ''} دقيقة'),
             Text('تاريخ الطلب: ${breakReq['createdAt'] ?? ''}'),
-            if (breakReq['status'] == 'pending') ...[
+            if (breakReq['status'] == 'PENDING' || breakReq['status'] == 'pending') ...[
               const SizedBox(height: 12),
               Row(
                 children: [
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: () => _actOnRequest('break', breakReq['id'], 'approve'),
+                      onPressed: () => _reviewBreakRequest(breakReq['id'], 'approve'),
                       icon: const Icon(Icons.check),
                       label: const Text('موافقة'),
                       style: ElevatedButton.styleFrom(
@@ -358,14 +361,26 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
                       ),
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: () => _actOnRequest('break', breakReq['id'], 'reject'),
+                      onPressed: () => _reviewBreakRequest(breakReq['id'], 'reject'),
                       icon: const Icon(Icons.close),
                       label: const Text('رفض'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppColors.error,
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () => _reviewBreakRequest(breakReq['id'], 'postpone'),
+                      icon: const Icon(Icons.access_time),
+                      label: const Text('تأجيل'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange,
                         foregroundColor: Colors.white,
                       ),
                     ),
@@ -377,6 +392,24 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
         ),
       ),
     );
+  }
+
+  Future<void> _reviewBreakRequest(String breakId, String action) async {
+    try {
+      await BranchManagerApiService.reviewBreakRequest(
+        breakId: breakId,
+        action: action,
+        managerId: widget.managerId,
+      );
+      await _fetchData();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تم ${action == 'approve' ? 'الموافقة على' : action == 'reject' ? 'رفض' : 'تأجيل'} طلب الاستراحة')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('خطأ: ${e.toString()}'), backgroundColor: Colors.red),
+      );
+    }
   }
 
   Color _getStatusColor(String? status) {
@@ -528,6 +561,121 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
       case 'pending':
       default:
         return 'قيد الانتظار';
+    }
+  }
+
+  Widget _buildAttendanceRequests() {
+    if (_requests == null) return const SizedBox();
+    final attendanceReqs = _requests!['attendanceRequests'] as List? ?? [];
+    
+    if (attendanceReqs.isEmpty) {
+      return const Card(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Center(
+            child: Text('لا توجد طلبات حضور/انصراف معلقة', style: TextStyle(color: Colors.grey)),
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      children: attendanceReqs.map<Widget>((req) => _buildAttendanceRequestCard(req)).toList(),
+    );
+  }
+
+  Widget _buildAttendanceRequestCard(Map req) {
+    final isCheckIn = (req['requestType'] ?? 'check-in') == 'check-in';
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      isCheckIn ? Icons.login : Icons.logout,
+                      color: isCheckIn ? Colors.green : Colors.orange,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      isCheckIn ? 'طلب حضور' : 'طلب انصراف',
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                    ),
+                  ],
+                ),
+                Chip(
+                  label: Text(_getStatusLabel(req['status'])),
+                  backgroundColor: _getStatusColor(req['status']),
+                ),
+              ],
+            ),
+            const Divider(),
+            Text('الموظف: ${req['employeeName'] ?? req['employeeId'] ?? ''}', style: const TextStyle(fontSize: 14)),
+            const SizedBox(height: 4),
+            Text('الوقت المطلوب: ${req['requestedTime'] ?? ''}', style: const TextStyle(fontSize: 14)),
+            if (req['reason'] != null && req['reason'].toString().isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text('السبب: ${req['reason']}', style: const TextStyle(fontSize: 14, fontStyle: FontStyle.italic)),
+            ],
+            if (req['status'] == 'pending') ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () => _reviewAttendanceRequest(req['id'], 'approve'),
+                      icon: const Icon(Icons.check),
+                      label: const Text('موافقة'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.success,
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () => _reviewAttendanceRequest(req['id'], 'reject'),
+                      icon: const Icon(Icons.close),
+                      label: const Text('رفض'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.error,
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _reviewAttendanceRequest(String requestId, String action) async {
+    try {
+      await BranchManagerApiService.reviewAttendanceRequest(
+        requestId: requestId,
+        action: action,
+        reviewerId: widget.managerId,
+      );
+      await _fetchData();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تم ${action == 'approve' ? 'الموافقة على' : 'رفض'} طلب الحضور')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('خطأ: ${e.toString()}'), backgroundColor: Colors.red),
+      );
     }
   }
 

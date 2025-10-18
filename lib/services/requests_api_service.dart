@@ -9,6 +9,19 @@ import '../models/break.dart';
 import '../models/leave_request.dart';
 
 class RequestsApiService {
+  static Future<void> deleteRejectedBreaks(String employeeId) async {
+    final uri = Uri.parse('$BREAKS_ENDPOINT/delete-rejected');
+    final response = await http.post(
+      uri,
+      headers: _jsonHeaders,
+      body: jsonEncode({'employee_id': employeeId}),
+    );
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return;
+    }
+    final body = _decodeBody(response.body);
+    throw Exception(body['error'] ?? 'تعذر حذف الطلبات المرفوضة (${response.statusCode})');
+  }
   RequestsApiService._();
 
   static const Map<String, String> _jsonHeaders = {
@@ -110,7 +123,7 @@ class RequestsApiService {
     required int durationMinutes,
   }) async {
     final response = await http.post(
-      Uri.parse(BREAKS_ENDPOINT),
+      Uri.parse(BREAKS_REQUEST_ENDPOINT),
       headers: _jsonHeaders,
       body: jsonEncode({
         'employee_id': employeeId,
