@@ -14,6 +14,7 @@ export const branches = pgTable('branches', {
   latitude: numeric('latitude'),
   longitude: numeric('longitude'),
   geofenceRadius: integer('geofence_radius').default(100),
+  managerId: text('manager_id').references(() => employees.id),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
@@ -36,6 +37,7 @@ export const employees = pgTable('employees', {
   branch: text('branch'),
   branchId: uuid('branch_id').references(() => branches.id),
   monthlySalary: numeric('monthly_salary'),
+  hourlyRate: numeric('hourly_rate'),
   active: boolean('active').default(true).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../services/attendance_api_service.dart';
+import '../../services/branch_manager_api_service.dart';
 import '../../theme/app_colors.dart';
 
 class AttendanceRequestsPage extends StatefulWidget {
@@ -22,20 +23,31 @@ class _AttendanceRequestsPageState extends State<AttendanceRequestsPage> {
   }
 
   Future<List<Map<String, dynamic>>> _fetchAttendanceRequests() async {
-    // Replace with actual API call for attendance requests for manager's branch
-    // Example: AttendanceApiService.fetchAttendanceRequestsForManager
-    return [];
+    // جلب الطلبات من API الفرع
+    final result = await BranchManagerApiService.getBranchRequests(widget.branch);
+    // قد تختلف البنية حسب الاستجابة، عدل حسب الحاجة
+    final requests = result['pendingRequests']?['attendance'] ?? result['attendanceRequests'] ?? result['requests'] ?? [];
+    return List<Map<String, dynamic>>.from(requests);
   }
 
   void _reviewRequest(Map<String, dynamic> request, String action) async {
-    // Call API to approve/reject request
-    // Example: AttendanceApiService.reviewAttendanceRequest(request['id'], action)
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('تم $action الطلب بنجاح')),
-    );
-    setState(() {
-      _attendanceRequests = _fetchAttendanceRequests();
-    });
+    try {
+      await BranchManagerApiService.reviewAttendanceRequest(
+        requestId: request['id'].toString(),
+        action: action == 'الموافقة' ? 'approve' : 'reject',
+        reviewerId: widget.managerId,
+      );
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تم ${action == 'الموافقة' ? 'الموافقة' : 'الرفض'} على الطلب بنجاح')),
+      );
+      setState(() {
+        _attendanceRequests = _fetchAttendanceRequests();
+      });
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('خطأ: ${e.toString()}')),
+      );
+    }
   }
 
   @override

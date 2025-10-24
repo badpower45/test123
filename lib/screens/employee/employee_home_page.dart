@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../../constants/restaurant_config.dart';
+import '../../models/attendance_request.dart';
 import '../../services/attendance_api_service.dart';
 import '../../services/location_service.dart';
+import '../../services/requests_api_service.dart';
 import '../../theme/app_colors.dart';
 
 class EmployeeHomePage extends StatefulWidget {
@@ -37,7 +39,25 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
   }
 
   Future<void> _checkCurrentStatus() async {
-    // Check if user is currently checked in from backend
+    // Use the correct API to get employee status
+    try {
+      final status = await AttendanceApiService.fetchEmployeeStatus(widget.employeeId);
+      setState(() {
+        _isCheckedIn = status['attendance']?['status'] == 'active';
+        _checkInTime = status['attendance']?['checkInTime'] != null
+            ? DateTime.parse(status['attendance']['checkInTime'])
+            : null;
+      });
+      if (_isCheckedIn && _checkInTime != null) {
+        _startTimer();
+      }
+    } catch (e) {
+      // handle error
+    }
+  }
+
+  Future<void> reloadData() async {
+    await _checkCurrentStatus();
   }
 
   void _startTimer() {
@@ -185,104 +205,177 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
     }
   }
 
-  void _showAttendanceRequestDialog() {
-    showModalBottomSheet(
+  void _showAttendanceRequestDialog() async {
+    // تحقق من وجود طلب حضور لنفس اليوم
+    final today = DateTime.now();
+    final requests = await RequestsApiService.fetchAttendanceRequests(widget.employeeId);
+    final hasTodayRequest = requests.any((r) =>
+      r.requestedTime.year == today.year &&
+      r.requestedTime.month == today.month &&
+      r.requestedTime.day == today.day &&
+      r.status == RequestStatus.pending
+    );
+    if (hasTodayRequest) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('لا يمكنك إرسال أكثر من طلب حضور في نفس اليوم'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
+    final reasonController = TextEditingController();
+    DateTime? selectedTime = DateTime.now();
+
+    await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => Container(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).viewInsets.bottom,
-        ),
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: AppColors.primaryOrange.withOpacity(0.1),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => Container(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).viewInsets.bottom,
+          ),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppColors.primaryOrange.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.calendar_today,
+                        color: AppColors.primaryOrange,
+                        size: 24,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'طلب تسجيل حضور',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.textPrimary,
+                            ),
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            'للموظفين الذين نسوا التسجيل',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+                TextField(
+                  controller: reasonController,
+                  decoration: InputDecoration(
+                    labelText: 'السبب',
+                    hintText: 'اكتب سبب نسيان التسجيل...',
+                    border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: const Icon(
-                      Icons.calendar_today,
-                      color: AppColors.primaryOrange,
-                      size: 24,
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: AppColors.primaryOrange, width: 2),
                     ),
                   ),
-                  const SizedBox(width: 16),
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'طلب تسجيل حضور',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.textPrimary,
-                          ),
+                  maxLines: 3,
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    const Text('وقت الحضور:', style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(width: 8),
+                    TextButton(
+                      onPressed: () async {
+                        final picked = await showTimePicker(
+                          context: context,
+                          initialTime: TimeOfDay.fromDateTime(selectedTime!),
+                        );
+                        if (picked != null) {
+                          setModalState(() {
+                            selectedTime = DateTime(
+                              today.year, today.month, today.day, picked.hour, picked.minute);
+                          });
+                        }
+                      },
+                      child: Text(selectedTime != null
+                          ? '${selectedTime!.hour.toString().padLeft(2, '0')}:${selectedTime!.minute.toString().padLeft(2, '0')}'
+                          : '--:--'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+                ElevatedButton(
+                  onPressed: () async {
+                    final reason = reasonController.text.trim();
+                    if (reason.isEmpty || selectedTime == null) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('يرجى إدخال السبب ووقت الحضور'),
+                          backgroundColor: AppColors.error,
                         ),
-                        SizedBox(height: 4),
-                        Text(
-                          'للموظفين الذين نسوا التسجيل',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: AppColors.textSecondary,
-                          ),
+                      );
+                      return;
+                    }
+                    try {
+                      await RequestsApiService.submitAttendanceRequest(
+                        employeeId: widget.employeeId,
+                        requestedTime: selectedTime!,
+                        reason: reason,
+                      );
+                      Navigator.pop(context);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('✓ تم إرسال الطلب بنجاح'),
+                          backgroundColor: AppColors.success,
                         ),
-                      ],
+                      );
+                    } catch (e) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('خطأ: ${e.toString()}'),
+                          backgroundColor: AppColors.error,
+                        ),
+                      );
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryOrange,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
                     ),
                   ),
-                ],
-              ),
-              const SizedBox(height: 24),
-              TextField(
-                decoration: InputDecoration(
-                  labelText: 'السبب',
-                  hintText: 'اكتب سبب نسيان التسجيل...',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: AppColors.primaryOrange, width: 2),
+                  child: const Text(
+                    'إرسال الطلب',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                   ),
                 ),
-                maxLines: 3,
-              ),
-              const SizedBox(height: 24),
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('✓ تم إرسال الطلب بنجاح'),
-                      backgroundColor: AppColors.success,
-                    ),
-                  );
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primaryOrange,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                child: const Text(
-                  'إرسال الطلب',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

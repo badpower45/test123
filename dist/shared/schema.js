@@ -12,6 +12,7 @@ export const branches = pgTable('branches', {
     latitude: numeric('latitude'),
     longitude: numeric('longitude'),
     geofenceRadius: integer('geofence_radius').default(100),
+    managerId: text('manager_id').references(() => employees.id),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
@@ -31,6 +32,7 @@ export const employees = pgTable('employees', {
     branch: text('branch'),
     branchId: uuid('branch_id').references(() => branches.id),
     monthlySalary: numeric('monthly_salary'),
+    hourlyRate: numeric('hourly_rate'),
     active: boolean('active').default(true).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
@@ -260,7 +262,7 @@ export const branchManagers = pgTable('branch_managers', {
 // =============================================================================
 // BREAKS TABLE - Break Management System
 // =============================================================================
-export const breakStatusEnum = pgEnum('break_status', ['PENDING', 'APPROVED', 'REJECTED', 'ACTIVE', 'COMPLETED']);
+export const breakStatusEnum = pgEnum('break_status', ['PENDING', 'APPROVED', 'REJECTED', 'ACTIVE', 'COMPLETED', 'POSTPONED']);
 export const breaks = pgTable('breaks', {
     id: uuid('id').primaryKey().defaultRandom(),
     shiftId: uuid('shift_id').references(() => shifts.id, { onDelete: 'cascade' }),
@@ -270,6 +272,10 @@ export const breaks = pgTable('breaks', {
     startTime: timestamp('start_time', { withTimezone: true }),
     endTime: timestamp('end_time', { withTimezone: true }),
     approvedBy: text('approved_by').references(() => employees.id),
+    // Payout fields for postponed breaks
+    payoutEligible: boolean('payout_eligible').default(false).notNull(),
+    payoutApplied: boolean('payout_applied').default(false).notNull(),
+    payoutAppliedAt: timestamp('payout_applied_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({

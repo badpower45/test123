@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../../services/attendance_api_service.dart';
-import '../../models/attendance_report.dart';
 import '../../theme/app_colors.dart';
 
 class AttendancePage extends StatefulWidget {

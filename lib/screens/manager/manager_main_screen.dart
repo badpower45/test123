@@ -1,29 +1,65 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import '../../theme/app_colors.dart';
 import '../branch_manager_screen.dart';
-import 'attendance_page.dart';
-import 'attendance_requests_page.dart';
+import '../employee/refreshable_tab.dart';
+import 'manager_home_page.dart';
+import 'manager_requests_page.dart';
 import 'manager_report_page.dart';
 import 'manager_profile_page.dart';
 
-class ManagerMainScreen extends StatelessWidget {
+class ManagerMainScreen extends StatefulWidget {
+  const ManagerMainScreen({
+    super.key,
+    required this.managerId,
+    this.branch = '',
+    this.role = 'manager',
+  });
+
   final String managerId;
   final String branch;
-  final String? role;
+  final String role;
 
-  const ManagerMainScreen({
-    Key? key,
-    required this.managerId,
-    required this.branch,
-    this.role,
-  }) : super(key: key);
+  @override
+  State<ManagerMainScreen> createState() => _ManagerMainScreenState();
+}
+
+class _ManagerMainScreenState extends State<ManagerMainScreen> {
+  int _currentIndex = 0;
+  late List<Widget> _pages;
+  late List<GlobalKey<RefreshableTabState>> _tabKeys;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabKeys = List.generate(4, (_) => GlobalKey<RefreshableTabState>());
+    _pages = [
+      RefreshableTab(
+        key: _tabKeys[0],
+        builder: (context) => ManagerHomePage(managerId: widget.managerId),
+      ),
+      RefreshableTab(
+        key: _tabKeys[1],
+        builder: (context) => ManagerRequestsPage(managerId: widget.managerId),
+      ),
+      RefreshableTab(
+        key: _tabKeys[2],
+        builder: (context) => ManagerReportPage(managerId: widget.managerId, branch: widget.branch),
+      ),
+      RefreshableTab(
+        key: _tabKeys[3],
+        builder: (context) => ManagerProfilePage(managerId: widget.managerId),
+      ),
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.background,
       appBar: AppBar(
-        title: const Text('الرئيسية (مدير)'),
+        title: const Text('المدير'),
+        backgroundColor: AppColors.primaryOrange,
+        foregroundColor: Colors.white,
         actions: [
           IconButton(
             icon: const Icon(Icons.dashboard_customize),
@@ -32,8 +68,8 @@ class ManagerMainScreen extends StatelessWidget {
               Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (_) => BranchManagerScreen(
-                    managerId: managerId,
-                    branchName: branch,
+                    managerId: widget.managerId,
+                    branchName: widget.branch,
                   ),
                 ),
               );
@@ -41,54 +77,76 @@ class ManagerMainScreen extends StatelessWidget {
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          ListTile(
-            leading: const Icon(Icons.event_available, color: AppColors.primaryOrange),
-            title: const Text('سجلات الحضور والغياب'),
-            onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => AttendancePage(managerId: managerId, branch: branch),
-                ),
-              );
-            },
+      body: IndexedStack(
+        index: _currentIndex,
+        children: _pages,
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          _tabKeys[_currentIndex].currentState?.refresh();
+        },
+        child: const Icon(Icons.refresh),
+        tooltip: 'تحديث البيانات',
+      ),
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.1),
+              blurRadius: 10,
+              offset: const Offset(0, -2),
+            ),
+          ],
+        ),
+        child: BottomNavigationBar(
+          currentIndex: _currentIndex,
+          onTap: (index) {
+            setState(() {
+              _currentIndex = index;
+            });
+          },
+          type: BottomNavigationBarType.fixed,
+          backgroundColor: Colors.white,
+          selectedItemColor: AppColors.primaryOrange,
+          unselectedItemColor: Colors.grey,
+          selectedLabelStyle: GoogleFonts.ibmPlexSansArabic(
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
           ),
-          ListTile(
-            leading: const Icon(Icons.event_note, color: AppColors.info),
-            title: const Text('طلبات الحضور والانصراف'),
-            onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => AttendanceRequestsPage(managerId: managerId, branch: branch),
-                ),
-              );
-            },
+          unselectedLabelStyle: GoogleFonts.ibmPlexSansArabic(
+            fontSize: 12,
           ),
-          ListTile(
-            leading: const Icon(Icons.bar_chart, color: AppColors.success),
-            title: const Text('التقرير'),
-            onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => ManagerReportPage(managerId: managerId, branch: branch),
-                ),
-              );
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.person, color: AppColors.textPrimary),
-            title: const Text('الملف الشخصي'),
-            onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => ManagerProfilePage(managerId: managerId),
-                ),
-              );
-            },
-          ),
-        ],
+          items: const [
+            BottomNavigationBarItem(
+              icon: Icon(
+                Icons.home,
+                size: 28,
+              ),
+              label: 'الرئيسية',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(
+                Icons.assignment,
+                size: 28,
+              ),
+              label: 'الطلبات',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(
+                Icons.description,
+                size: 28,
+              ),
+              label: 'التقارير',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(
+                Icons.person,
+                size: 28,
+              ),
+              label: 'ملفي',
+            ),
+          ],
+        ),
       ),
     );
   }

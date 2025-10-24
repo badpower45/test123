@@ -12,6 +12,9 @@ class ProfilePage extends StatefulWidget {
 }
 
 class _ProfilePageState extends State<ProfilePage> {
+  Future<void> reloadData() async {
+    await _loadEmployee();
+  }
   Employee? _employee;
   bool _loading = true;
 

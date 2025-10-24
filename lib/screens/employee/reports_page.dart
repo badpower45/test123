@@ -11,6 +11,9 @@ class ReportsPage extends StatefulWidget {
 }
 
 class _ReportsPageState extends State<ReportsPage> {
+  Future<void> reloadData() async {
+    setState(() {}); // If you have API, call it here then setState
+  }
   bool get _isReportAvailable {
     final day = DateTime.now().day;
     return day == 1 || day == 16;

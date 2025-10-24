@@ -149,15 +149,8 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- =============================================================================
--- INITIAL DATA: Demo employees (optional)
+-- INITIAL DATA: No demo data - employees added via owner interface
 -- =============================================================================
--- Insert demo employees if they don't exist
-INSERT INTO profiles (id, full_name, employee_id, role)
-VALUES 
-    (gen_random_uuid(), 'مريم حسن', 'EMP001', 'admin'),
-    (gen_random_uuid(), 'عمر سعيد', 'EMP002', 'hr'),
-    (gen_random_uuid(), 'نورة عادل', 'EMP003', 'monitor')
-ON CONFLICT (employee_id) DO NOTHING;
 
 -- =============================================================================
 -- SCHEMA COMPLETE

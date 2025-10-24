@@ -16,6 +16,7 @@ class PulseConfig {
     required this.restaurantLon,
     required this.radiusInMeters,
     required this.enforceLocation,
+    this.allowedWifiBssid,
   });
 
   final String employeeId;
@@ -23,6 +24,7 @@ class PulseConfig {
   final double restaurantLon;
   final double radiusInMeters;
   final bool enforceLocation;
+  final String? allowedWifiBssid;
 
   Map<String, dynamic> toMap() => {
         'employeeId': employeeId,
@@ -30,6 +32,7 @@ class PulseConfig {
         'restaurantLon': restaurantLon,
         'radiusInMeters': radiusInMeters,
         'enforceLocation': enforceLocation,
+    'allowedWifiBssid': allowedWifiBssid,
       };
 
   static PulseConfig fromMap(Map<String, dynamic> map) => PulseConfig(
@@ -37,7 +40,8 @@ class PulseConfig {
         restaurantLat: (map['restaurantLat'] as num).toDouble(),
         restaurantLon: (map['restaurantLon'] as num).toDouble(),
         radiusInMeters: (map['radiusInMeters'] as num).toDouble(),
-        enforceLocation: (map['enforceLocation'] as bool?) ?? true,
+    enforceLocation: (map['enforceLocation'] as bool?) ?? true,
+    allowedWifiBssid: (map['allowedWifiBssid'] as String?),
       );
 }
 
@@ -52,7 +56,7 @@ class BackgroundPulseService {
       StreamController<Map<String, dynamic>?>.broadcast();
 
   static Future<void> initialize() async {
-    // No background isolate setup required in demo mode.
+    // Background isolate setup for pulse service.
   }
 
   static Future<void> start(PulseConfig config) async {
@@ -60,7 +64,7 @@ class BackgroundPulseService {
     _activeConfig = config;
     _pulseCounter = 0;
     _timer?.cancel();
-    _timer = Timer.periodic(const Duration(seconds: 5), (_) => _tick());
+    _timer = Timer.periodic(const Duration(seconds: 30), (_) => _tick());
     await _tick();
   }
 
@@ -91,10 +95,10 @@ class BackgroundPulseService {
       final isOnline =
           connectivityResults.any((result) => result != ConnectivityResult.none);
 
-      double latitude;
-      double longitude;
-  double distance;
-  bool isInside;
+    double latitude;
+    double longitude;
+    double distance;
+    bool isInside;
 
       if (config.enforceLocation) {
         final position = await LocationService().tryGetPosition();
@@ -122,12 +126,12 @@ class BackgroundPulseService {
           latitude,
           longitude,
         );
-        isInside = true; // [TESTING] Bypassed for testing
+        isInside = distance <= config.radiusInMeters;
       } else {
         latitude = config.restaurantLat;
         longitude = config.restaurantLon;
-  distance = 0;
-  isInside = true; // [TESTING] Bypassed for testing
+        distance = 0;
+        isInside = true;
       }
 
       String? wifiBssid;
@@ -138,6 +142,15 @@ class BackgroundPulseService {
         wifiBssid = null;
       }
 
+      bool wifiValid = true;
+      final allowedWifi = config.allowedWifiBssid?.toUpperCase().trim();
+      if (allowedWifi != null && allowedWifi.isNotEmpty) {
+        final normalizedBssid = wifiBssid?.toUpperCase().trim();
+        wifiValid = normalizedBssid != null && normalizedBssid == allowedWifi;
+      }
+
+      final geofenceValid = isInside;
+
       final timestamp = DateTime.now().toUtc();
       final pulse = Pulse(
         employeeId: config.employeeId,
@@ -145,6 +158,7 @@ class BackgroundPulseService {
         longitude: longitude,
         timestamp: timestamp,
         wifiBssid: wifiBssid,
+        isWithinGeofence: geofenceValid,
       );
 
       _pulseCounter++;
@@ -180,7 +194,11 @@ class BackgroundPulseService {
         'latitude': latitude,
         'longitude': longitude,
         'distanceInMeters': distance,
-        'isInsidePerimeter': isInside,
+        'isInsidePerimeter': geofenceValid,
+        'geofenceValid': geofenceValid,
+        'wifiValid': wifiValid,
+        'requiredWifiBssid': config.allowedWifiBssid,
+        'wifiBssid': wifiBssid,
         'isOnline': isOnline,
         'sentOnline': sentOnline,
         'queuedOffline': queuedOffline,
@@ -197,9 +215,6 @@ class BackgroundPulseService {
 }
 
 Future<bool> _sendPulse(Pulse pulse) async {
-  bool isWifiValid = true; // [TESTING] Bypassed for testing
-  bool isWithinGeofence = true; // [TESTING] Bypassed for testing
-
   final sent = await PulseBackendClient.sendPulse(pulse);
-  return sent && isWifiValid && isWithinGeofence;
+  return sent;
 }

@@ -36,7 +36,7 @@ class EmployeeRepository {
     await upsert(employee);
   }
 
-  /// Clear all locally cached employees (useful to avoid demo data conflicts)
+  /// Clear all locally cached employees (useful to refresh local cache from server)
   static Future<void> clearAll() async {
     final box = await _box();
     await box.clear();

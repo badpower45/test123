@@ -22,6 +22,9 @@ class RequestsPage extends StatefulWidget {
 }
 
 class _RequestsPageState extends State<RequestsPage> with SingleTickerProviderStateMixin {
+	Future<void> reloadData() async {
+		await _loadShiftStatus(showLoadingIndicator: true);
+	}
 	late final TabController _tabController;
 	ShiftStatus? _shiftStatus;
 	bool _shiftStatusLoading = false;

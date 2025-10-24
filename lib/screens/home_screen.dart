@@ -2,9 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:universal_io/io.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:universal_io/io.dart';
 
 import '../constants/restaurant_config.dart';
 import '../services/background_pulse_service.dart';
@@ -59,6 +59,8 @@ class _HomeScreenState extends State<HomeScreen> {
   DateTime? _lastOfflineReminderAt;
   DateTime? _lastFakePulseSnackAt;
   DateTime? _lastLocationWarningAt;
+  DateTime? _lastWifiWarningAt;
+  DateTime? _lastGeofenceWarningAt;
   Duration _elapsed = Duration.zero;
   bool _isSyncingOffline = false;
   int _syncInitialPending = 0;
@@ -92,8 +94,11 @@ class _HomeScreenState extends State<HomeScreen> {
       final longitude = (event['longitude'] as num?)?.toDouble();
       final distance = (event['distanceInMeters'] as num?)?.toDouble();
       final pendingOffline = (event['pendingOfflineCount'] as num?)?.toInt();
-    final deliveredOnline = event['sentOnline'] == true;
-    final queuedOffline = event['queuedOffline'] == true;
+      final wifiBssidSeen = (event['wifiBssid'] as String?);
+      final wifiValid = event['wifiValid'] != false;
+      final geofenceValid = event['geofenceValid'] != false;
+      final deliveredOnline = event['sentOnline'] == true;
+      final queuedOffline = event['queuedOffline'] == true;
       final totalPulseCount = (event['totalPulseCount'] as num?)?.toInt();
       final monthlyPulseCount = (event['monthlyPulseCount'] as num?)?.toInt();
       final pulseCounter = (event['pulseCounter'] as num?)?.toInt();
@@ -173,7 +178,7 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
 
-      if (isFake) {
+  if (isFake) {
         final shouldShowWarning =
             _lastFakePulseSnackAt == null ||
             DateTime.now().difference(_lastFakePulseSnackAt!) >
@@ -210,6 +215,48 @@ class _HomeScreenState extends State<HomeScreen> {
           );
         }
       }
+
+      // Wi-Fi mismatch warning (throttle)
+      final expectedWifiBssid = RestaurantConfig.allowedWifiBssid;
+      if (expectedWifiBssid != null && !wifiValid) {
+        final shouldWarnWifi = _lastWifiWarningAt == null ||
+            DateTime.now().difference(_lastWifiWarningAt!) >
+                const Duration(minutes: 3);
+        if (shouldWarnWifi) {
+          _lastWifiWarningAt = DateTime.now();
+          final message = wifiBssidSeen == null
+              ? 'غير متصل بأي شبكة واي فاي. تأكد من الاتصال بشبكة المطعم ($expectedWifiBssid).'
+              : 'شبكة الواي فاي المتصلة (${wifiBssidSeen.toUpperCase()}) لا تطابق الشبكة المصرح بها ($expectedWifiBssid).';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: AppColors.danger,
+              content: Text(
+                message,
+                textDirection: TextDirection.rtl,
+              ),
+            ),
+          );
+        }
+      }
+
+      // Geofence warning when outside perimeter (throttle)
+      if (_locationEnforced && !locationUnavailable && !geofenceValid) {
+        final shouldWarnGeo = _lastGeofenceWarningAt == null ||
+            DateTime.now().difference(_lastGeofenceWarningAt!) >
+                const Duration(minutes: 3);
+        if (shouldWarnGeo) {
+          _lastGeofenceWarningAt = DateTime.now();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: AppColors.danger,
+              content: const Text(
+                'أنت خارج النطاق المسموح للمطعم. قد لا تُحتسب الساعات إذا لم تعد داخل النطاق.',
+                textDirection: TextDirection.rtl,
+              ),
+            ),
+          );
+        }
+      }
     });
 
     _loadPendingCount();
@@ -228,9 +275,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadPulseHistoryStats() async {
     final total = await PulseHistoryRepository.totalPulseCount();
-    final monthly = await PulseHistoryRepository.monthlyPulseCount(
-      DateTime.now(),
-    );
+    final monthly = await PulseHistoryRepository.monthlyPulseCount(DateTime.now());
     if (!mounted) {
       return;
     }
@@ -314,6 +359,7 @@ class _HomeScreenState extends State<HomeScreen> {
         restaurantLon: RestaurantConfig.longitude,
         radiusInMeters: RestaurantConfig.allowedRadiusInMeters,
         enforceLocation: RestaurantConfig.enforceLocation,
+        allowedWifiBssid: RestaurantConfig.allowedWifiBssid,
       ),
     );
 

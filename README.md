@@ -38,6 +38,12 @@ The server provides the following main endpoints:
 - **Payroll**: `POST /api/payroll/calculate` - Calculate employee salary
 - **Dashboard**: `GET /manager-dashboard.html` - Manager dashboard
 
+### Initial Setup
+
+- On first run, the system creates a default owner account (ID: OWNER001, PIN: 1234).
+- Use this account to log in as owner and add employees via the owner interface.
+- No demo employees are included; all data is managed through the owner dashboard.
+
 ### Geofencing System
 
 The system validates employee location using:

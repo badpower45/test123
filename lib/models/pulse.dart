@@ -10,6 +10,7 @@ class Pulse extends HiveObject {
     required this.timestamp,
     this.wifiBssid,
     bool isFake = false,
+    this.isWithinGeofence,
   }) : isFake = isFake;
 
   final String employeeId;
@@ -18,12 +19,14 @@ class Pulse extends HiveObject {
   final DateTime timestamp;
   final String? wifiBssid;
   final bool isFake;
+  final bool? isWithinGeofence;
 
   Map<String, dynamic> toJson() => {
         'employee_id': employeeId,
         'latitude': latitude,
         'longitude': longitude,
         'wifi_bssid': wifiBssid,
+        'is_within_geofence': isWithinGeofence,
         'timestamp': timestamp.toIso8601String(),
         'is_fake': isFake,
       }..removeWhere((key, value) => value == null);
@@ -33,6 +36,7 @@ class Pulse extends HiveObject {
         'latitude': latitude,
         'longitude': longitude,
         'wifi_bssid': wifiBssid,
+        'is_within_geofence': isWithinGeofence,
         'timestamp': timestamp.toIso8601String(),
       }..removeWhere((key, value) => value == null);
 
@@ -45,6 +49,8 @@ class Pulse extends HiveObject {
         ),
         isFake: (json['is_fake'] ?? json['isFake'] ?? false) as bool,
         wifiBssid: (json['wifi_bssid'] ?? json['wifiBssid']) as String?,
+        isWithinGeofence:
+            (json['is_within_geofence'] ?? json['isWithinGeofence']) as bool?,
       );
 }
 
@@ -65,13 +71,14 @@ class PulseAdapter extends TypeAdapter<Pulse> {
       timestamp: DateTime.parse(fields[3] as String),
       isFake: fields[4] as bool? ?? false,
       wifiBssid: fields[5] as String?,
+      isWithinGeofence: fields[6] as bool?,
     );
   }
 
   @override
   void write(BinaryWriter writer, Pulse obj) {
     writer
-      ..writeByte(6)
+      ..writeByte(7)
       ..writeByte(0)
       ..write(obj.employeeId)
       ..writeByte(1)
@@ -83,7 +90,9 @@ class PulseAdapter extends TypeAdapter<Pulse> {
       ..writeByte(4)
       ..write(obj.isFake)
       ..writeByte(5)
-      ..write(obj.wifiBssid);
+      ..write(obj.wifiBssid)
+      ..writeByte(6)
+      ..write(obj.isWithinGeofence);
   }
 }
 

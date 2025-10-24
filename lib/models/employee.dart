@@ -2,7 +2,7 @@ import 'package:hive/hive.dart';
 
 const String employeesBox = 'employees';
 
-enum EmployeeRole { staff, monitor, hr, admin, manager }
+enum EmployeeRole { staff, monitor, hr, admin, manager, owner }
 
 enum EmployeePermission {
   monitorAccess,

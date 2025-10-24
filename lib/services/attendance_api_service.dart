@@ -6,6 +6,15 @@ import '../constants/api_endpoints.dart';
 import '../models/attendance_report.dart';
 
 class AttendanceApiService {
+  static Future<Map<String, dynamic>> fetchEmployeeStatus(String employeeId) async {
+    final uri = Uri.parse('$API_BASE_URL/employees/$employeeId/status');
+    final response = await http.get(uri, headers: _jsonHeaders);
+    final body = _decodeBody(response.body);
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return body;
+    }
+    throw Exception(body['error'] ?? 'تعذر تحميل حالة الموظف (${response.statusCode})');
+  }
   AttendanceApiService._();
 
   static const Map<String, String> _jsonHeaders = {

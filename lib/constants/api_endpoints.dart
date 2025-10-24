@@ -1,5 +1,4 @@
-// استخدم عنوان خادم AWS في هذا الوضع
-// Production AWS EC2 Server
+// Deployed server
 const String API_BASE_URL = 'http://16.171.208.249:5000/api';
 const String ROOT_BASE_URL = 'http://16.171.208.249:5000';
 
@@ -66,16 +65,11 @@ const String SHIFT_STATUS_ENDPOINT = '$API_BASE_URL/shifts/status';
 const String MANAGER_PROFILE_ENDPOINT = '$API_BASE_URL/manager/profile';
 
 // Owner dashboard
-const String OWNER_MANAGER_REQUESTS_ENDPOINT =
-	'$API_BASE_URL/owner/manager-requests';
-const String OWNER_MANAGER_REQUEST_REVIEW_ENDPOINT =
-	'$API_BASE_URL/owner/manager-requests/:requestId/review';
-const String OWNER_HOURLY_RATES_ENDPOINT = '$API_BASE_URL/owner/hourly-rates';
+const String OWNER_DASHBOARD_ENDPOINT = '$API_BASE_URL/owner/dashboard';
+const String OWNER_EMPLOYEES_OVERVIEW_ENDPOINT = '$API_BASE_URL/owner/employees';
 const String OWNER_EMPLOYEE_HOURLY_RATE_ENDPOINT =
-	'$API_BASE_URL/owner/employees/:employeeId/hourly-rate';
-const String OWNER_PEOPLE_DIRECTORY_ENDPOINT = '$API_BASE_URL/owner/people';
-const String OWNER_PERSON_PROFILE_ENDPOINT = '$API_BASE_URL/owner/people/:personId';
-const String OWNER_FINANCIAL_REPORT_ENDPOINT = '$API_BASE_URL/owner/financial-report';
+  '$API_BASE_URL/owner/employees/:employeeId/hourly-rate';
+const String OWNER_PAYROLL_SUMMARY_ENDPOINT = '$API_BASE_URL/owner/payroll/summary';
 
 // Manager dashboard
 const String MANAGER_DASHBOARD_ENDPOINT = '$API_BASE_URL/manager/dashboard';

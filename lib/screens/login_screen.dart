@@ -7,6 +7,7 @@ import '../models/employee.dart';
 import 'employee/employee_main_screen.dart';
 import 'manager/manager_main_screen.dart';
 import 'branch_manager_screen.dart';
+import 'owner/owner_main_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -51,13 +52,13 @@ class _LoginScreenState extends State<LoginScreen> {
     FocusScope.of(context).unfocus();
 
     try {
-      // Call backend API to authenticate employee
+      // Authenticate with server
       final employee = await AuthApiService.login(
         employeeId: employeeId,
         pin: pin,
       );
 
-      // Clear any local/demo employees to avoid stale demo data overriding server state
+      // Clear any local/demo employees to avoid stale data overriding server state
       await EmployeeRepository.clearAll();
 
       // Save employee to local cache (server-authoritative)
@@ -66,7 +67,16 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
 
       // Navigate based on role
-      if (employee.role == EmployeeRole.admin || employee.role == EmployeeRole.hr) {
+      if (employee.role == EmployeeRole.owner) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => OwnerMainScreen(
+              ownerId: employee.id,
+              ownerName: employee.fullName,
+            ),
+          ),
+        );
+      } else if (employee.role == EmployeeRole.admin || employee.role == EmployeeRole.hr) {
         // Admin/HR goes to branch manager dashboard directly
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
@@ -101,9 +111,9 @@ class _LoginScreenState extends State<LoginScreen> {
       }
     } catch (e) {
       if (!mounted) return;
-      
+
       setState(() => _isLoading = false);
-      
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(e.toString().replaceFirst('Exception: ', '')),

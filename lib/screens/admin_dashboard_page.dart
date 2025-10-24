@@ -8,6 +8,7 @@ import '../models/pulse_log_entry.dart';
 import '../services/background_pulse_service.dart';
 import '../services/employee_adjustment_repository.dart';
 import '../services/employee_repository.dart';
+import '../services/branch_api_service.dart';
 import '../theme/app_colors.dart';
 import 'login_screen.dart';
 
@@ -2648,10 +2649,11 @@ class _EmployeeFormSheetState extends State<_EmployeeFormSheet> {
   late final TextEditingController _idController;
   late final TextEditingController _nameController;
   late final TextEditingController _pinController;
-  late final TextEditingController _branchController;
   late final TextEditingController _salaryController;
+  late final Future<List<Map<String, dynamic>>> _branchesFuture;
   late EmployeeRole _role;
   late Set<EmployeePermission> _selectedPermissions;
+  String _selectedBranch = '';
 
   @override
   void initState() {
@@ -2660,14 +2662,15 @@ class _EmployeeFormSheetState extends State<_EmployeeFormSheet> {
     _idController = TextEditingController(text: existing?.id ?? '');
     _nameController = TextEditingController(text: existing?.fullName ?? '');
     _pinController = TextEditingController(text: existing?.pin ?? '');
-    _branchController = TextEditingController(text: existing?.branch ?? '');
     _salaryController = TextEditingController(
       text: existing?.monthlySalary.toStringAsFixed(2) ?? '',
     );
+    _selectedBranch = existing?.branch ?? '';
     _role = existing?.role ?? EmployeeRole.staff;
     _selectedPermissions = existing == null
         ? <EmployeePermission>{}
         : existing.permissions.toSet();
+    _branchesFuture = BranchApiService.getBranches();
   }
 
   @override
@@ -2675,7 +2678,6 @@ class _EmployeeFormSheetState extends State<_EmployeeFormSheet> {
     _idController.dispose();
     _nameController.dispose();
     _pinController.dispose();
-    _branchController.dispose();
     _salaryController.dispose();
     super.dispose();
   }
@@ -2728,12 +2730,33 @@ class _EmployeeFormSheetState extends State<_EmployeeFormSheet> {
                 ),
               ),
               const SizedBox(height: 16),
-              TextField(
-                controller: _branchController,
-                decoration: const InputDecoration(
-                  labelText: 'الفرع',
-                  border: OutlineInputBorder(),
-                ),
+              FutureBuilder<List<Map<String, dynamic>>>(
+                future: _branchesFuture,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const CircularProgressIndicator();
+                  }
+                  if (snapshot.hasError) {
+                    return Text('خطأ في تحميل الفروع: ${snapshot.error}');
+                  }
+                  final branches = snapshot.data ?? [];
+                  return DropdownButtonFormField<String>(
+                    value: _selectedBranch.isEmpty ? null : _selectedBranch,
+                    decoration: const InputDecoration(
+                      labelText: 'الفرع',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: [
+                      const DropdownMenuItem(value: '', child: Text('اختر الفرع')),
+                      ...branches.map((branch) => DropdownMenuItem(
+                        value: branch['name'] ?? '',
+                        child: Text(branch['name'] ?? ''),
+                      )),
+                    ],
+                    onChanged: (value) => setState(() => _selectedBranch = value ?? ''),
+                    validator: (value) => value?.isEmpty == true ? 'مطلوب' : null,
+                  );
+                },
               ),
               const SizedBox(height: 16),
               TextField(
@@ -2834,7 +2857,7 @@ class _EmployeeFormSheetState extends State<_EmployeeFormSheet> {
     final id = _idController.text.trim();
     final name = _nameController.text.trim();
     final pin = _pinController.text.trim();
-    final branch = _branchController.text.trim();
+    final branch = _selectedBranch.trim();
     final salaryInput = _salaryController.text.trim().replaceAll(',', '');
     final salary = double.tryParse(salaryInput);
 
@@ -3075,6 +3098,8 @@ class _AdjustmentFormResult {
 
 String _roleLabel(EmployeeRole role) {
   switch (role) {
+    case EmployeeRole.owner:
+      return 'مالك';
     case EmployeeRole.manager:
       return 'مدير فرع';
     case EmployeeRole.staff:

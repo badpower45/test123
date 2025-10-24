@@ -5,6 +5,7 @@ import 'employee_home_page.dart';
 import 'requests_page.dart';
 import 'reports_page.dart';
 import 'profile_page.dart';
+import 'refreshable_tab.dart';
 // import '../../models/employee.dart';
 import '../branch_manager_screen.dart';
 
@@ -23,19 +24,36 @@ class EmployeeMainScreen extends StatefulWidget {
 
 class _EmployeeMainScreenState extends State<EmployeeMainScreen> {
   int _currentIndex = 0;
-  late final List<Widget> _pages;
+  late List<Widget> _pages;
+  late List<GlobalKey<RefreshableTabState>> _tabKeys;
   bool get isManager => widget.role.toLowerCase() == 'manager';
 
   @override
   void initState() {
     super.initState();
+  _tabKeys = List.generate(isManager ? 5 : 4, (_) => GlobalKey<RefreshableTabState>());
     _pages = [
-      EmployeeHomePage(employeeId: widget.employeeId),
-      RequestsPage(employeeId: widget.employeeId),
-      ReportsPage(employeeId: widget.employeeId),
-      ProfilePage(employeeId: widget.employeeId),
+      RefreshableTab(
+        key: _tabKeys[0],
+        builder: (context) => EmployeeHomePage(employeeId: widget.employeeId),
+      ),
+      RefreshableTab(
+        key: _tabKeys[1],
+        builder: (context) => RequestsPage(employeeId: widget.employeeId),
+      ),
+      RefreshableTab(
+        key: _tabKeys[2],
+        builder: (context) => ReportsPage(employeeId: widget.employeeId),
+      ),
+      RefreshableTab(
+        key: _tabKeys[3],
+        builder: (context) => ProfilePage(employeeId: widget.employeeId),
+      ),
       if (isManager)
-        BranchManagerScreen(managerId: widget.employeeId, branchName: widget.branch),
+        RefreshableTab(
+          key: _tabKeys[4],
+          builder: (context) => BranchManagerScreen(managerId: widget.employeeId, branchName: widget.branch),
+        ),
     ];
   }
 
@@ -45,6 +63,13 @@ class _EmployeeMainScreenState extends State<EmployeeMainScreen> {
       body: IndexedStack(
         index: _currentIndex,
         children: _pages,
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          _tabKeys[_currentIndex].currentState?.refresh();
+        },
+        child: const Icon(Icons.refresh),
+        tooltip: 'تحديث البيانات',
       ),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(

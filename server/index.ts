@@ -2,12 +2,13 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import bcrypt from 'bcrypt';
 import { db } from './db.js';
-import { 
-  employees, attendance, attendanceRequests, leaveRequests, advances, 
-  deductions, absenceNotifications, pulses, users, roles, permissions, 
+import {
+  employees, attendance, attendanceRequests, leaveRequests, advances,
+  deductions, absenceNotifications, pulses, users, roles, permissions,
   rolePermissions, userRoles, branches, branchManagers, breaks
-} from '../shared/schema.js';
+} from '@shared/schema.js';
 import { eq, and, gte, lte, lt, desc, sql, between, inArray } from 'drizzle-orm';
 import { requirePermission, getUserPermissions, checkUserPermission } from './auth.js';
 
@@ -19,6 +20,7 @@ const PORT = Number(process.env.PORT) || 5000;
 
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, '../public')));
 
 // =============================================================================
@@ -43,6 +45,47 @@ function normalizeNumericFields(obj: any, fields: string[]): any {
     }
   }
   return normalized;
+}
+
+function extractRows<T>(result: T[] | { rows?: T[] } | null | undefined): T[] {
+  if (Array.isArray(result)) {
+    return result;
+  }
+  if (result && typeof result === 'object') {
+    const rows = (result as { rows?: unknown }).rows;
+    if (Array.isArray(rows)) {
+      return rows as T[];
+    }
+  }
+  return [];
+}
+
+function extractFirstRow<T>(result: T[] | { rows?: T[] } | null | undefined): T | undefined {
+  const rows = extractRows<T>(result);
+  return rows.length > 0 ? rows[0] : undefined;
+}
+
+async function getOwnerRecord(ownerId?: string) {
+  if (!ownerId) {
+    return null;
+  }
+
+  const [owner] = await db
+    .select()
+    .from(employees)
+    .where(eq(employees.id, ownerId))
+    .limit(1);
+
+  if (!owner) {
+    return null;
+  }
+
+  const role = owner.role as string;
+  if (role !== 'owner' && role !== 'admin') {
+    return null;
+  }
+
+  return owner;
 }
 
 // Force JSON-only API errors (avoid HTML bodies that cause Flutter FormatException)
@@ -136,7 +179,7 @@ app.post('/api/branch/request/:type/:id/:action', async (req, res) => {
     if (type === 'break') {
       const statusUpdate = action === 'approve' ? 'APPROVED' : action === 'reject' ? 'REJECTED' : 'POSTPONED';
       const payoutEligible = action === 'postpone';
-      const [updated] = await db
+      const updateResult = await db
         .update(breaks)
         .set({
           status: statusUpdate,
@@ -146,6 +189,7 @@ app.post('/api/branch/request/:type/:id/:action', async (req, res) => {
         })
         .where(eq(breaks.id, id))
         .returning();
+      const updated = extractFirstRow(updateResult);
       return res.json({ success: true, updated });
     } else {
       let table;
@@ -156,12 +200,13 @@ app.post('/api/branch/request/:type/:id/:action', async (req, res) => {
         case 'absence': table = absenceNotifications; break;
       }
       const status = action === 'approve' ? 'approved' : 'rejected';
-      const [updated] = await db
-        .update(table)
-        .set({ status, reviewedAt: new Date() })
-        .where(eq(table.id, id))
-        .returning();
-      return res.json({ success: true, updated });
+        const updateResult = await db
+          .update(table)
+          .set({ status, reviewedAt: new Date() })
+          .where(eq(table.id, id))
+          .returning();
+        const updated = extractFirstRow(updateResult);
+        return res.json({ success: true, updated });
     }
   } catch (err) {
     res.status(500).json({ error: 'Internal server error', message: err?.message });
@@ -221,11 +266,12 @@ app.post('/api/branch/attendance/edit', async (req, res) => {
         updateData.workHours = hours.toFixed(2);
       }
 
-      const [updated] = await db
+      const updateResult = await db
         .update(attendance)
         .set(updateData)
         .where(eq(attendance.id, existing.id))
         .returning();
+      const updated = extractFirstRow(updateResult);
 
       return res.json({ success: true, message: 'تم تحديث الحضور بنجاح', attendance: updated });
     } else {
@@ -245,10 +291,11 @@ app.post('/api/branch/attendance/edit', async (req, res) => {
         insertData.workHours = hours.toFixed(2);
       }
 
-      const [newAttendance] = await db
+      const insertResult = await db
         .insert(attendance)
         .values(insertData)
         .returning();
+      const newAttendance = extractFirstRow(insertResult);
 
       return res.json({ success: true, message: 'تم إنشاء سجل الحضور بنجاح', attendance: newAttendance });
     }
@@ -259,87 +306,69 @@ app.post('/api/branch/attendance/edit', async (req, res) => {
 });
 
 // -----------------------------------------------------------------------------
-// Demo data seeding: branches and employees (for local/dev)
+// Demo data seeding helpers (for local/dev and startup safety)
 // -----------------------------------------------------------------------------
-const ensureDemoData = async () => {
-  try {
-    // Minimal employees directory required by FK constraints
-    const demoEmployees = [
-      { id: 'EMP001', fullName: 'أحمد علي', pinHash: '1234', role: 'staff' as const, branch: 'فرع المعادي' },
-      { id: 'EMP002', fullName: 'سارة أحمد', pinHash: '2222', role: 'staff' as const, branch: 'فرع المعادي' },
-      { id: 'EMP003', fullName: 'محمد حسن', pinHash: '3333', role: 'manager' as const, branch: 'فرع المعادي' },
-      { id: 'EMP004', fullName: 'فاطمة محمد', pinHash: '4444', role: 'staff' as const, branch: 'فرع المعادي' },
-      // English-named demo accounts to avoid encoding issues for testing
-      { id: 'MGR_MAADI', fullName: 'Manager Maadi', pinHash: '8888', role: 'manager' as const, branch: 'Maadi' },
-      { id: 'EMP_MAADI', fullName: 'Employee Maadi', pinHash: '5555', role: 'staff' as const, branch: 'Maadi' },
-    ];
+type DemoSeedEmployee = {
+  id: string;
+  fullName: string;
+  pinHash: string;
+  role: 'owner' | 'admin' | 'manager' | 'hr' | 'monitor' | 'staff';
+  branch?: string;
+};
 
-    // Upsert employees (ignore if already exist)
-    for (const e of demoEmployees) {
-      try {
-        await db
-          .insert(employees)
-          .values({
-            id: e.id,
+// Default owner account for initial login
+const DEFAULT_OWNER: DemoSeedEmployee = {
+  id: 'OWNER001',
+  fullName: 'مالك النظام',
+  pinHash: '1234', // Default PIN, can be changed via interface
+  role: 'owner',
+  branch: 'جميع الفروع'
+};
+
+async function upsertDemoEmployees(records: DemoSeedEmployee[]) {
+  for (const e of records) {
+    try {
+      await db
+        .insert(employees)
+        .values({
+          id: e.id,
+          fullName: e.fullName,
+          pinHash: e.pinHash,
+          role: e.role,
+          branch: e.branch,
+          active: true,
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: employees.id,
+          set: {
             fullName: e.fullName,
             pinHash: e.pinHash,
             role: e.role,
             branch: e.branch,
             active: true,
             updatedAt: new Date(),
-          })
-          .onConflictDoUpdate({
-            target: employees.id,
-            set: {
-              fullName: e.fullName,
-              pinHash: e.pinHash,
-              role: e.role,
-              branch: e.branch,
-              active: true,
-              updatedAt: new Date(),
-            },
-          });
-      } catch (err) {
-        console.warn('[seed] failed to upsert employee', e.id, err);
-      }
+          },
+        });
+    } catch (err) {
+      console.warn('[seed] failed to upsert employee', e.id, err);
     }
+  }
+}
 
-    console.log('[seed] Demo employees ensured:', demoEmployees.map(d => d.id).join(', '));
-    
-    // Add demo earnings for EMP_MAADI (300 EGP TODAY via pulses for testing)
-    // 300 EGP at 40 EGP/hour = 7.5 hours
-    // 7.5 hours * 120 pulses/hour (30 sec interval) = 900 pulses
-    const today = new Date();
-    today.setHours(9, 0, 0, 0); // Start at 9 AM today
-    
-    // FORCE DELETE all old pulses for EMP_MAADI and recreate fresh
-    console.log('[seed] Deleting old pulses for EMP_MAADI...');
-    await db.delete(pulses).where(eq(pulses.employeeId, 'EMP_MAADI'));
-    
-    console.log('[seed] Adding 900 demo pulses for EMP_MAADI (300 EGP today for testing)...');
-    const demoPulses = [];
-    for (let i = 0; i < 900; i++) {
-      const pulseTime = new Date(today.getTime() + i * 30 * 1000); // Every 30 seconds
-      demoPulses.push({
-        employeeId: 'EMP_MAADI',
-        timestamp: pulseTime,
-        latitude: 29.9602,
-        longitude: 31.2569,
-        isWithinGeofence: true,
-        isWithinWifi: true,
-        isFake: false,
-      });
-    }
-    
-    // Insert in batches to avoid timeout
-    const batchSize = 100;
-    for (let i = 0; i < demoPulses.length; i += batchSize) {
-      const batch = demoPulses.slice(i, i + batchSize);
-      await db.insert(pulses).values(batch);
-    }
-    console.log('[seed] Added 900 pulses for EMP_MAADI successfully!');
+// Delete demo employees and ensure default owner account exists
+const ensureCleanAndDefaultOwner = async () => {
+  try {
+    // Delete demo employees from database
+    const demoIds = ['OWNER001', 'MGR_MAADI', 'EMP_MAADI', 'EMP001', 'EMP002', 'EMP003', 'EMP004', 'EMP005'];
+    await db.delete(employees).where(inArray(employees.id, demoIds));
+    console.log('[seed] Demo employees deleted:', demoIds.join(', '));
+
+    // Ensure default owner
+    await upsertDemoEmployees([DEFAULT_OWNER]);
+    console.log('[seed] Default owner account ensured:', DEFAULT_OWNER.id);
   } catch (error) {
-    console.error('[seed] ensureDemoData failed:', error);
+    console.error('[seed] ensureCleanAndDefaultOwner failed:', error);
   }
 };
 
@@ -358,11 +387,11 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', message: 'Oldies Workers API is running' });
 });
 
-// Dev endpoint to trigger seeding on-demand
+// Dev endpoint to trigger cleanup and seeding on-demand
 app.get('/api/dev/seed', async (req, res) => {
   try {
-    await ensureDemoData();
-    res.json({ success: true, message: 'Demo data ensured' });
+    await ensureCleanAndDefaultOwner();
+    res.json({ success: true, message: 'Demo employees deleted and default owner ensured' });
   } catch (err: any) {
     console.error('Dev seed error:', err);
     res.status(500).json({ error: 'Internal server error', message: err?.message });
@@ -379,7 +408,10 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     const { employee_id, pin } = req.body;
 
-    if (!employee_id || !pin) {
+    const normalizedEmployeeId = typeof employee_id === 'string' ? employee_id.trim() : String(employee_id ?? '').trim();
+    const normalizedPin = typeof pin === 'string' ? pin.trim() : String(pin ?? '').trim();
+
+    if (!normalizedEmployeeId || !normalizedPin) {
       return res.status(400).json({ error: 'Employee ID and PIN are required' });
     }
 
@@ -388,21 +420,32 @@ app.post('/api/auth/login', async (req, res) => {
       .select()
       .from(employees)
       .where(and(
-        eq(employees.id, employee_id),
+        eq(employees.id, normalizedEmployeeId),
         eq(employees.active, true)
       ))
       .limit(1);
 
     if (!employee) {
+      console.warn('[auth/login] Invalid ID - employee not found or inactive', {
+        employeeId: normalizedEmployeeId,
+      });
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
     // Verify PIN (demo: plaintext match against pinHash)
-    const providedPin = String(pin).trim();
+    const providedPin = normalizedPin;
     const storedPin = String(employee.pinHash || '').trim();
     if (!storedPin || providedPin !== storedPin) {
+      console.warn('[auth/login] Invalid PIN attempt', {
+        employeeId: normalizedEmployeeId,
+      });
       return res.status(401).json({ error: 'Invalid credentials' });
     }
+
+    console.log('[auth/login] Login successful', {
+      employeeId: employee.id,
+      role: employee.role,
+    });
 
     res.json({
       success: true,
@@ -454,7 +497,7 @@ app.post('/api/attendance/check-in', async (req, res) => {
     }
 
     // Create new attendance record
-    const [newAttendance] = await db
+    const insertResult = await db
       .insert(attendance)
       .values({
         employeeId: employee_id,
@@ -463,6 +506,7 @@ app.post('/api/attendance/check-in', async (req, res) => {
         status: 'active',
       })
       .returning();
+    const newAttendance = extractFirstRow(insertResult);
 
     // Create pulse for location tracking
     if (latitude && longitude) {
@@ -517,7 +561,7 @@ app.post('/api/attendance/check-out', async (req, res) => {
     const workHours = (checkOutTime.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
 
     // Update attendance record
-    const [updated] = await db
+    const updateResult = await db
       .update(attendance)
       .set({
         checkOutTime,
@@ -527,6 +571,7 @@ app.post('/api/attendance/check-out', async (req, res) => {
       })
       .where(eq(attendance.id, activeAttendance.id))
       .returning();
+    const updated = extractFirstRow(updateResult);
 
     // Create pulse for location tracking
     if (latitude && longitude) {
@@ -656,16 +701,34 @@ app.post('/api/attendance/request-checkin', async (req, res) => {
       });
     }
 
-    const [request] = await db
+    // تحقق من وجود طلب لنفس اليوم ولنفس الموظف
+    const reqDate = new Date(requested_time);
+    const reqDay = reqDate.toISOString().split('T')[0];
+    const [existing] = await db
+      .select()
+      .from(attendanceRequests)
+      .where(and(
+        eq(attendanceRequests.employeeId, employee_id),
+        eq(attendanceRequests.requestType, 'check-in'),
+        eq(attendanceRequests.status, 'pending'),
+        sql`DATE(${attendanceRequests.requestedTime}) = ${reqDay}`
+      ))
+      .limit(1);
+    if (existing) {
+      return res.status(400).json({ error: 'يوجد بالفعل طلب حضور معلق لهذا اليوم' });
+    }
+
+    const insertResult = await db
       .insert(attendanceRequests)
       .values({
         employeeId: employee_id,
         requestType: 'check-in',
-        requestedTime: new Date(requested_time),
+        requestedTime: reqDate,
         reason,
         status: 'pending',
       })
       .returning();
+    const request = extractFirstRow(insertResult);
 
     res.json({
       success: true,
@@ -689,7 +752,7 @@ app.post('/api/attendance/request-checkout', async (req, res) => {
       });
     }
 
-    const [request] = await db
+    const insertResult = await db
       .insert(attendanceRequests)
       .values({
         employeeId: employee_id,
@@ -699,6 +762,7 @@ app.post('/api/attendance/request-checkout', async (req, res) => {
         status: 'pending',
       })
       .returning();
+    const request = extractFirstRow(insertResult);
 
     res.json({
       success: true,
@@ -761,7 +825,7 @@ app.post('/api/attendance/requests/:requestId/review', async (req, res) => {
     }
 
     // Update request status
-    const [updated] = await db
+    const updateResult = await db
       .update(attendanceRequests)
       .set({
         status: action === 'approve' ? 'approved' : 'rejected',
@@ -771,6 +835,7 @@ app.post('/api/attendance/requests/:requestId/review', async (req, res) => {
       })
       .where(eq(attendanceRequests.id, requestId))
       .returning();
+    const updated = extractFirstRow(updateResult);
 
     // If approved, create/update attendance record
     if (action === 'approve') {
@@ -882,13 +947,13 @@ app.post('/api/leave/request', async (req, res) => {
     // Calculate days
     const daysCount = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
 
-    // Calculate allowance (100 EGP per day for <= 2 days)
+    // Calculate allowance (100 EGP fixed for <= 2 days, 0 for more than 2 days)
     let allowanceAmount = 0;
     if (daysCount <= 2) {
-      allowanceAmount = daysCount * 100;
+      allowanceAmount = 100; // حافز ثابت 100 جنيه
     }
 
-    const [leaveRequest] = await db
+    const insertResult = await db
       .insert(leaveRequests)
       .values({
         employeeId: employee_id,
@@ -901,6 +966,7 @@ app.post('/api/leave/request', async (req, res) => {
         status: 'pending',
       })
       .returning();
+    const leaveRequest = extractFirstRow(insertResult);
 
     res.json({
       success: true,
@@ -967,7 +1033,7 @@ app.post('/api/leave/requests/:requestId/review', async (req, res) => {
       return res.status(400).json({ error: 'Action must be approve or reject' });
     }
 
-    const [updated] = await db
+    const updateResult = await db
       .update(leaveRequests)
       .set({
         status: action === 'approve' ? 'approved' : 'rejected',
@@ -977,6 +1043,7 @@ app.post('/api/leave/requests/:requestId/review', async (req, res) => {
       })
       .where(eq(leaveRequests.id, req.params.requestId))
       .returning();
+    const updated = extractFirstRow(updateResult);
 
     res.json({
       success: true,
@@ -1064,7 +1131,7 @@ app.post('/api/advances/request', async (req, res) => {
       });
     }
 
-    const [advance] = await db
+    const insertResult = await db
       .insert(advances)
       .values({
         employeeId: employee_id,
@@ -1074,6 +1141,7 @@ app.post('/api/advances/request', async (req, res) => {
         status: 'pending',
       })
       .returning();
+    const advance = extractFirstRow(insertResult);
 
     res.json({
       success: true,
@@ -1136,7 +1204,7 @@ app.post('/api/advances/:advanceId/review', async (req, res) => {
     }
 
     // Update advance status
-    const [updated] = await db
+    const updateResult = await db
       .update(advances)
       .set({
         status: action === 'approve' ? 'approved' : 'rejected',
@@ -1145,6 +1213,7 @@ app.post('/api/advances/:advanceId/review', async (req, res) => {
       })
       .where(eq(advances.id, advanceId))
       .returning();
+    const updated = extractFirstRow(updateResult);
 
     // If approved, deduct the advance amount from salary by creating a deduction record
     if (action === 'approve' && updated) {
@@ -1220,14 +1289,15 @@ app.post('/api/absence/:notificationId/review', async (req, res) => {
     let deductionAmount = '0';
 
     // If rejected → apply 2 days deduction (غياب بدون إذن)
+    // حسب السيستم الإداري: الغياب مرة واحدة بدون إذن = خصم يومين كاملين
     if (action === 'reject') {
-      deductionAmount = '400'; // 2 days * 200 EGP/day
+      deductionAmount = '400'; // 2 days * 200 EGP/day (خصم يومين)
 
       // Create deduction record
       await db.insert(deductions).values({
         employeeId: notification.employeeId,
         amount: deductionAmount,
-        reason: notes || 'غياب بدون إذن - رفض المدير',
+        reason: notes || 'غياب بدون إذن - خصم يومين كاملين',
         deductionDate: notification.absenceDate,
         deductionType: 'absence',
         appliedBy: reviewer_id,
@@ -1235,7 +1305,7 @@ app.post('/api/absence/:notificationId/review', async (req, res) => {
     }
 
     // Update notification
-    const [updated] = await db
+    const updateResult = await db
       .update(absenceNotifications)
       .set({
         status: action === 'approve' ? 'approved' : 'rejected',
@@ -1246,6 +1316,7 @@ app.post('/api/absence/:notificationId/review', async (req, res) => {
       })
       .where(eq(absenceNotifications.id, notificationId))
       .returning();
+    const updated = extractFirstRow(updateResult);
 
     res.json({
       success: true,
@@ -1292,7 +1363,7 @@ app.post('/api/absence/:notificationId/apply-deduction', async (req, res) => {
     });
 
     // Update notification
-    const [updated] = await db
+    const updateResult = await db
       .update(absenceNotifications)
       .set({
         status: 'approved',
@@ -1303,6 +1374,7 @@ app.post('/api/absence/:notificationId/apply-deduction', async (req, res) => {
       })
       .where(eq(absenceNotifications.id, notificationId))
       .returning();
+    const updated = extractFirstRow(updateResult);
 
     res.json({
       success: true,
@@ -1320,18 +1392,22 @@ app.post('/api/absence/:notificationId/apply-deduction', async (req, res) => {
 // ATTENDANCE REPORTS - تقارير الحضور
 // =============================================================================
 
-// Get comprehensive employee report (يوم 1 و 16)
+// Get comprehensive employee report (يوم 1 و 16 من كل شهر)
+// يتم حساب حافز الغياب وجميع الخصومات والحوافز في هذا التقرير
+// حافز الغياب = 100 جنيه ثابت إذا لم يتجاوز عدد أيام الإجازة يومين
+// يتجدد الحافز كل 15 يوم (من 1-15 ومن 16-نهاية الشهر)
 app.get('/api/reports/comprehensive/:employeeId', async (req, res) => {
   try {
     const { employeeId } = req.params;
     const { start_date, end_date, skip_date_check } = req.query;
 
     // Check if it's 1st or 16th (skip for managers/admins)
+    // التقارير متاحة فقط يوم 1 (للفترة من 16-31) ويوم 16 (للفترة من 1-15)
     if (!skip_date_check) {
       const today = new Date().getDate();
       if (today !== 1 && today !== 16) {
         return res.status(403).json({ 
-          error: 'التقارير متاحة فقط يوم 1 و 16 من كل شهر' 
+          error: 'التقارير متاحة فقط يوم 1 و 16 من كل شهر - يتجدد حافز الغياب كل 15 يوم' 
         });
       }
     }
@@ -1425,8 +1501,18 @@ app.get('/api/reports/comprehensive/:employeeId', async (req, res) => {
       sum + parseFloat(leave.allowanceAmount || '0'), 0
     );
 
-    // Calculate net salary
-    const netSalary = grossSalary - totalAdvances - totalDeductions + totalLeaveAllowance;
+    // Calculate attendance allowance (حافز الغياب)
+    // يُمنح 100 جنيه إذا لم يتجاوز عدد أيام الإجازة المعتمدة يومين
+    let attendanceAllowance = 0;
+    const totalLeaveDays = leaves.reduce((sum, leave) => sum + (leave.daysCount || 0), 0);
+    
+    if (totalLeaveDays <= 2) {
+      attendanceAllowance = 100; // حافز الغياب 100 جنيه ثابت
+    }
+    // إذا أخذ إجازة أكثر من يومين → يخسر حافز الغياب
+
+  // Calculate net salary (خصومات الراتب تشمل السلف المعتمدة تلقائياً)
+  const netSalary = grossSalary - totalDeductions + totalLeaveAllowance + attendanceAllowance;
 
     res.json({
       employee: {
@@ -1450,6 +1536,7 @@ app.get('/api/reports/comprehensive/:employeeId', async (req, res) => {
         totalAdvances: parseFloat(totalAdvances.toFixed(2)),
         totalDeductions: parseFloat(totalDeductions.toFixed(2)),
         totalLeaveAllowance: parseFloat(totalLeaveAllowance.toFixed(2)),
+        attendanceAllowance: parseFloat(attendanceAllowance.toFixed(2)),
         netSalary: parseFloat(netSalary.toFixed(2)),
       },
       summary: {
@@ -1530,6 +1617,14 @@ app.get('/api/reports/attendance/:employeeId', async (req, res) => {
       sum + parseFloat(leave.allowanceAmount || '0'), 0
     );
 
+    // Calculate attendance allowance (حافز الغياب)
+    let attendanceAllowance = 0;
+    const totalLeaveDays = leaves.reduce((sum, leave) => sum + (leave.daysCount || 0), 0);
+    
+    if (totalLeaveDays <= 2) {
+      attendanceAllowance = 100; // حافز الغياب 100 جنيه ثابت
+    }
+
     res.json({
       employeeId,
       period: { start: start_date, end: end_date },
@@ -1542,6 +1637,7 @@ app.get('/api/reports/attendance/:employeeId', async (req, res) => {
         totalAdvances: parseFloat(totalAdvances.toFixed(2)),
         totalDeductions: parseFloat(totalDeductions.toFixed(2)),
         totalLeaveAllowance: parseFloat(totalLeaveAllowance.toFixed(2)),
+        attendanceAllowance: parseFloat(attendanceAllowance.toFixed(2)),
       }
     });
   } catch (error) {
@@ -1650,24 +1746,52 @@ app.get('/api/employees/:id/current-earnings', async (req, res) => {
 // Create employee
 app.post('/api/employees', async (req, res) => {
   try {
-    const { id, full_name, pin_hash, role, branch, monthly_salary } = req.body;
+    const { id, fullName, pin, branch, hourlyRate, role, active } = req.body;
 
-    if (!id || !full_name || !pin_hash) {
-      return res.status(400).json({ error: 'ID, full name, and PIN are required' });
+    // Validate required fields
+    if (!id || !fullName || !pin) {
+      return res.status(400).json({ error: 'id, fullName, and pin are required' });
     }
 
-    const [newEmployee] = await db
+    // Hash the PIN
+    const saltRounds = 10;
+    const pinHash = await bcrypt.hash(pin, saltRounds);
+
+    // Prepare insert data
+    const insertData: any = {
+      id,
+      fullName,
+      pinHash,
+      role: role || 'staff',
+      branch,
+      active: active !== undefined ? active : true,
+    };
+
+    // Add optional fields
+    if (hourlyRate !== undefined) {
+      insertData.hourlyRate = hourlyRate;
+    }
+
+    const result = await db
       .insert(employees)
-      .values({
-        id,
-        fullName: full_name,
-        pinHash: pin_hash,
-        role: role || 'staff',
-        branch,
-        monthlySalary: monthly_salary,
-        active: true,
-      })
+      .values(insertData)
       .returning();
+    const newEmployee = (() => {
+      if (Array.isArray(result)) {
+        return result[0];
+      }
+      if (result && typeof result === 'object' && 'rows' in result) {
+        const rows = (result as any).rows;
+        if (Array.isArray(rows)) {
+          return rows[0];
+        }
+      }
+      return null;
+    })();
+
+    if (!newEmployee) {
+      return res.status(500).json({ error: 'فشل إنشاء الموظف: استجابة غير متوقعة من قاعدة البيانات' });
+    }
 
     res.json({
       success: true,
@@ -1757,7 +1881,7 @@ app.post('/api/shifts/auto-checkout', async (req, res) => {
     const checkInTime = new Date(activeAttendance.checkInTime!);
     const workHours = (checkOutTime.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
 
-    const [updated] = await db
+    const updateResult = await db
       .update(attendance)
       .set({
         checkOutTime,
@@ -1767,6 +1891,7 @@ app.post('/api/shifts/auto-checkout', async (req, res) => {
       })
       .where(eq(attendance.id, activeAttendance.id))
       .returning();
+    const updated = extractFirstRow(updateResult);
 
     res.json({
       success: true,
@@ -2031,6 +2156,476 @@ app.get('/api/manager/dashboard', async (req, res) => {
   }
 });
 
+// =============================================================================
+// OWNER DASHBOARD - لوحة تحكم المالك
+// =============================================================================
+
+app.get('/api/owner/dashboard', async (req, res) => {
+  try {
+    const ownerId = req.query.owner_id as string | undefined;
+
+    if (!ownerId) {
+      return res.status(400).json({ error: 'owner_id is required' });
+    }
+
+    const ownerRecord = await getOwnerRecord(ownerId);
+    if (!ownerRecord) {
+      return res.status(403).json({ error: 'لا توجد صلاحيات للوصول إلى لوحة المالك' });
+    }
+
+    const pendingAttendanceRequests = await db
+      .select({
+        id: attendanceRequests.id,
+        employeeId: attendanceRequests.employeeId,
+        employeeName: employees.fullName,
+        employeeRole: employees.role,
+        employeeBranch: employees.branch,
+        requestType: attendanceRequests.requestType,
+        requestedTime: attendanceRequests.requestedTime,
+        reason: attendanceRequests.reason,
+        status: attendanceRequests.status,
+        createdAt: attendanceRequests.createdAt,
+      })
+      .from(attendanceRequests)
+      .innerJoin(employees, eq(attendanceRequests.employeeId, employees.id))
+      .where(and(
+        eq(attendanceRequests.status, 'pending'),
+        eq(employees.role, 'manager')
+      ))
+      .orderBy(desc(attendanceRequests.createdAt));
+
+    const normalizedAttendance = pendingAttendanceRequests.map(request => ({
+      ...request,
+      status: String(request.status),
+      requestType: String(request.requestType),
+    }));
+
+    const pendingLeaveRequests = await db
+      .select({
+        id: leaveRequests.id,
+        employeeId: leaveRequests.employeeId,
+        employeeName: employees.fullName,
+        employeeRole: employees.role,
+        employeeBranch: employees.branch,
+        startDate: leaveRequests.startDate,
+        endDate: leaveRequests.endDate,
+        leaveType: leaveRequests.leaveType,
+        reason: leaveRequests.reason,
+        daysCount: leaveRequests.daysCount,
+        allowanceAmount: leaveRequests.allowanceAmount,
+        status: leaveRequests.status,
+        createdAt: leaveRequests.createdAt,
+      })
+      .from(leaveRequests)
+      .innerJoin(employees, eq(leaveRequests.employeeId, employees.id))
+      .where(and(
+        eq(leaveRequests.status, 'pending'),
+        eq(employees.role, 'manager')
+      ))
+      .orderBy(desc(leaveRequests.createdAt));
+
+    const normalizedLeaveRequests = pendingLeaveRequests.map(request =>
+      normalizeNumericFields(request, ['allowanceAmount'])
+    );
+
+    const pendingAdvances = await db
+      .select({
+        id: advances.id,
+        employeeId: advances.employeeId,
+        employeeName: employees.fullName,
+        employeeRole: employees.role,
+        employeeBranch: employees.branch,
+        amount: advances.amount,
+        eligibleAmount: advances.eligibleAmount,
+        currentSalary: advances.currentSalary,
+        status: advances.status,
+        requestDate: advances.requestDate,
+      })
+      .from(advances)
+      .innerJoin(employees, eq(advances.employeeId, employees.id))
+      .where(and(
+        eq(advances.status, 'pending'),
+        eq(employees.role, 'manager')
+      ))
+      .orderBy(desc(advances.requestDate));
+
+    const normalizedAdvances = pendingAdvances.map(request =>
+      normalizeNumericFields(request, ['amount', 'eligibleAmount', 'currentSalary'])
+    );
+
+    const pendingAbsences = await db
+      .select({
+        id: absenceNotifications.id,
+        employeeId: absenceNotifications.employeeId,
+        employeeName: employees.fullName,
+        employeeRole: employees.role,
+        employeeBranch: employees.branch,
+        absenceDate: absenceNotifications.absenceDate,
+        status: absenceNotifications.status,
+        deductionApplied: absenceNotifications.deductionApplied,
+        notifiedAt: absenceNotifications.notifiedAt,
+      })
+      .from(absenceNotifications)
+      .innerJoin(employees, eq(absenceNotifications.employeeId, employees.id))
+      .where(and(
+        eq(absenceNotifications.status, 'pending'),
+        eq(employees.role, 'manager')
+      ))
+      .orderBy(desc(absenceNotifications.notifiedAt));
+
+    const pendingBreaks = await db
+      .select({
+        id: breaks.id,
+        employeeId: breaks.employeeId,
+        employeeName: employees.fullName,
+        employeeRole: employees.role,
+        employeeBranch: employees.branch,
+        requestedDurationMinutes: breaks.requestedDurationMinutes,
+        status: breaks.status,
+        createdAt: breaks.createdAt,
+      })
+      .from(breaks)
+      .innerJoin(employees, eq(breaks.employeeId, employees.id))
+      .where(and(
+        eq(breaks.status, 'PENDING'),
+        eq(employees.role, 'manager')
+      ))
+      .orderBy(desc(breaks.createdAt));
+
+    const normalizedBreaks = pendingBreaks.map(request => ({
+      ...normalizeNumericFields(request, ['requestedDurationMinutes']),
+      status: String(request.status),
+    }));
+
+    res.json({
+      success: true,
+      owner: {
+        id: ownerRecord.id,
+        name: ownerRecord.fullName,
+        role: ownerRecord.role,
+      },
+      dashboard: {
+        attendanceRequests: normalizedAttendance,
+        leaveRequests: normalizedLeaveRequests,
+        advances: normalizedAdvances,
+        absences: pendingAbsences,
+        breakRequests: normalizedBreaks,
+        summary: {
+          totalPendingRequests:
+            normalizedAttendance.length +
+            normalizedLeaveRequests.length +
+            normalizedAdvances.length +
+            pendingAbsences.length +
+            normalizedBreaks.length,
+          attendanceRequestsCount: normalizedAttendance.length,
+          leaveRequestsCount: normalizedLeaveRequests.length,
+          advancesCount: normalizedAdvances.length,
+          absencesCount: pendingAbsences.length,
+          breakRequestsCount: normalizedBreaks.length,
+        },
+      },
+    });
+  } catch (error) {
+    console.error('Owner dashboard error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// قائمة الموظفين للمالك
+app.get('/api/owner/employees', async (req, res) => {
+  try {
+    const ownerId = req.query.owner_id as string | undefined;
+
+    if (!ownerId) {
+      return res.status(400).json({ error: 'owner_id is required' });
+    }
+
+    const ownerRecord = await getOwnerRecord(ownerId);
+    if (!ownerRecord) {
+      return res.status(403).json({ error: 'لا توجد صلاحيات للوصول إلى بيانات الموظفين' });
+    }
+
+    const employeeRows = await db
+      .select({
+        id: employees.id,
+        fullName: employees.fullName,
+        role: employees.role,
+        branch: employees.branch,
+        branchId: employees.branchId,
+        monthlySalary: employees.monthlySalary,
+        hourlyRate: employees.hourlyRate,
+        active: employees.active,
+        createdAt: employees.createdAt,
+        updatedAt: employees.updatedAt,
+      })
+      .from(employees)
+      .orderBy(employees.fullName);
+
+    const employeesList = employeeRows.map(row =>
+      normalizeNumericFields(row, ['monthlySalary', 'hourlyRate'])
+    );
+
+    let totalHourlyRateAssigned = 0;
+    let totalMonthlySalary = 0;
+    let activeEmployees = 0;
+    let managersCount = 0;
+
+    for (const employee of employeesList) {
+      if (employee.active) {
+        activeEmployees += 1;
+      }
+      if (employee.role === 'manager') {
+        managersCount += 1;
+      }
+      if (typeof employee.hourlyRate === 'number' && !isNaN(employee.hourlyRate)) {
+        totalHourlyRateAssigned += employee.hourlyRate;
+      }
+      if (typeof employee.monthlySalary === 'number' && !isNaN(employee.monthlySalary)) {
+        totalMonthlySalary += employee.monthlySalary;
+      }
+    }
+
+    res.json({
+      success: true,
+      owner: {
+        id: ownerRecord.id,
+        name: ownerRecord.fullName,
+      },
+      employees: employeesList,
+      summary: {
+        totalEmployees: employeesList.length,
+        activeEmployees,
+        managersCount,
+        totalHourlyRateAssigned: Math.round(totalHourlyRateAssigned * 100) / 100,
+        totalMonthlySalary: Math.round(totalMonthlySalary * 100) / 100,
+      },
+    });
+  } catch (error) {
+    console.error('Owner employees list error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// تحديث سعر الساعة لموظف بواسطة المالك
+app.put('/api/owner/employees/:employeeId/hourly-rate', async (req, res) => {
+  try {
+    const ownerId = req.query.owner_id as string | undefined;
+    const { employeeId } = req.params;
+    const { hourly_rate } = req.body ?? {};
+
+    if (!ownerId) {
+      return res.status(400).json({ error: 'owner_id is required' });
+    }
+
+    const ownerRecord = await getOwnerRecord(ownerId);
+    if (!ownerRecord) {
+      return res.status(403).json({ error: 'لا توجد صلاحيات لتعديل سعر الساعة' });
+    }
+
+    if (hourly_rate === undefined || hourly_rate === null) {
+      return res.status(400).json({ error: 'hourly_rate is required' });
+    }
+
+    const parsedRate = Number(hourly_rate);
+    if (!Number.isFinite(parsedRate) || parsedRate < 0) {
+      return res.status(400).json({ error: 'hourly_rate must be a positive number' });
+    }
+
+    const [updatedEmployee] = await db
+      .update(employees)
+      .set({
+        hourlyRate: parsedRate.toString(),
+        updatedAt: new Date(),
+      })
+      .where(eq(employees.id, employeeId))
+      .returning({
+        id: employees.id,
+        fullName: employees.fullName,
+        role: employees.role,
+        branch: employees.branch,
+        monthlySalary: employees.monthlySalary,
+        hourlyRate: employees.hourlyRate,
+        updatedAt: employees.updatedAt,
+      });
+
+    if (!updatedEmployee) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    res.json({
+      success: true,
+      employee: normalizeNumericFields(updatedEmployee, ['monthlySalary', 'hourlyRate']),
+    });
+  } catch (error) {
+    console.error('Owner hourly rate update error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ملخص الرواتب لجميع الموظفين للمالك
+app.get('/api/owner/payroll/summary', async (req, res) => {
+  try {
+    const ownerId = req.query.owner_id as string | undefined;
+    const startDate = req.query.start_date as string | undefined;
+    const endDate = req.query.end_date as string | undefined;
+
+    if (!ownerId) {
+      return res.status(400).json({ error: 'owner_id is required' });
+    }
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'start_date and end_date are required' });
+    }
+
+    const ownerRecord = await getOwnerRecord(ownerId);
+    if (!ownerRecord) {
+      return res.status(403).json({ error: 'لا توجد صلاحيات للوصول إلى ملخص الرواتب' });
+    }
+
+    const startDateTime = new Date(`${startDate}T00:00:00.000Z`);
+    const endDateTime = new Date(`${endDate}T23:59:59.999Z`);
+
+    if (Number.isNaN(startDateTime.getTime()) || Number.isNaN(endDateTime.getTime())) {
+      return res.status(400).json({ error: 'Invalid date range provided' });
+    }
+
+    const employeeRows = await db
+      .select({
+        id: employees.id,
+        fullName: employees.fullName,
+        role: employees.role,
+        branch: employees.branch,
+        monthlySalary: employees.monthlySalary,
+        hourlyRate: employees.hourlyRate,
+        active: employees.active,
+      })
+      .from(employees)
+      .orderBy(employees.fullName);
+
+    const attendanceRecords = await db
+      .select({
+        employeeId: attendance.employeeId,
+        workHours: attendance.workHours,
+      })
+      .from(attendance)
+      .where(and(
+        gte(attendance.date, startDate),
+        lte(attendance.date, endDate)
+      ));
+
+    const pulsesSummary = await db
+      .select({
+        employeeId: pulses.employeeId,
+        totalValidPulses: sql<number>`COALESCE(SUM(CASE WHEN ${pulses.isWithinGeofence} = true THEN 1 ELSE 0 END), 0)`,
+      })
+      .from(pulses)
+      .where(and(
+        gte(pulses.timestamp, startDateTime),
+        lte(pulses.timestamp, endDateTime)
+      ))
+      .groupBy(pulses.employeeId);
+
+    const attendanceMap = new Map<string, { totalWorkHours: number; attendanceDays: number }>();
+    for (const record of attendanceRecords) {
+      const hoursValue = record.workHours !== null && record.workHours !== undefined
+        ? parseFloat(String(record.workHours))
+        : 0;
+      if (Number.isNaN(hoursValue)) {
+        continue;
+      }
+      const existing = attendanceMap.get(record.employeeId) || { totalWorkHours: 0, attendanceDays: 0 };
+      existing.totalWorkHours += hoursValue;
+      existing.attendanceDays += 1;
+      attendanceMap.set(record.employeeId, existing);
+    }
+
+    const pulsesMap = new Map<string, number>();
+    for (const row of pulsesSummary) {
+      pulsesMap.set(row.employeeId, Number(row.totalValidPulses) || 0);
+    }
+
+    const normalizedEmployees = employeeRows.map(row =>
+      normalizeNumericFields(row, ['monthlySalary', 'hourlyRate'])
+    );
+
+    const payrollDetails = [] as Array<{
+      id: string;
+      name: string;
+      role: string;
+      branch: string | null;
+      hourlyRate: number | null;
+      monthlySalary: number | null;
+      attendanceDays: number;
+      totalWorkHours: number;
+      totalValidPulses: number;
+      hourlyPay: number;
+      pulsePay: number;
+      totalComputedPay: number;
+      active: boolean;
+    }>;
+
+    let totalHourlyPay = 0;
+    let totalPulsePay = 0;
+
+    for (const employee of normalizedEmployees) {
+      const attendanceInfo = attendanceMap.get(employee.id) || { totalWorkHours: 0, attendanceDays: 0 };
+      const pulsesCount = pulsesMap.get(employee.id) || 0;
+      const hourlyRateValue = typeof employee.hourlyRate === 'number' && !isNaN(employee.hourlyRate)
+        ? employee.hourlyRate
+        : null;
+      const monthlySalaryValue = typeof employee.monthlySalary === 'number' && !isNaN(employee.monthlySalary)
+        ? employee.monthlySalary
+        : null;
+
+      const effectiveHourlyRate = hourlyRateValue ?? 0;
+      const hourlyPay = Math.round(attendanceInfo.totalWorkHours * effectiveHourlyRate * 100) / 100;
+      const pulseValue = effectiveHourlyRate > 0 ? (effectiveHourlyRate / 3600) * 30 : 0;
+      const pulsePay = Math.round(pulsesCount * pulseValue * 100) / 100;
+      const totalComputedPay = Math.round((hourlyPay + pulsePay) * 100) / 100;
+
+      totalHourlyPay += hourlyPay;
+      totalPulsePay += pulsePay;
+
+      payrollDetails.push({
+        id: employee.id,
+        name: employee.fullName,
+        role: employee.role,
+        branch: employee.branch,
+        hourlyRate: hourlyRateValue,
+        monthlySalary: monthlySalaryValue,
+        attendanceDays: attendanceInfo.attendanceDays,
+        totalWorkHours: Math.round(attendanceInfo.totalWorkHours * 100) / 100,
+        totalValidPulses: pulsesCount,
+        hourlyPay,
+        pulsePay,
+        totalComputedPay,
+        active: employee.active,
+      });
+    }
+
+    res.json({
+      success: true,
+      owner: {
+        id: ownerRecord.id,
+        name: ownerRecord.fullName,
+      },
+      period: {
+        start: startDate,
+        end: endDate,
+      },
+      payroll: payrollDetails,
+      summary: {
+        employeesCount: payrollDetails.length,
+        totalHourlyPay: Math.round(totalHourlyPay * 100) / 100,
+        totalPulsePay: Math.round(totalPulsePay * 100) / 100,
+        totalComputedPay: Math.round((totalHourlyPay + totalPulsePay) * 100) / 100,
+      },
+    });
+  } catch (error) {
+    console.error('Owner payroll summary error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Hierarchical approval dashboard (Manager/Owner)
 app.get('/api/approvals/pending/:reviewerId', async (req, res) => {
   try {
@@ -2187,7 +2782,8 @@ app.get('/api/approvals/pending/:reviewerId', async (req, res) => {
 // Calculate payroll based on attendance and pulses
 app.post('/api/payroll/calculate', async (req, res) => {
   try {
-    const { employee_id, start_date, end_date, hourly_rate = 40 } = req.body;
+    const { employee_id, start_date, end_date } = req.body;
+    const hourlyRateInput = req.body?.hourly_rate;
 
     if (!employee_id || !start_date || !end_date) {
       return res.status(400).json({ 
@@ -2204,6 +2800,17 @@ app.post('/api/payroll/calculate', async (req, res) => {
 
     if (!employee) {
       return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    let hourlyRate = 40;
+    if (hourlyRateInput !== undefined && hourlyRateInput !== null) {
+      hourlyRate = Number(hourlyRateInput);
+    } else if (employee.hourlyRate !== null && employee.hourlyRate !== undefined) {
+      hourlyRate = parseFloat(String(employee.hourlyRate));
+    }
+
+    if (!Number.isFinite(hourlyRate) || hourlyRate < 0) {
+      return res.status(400).json({ error: 'Invalid hourly rate provided' });
     }
 
     // Fetch all attendance records in the date range
@@ -2259,11 +2866,67 @@ app.post('/api/payroll/calculate', async (req, res) => {
     }
 
     // Calculate total pay
-    const totalPay = totalWorkHours * hourly_rate;
+    const totalPay = totalWorkHours * hourlyRate;
 
     // Calculate pulse-based pay (40 EGP/hour, pulse every 30 seconds = 0.333 EGP per pulse)
-    const pulseValue = (hourly_rate / 3600) * 30;
+    const pulseValue = (hourlyRate / 3600) * 30;
     const pulsePay = totalValidPulses * pulseValue;
+
+    // Get advances for this period
+    const advancesList = await db
+      .select()
+      .from(advances)
+      .where(and(
+        eq(advances.employeeId, employee_id),
+        eq(advances.status, 'approved'),
+        gte(advances.requestDate, new Date(start_date)),
+        lte(advances.requestDate, new Date(end_date))
+      ));
+
+    const totalAdvances = advancesList.reduce((sum, advance) => 
+      sum + parseFloat(advance.amount || '0'), 0
+    );
+
+    // Get deductions for this period
+    const deductionsList = await db
+      .select()
+      .from(deductions)
+      .where(and(
+        eq(deductions.employeeId, employee_id),
+        gte(deductions.deductionDate, start_date),
+        lte(deductions.deductionDate, end_date)
+      ));
+
+    const totalDeductions = deductionsList.reduce((sum, deduction) => 
+      sum + parseFloat(deduction.amount || '0'), 0
+    );
+
+    // Get approved leaves for this period
+    const leaves = await db
+      .select()
+      .from(leaveRequests)
+      .where(and(
+        eq(leaveRequests.employeeId, employee_id),
+        eq(leaveRequests.status, 'approved'),
+        gte(leaveRequests.startDate, start_date),
+        lte(leaveRequests.endDate, end_date)
+      ));
+
+    const totalLeaveAllowance = leaves.reduce((sum, leave) => 
+      sum + parseFloat(leave.allowanceAmount || '0'), 0
+    );
+
+    // Calculate attendance allowance (حافز الغياب)
+    // يُمنح 100 جنيه إذا لم يتجاوز عدد أيام الإجازة يومين
+    let attendanceAllowance = 0;
+    const totalLeaveDays = leaves.reduce((sum, leave) => sum + (leave.daysCount || 0), 0);
+    
+    if (totalLeaveDays <= 2) {
+      attendanceAllowance = 100; // حافز ثابت 100 جنيه
+    }
+
+    // Calculate net salary
+  const netSalary = pulsePay - totalDeductions + totalLeaveAllowance + attendanceAllowance;
 
     res.json({
       success: true,
@@ -2277,11 +2940,19 @@ app.post('/api/payroll/calculate', async (req, res) => {
         total_attendance_days: attendanceRecords.length,
         total_valid_pulses: totalValidPulses,
         total_work_hours: Math.round(totalWorkHours * 100) / 100,
-        hourly_rate,
+        hourly_rate: hourlyRate,
         pulse_value: Math.round(pulseValue * 1000) / 1000,
         total_pay_hours: Math.round(totalPay * 100) / 100,
         total_pay_pulses: Math.round(pulsePay * 100) / 100,
+        total_advances: Math.round(totalAdvances * 100) / 100,
+        total_deductions: Math.round(totalDeductions * 100) / 100,
+        total_leave_allowance: Math.round(totalLeaveAllowance * 100) / 100,
+        attendance_allowance: Math.round(attendanceAllowance * 100) / 100,
+        net_salary: Math.round(netSalary * 100) / 100,
         attendance_detail: attendanceDetail,
+        advances: advancesList,
+        deductions: deductionsList,
+        leaves: leaves,
       }
     });
   } catch (error) {
@@ -2389,10 +3060,11 @@ app.delete('/api/attendance/:attendanceId', async (req, res) => {
   try {
     const { attendanceId } = req.params;
 
-    const [deleted] = await db
+    const deleteResult = await db
       .delete(attendance)
       .where(eq(attendance.id, attendanceId))
       .returning();
+    const deleted = extractFirstRow(deleteResult);
 
     if (!deleted) {
       return res.status(404).json({ error: 'Attendance record not found' });
@@ -2462,11 +3134,13 @@ app.post('/api/pulses', async (req, res) => {
       return res.status(404).json({ error: 'Employee not found' });
     }
 
-    let wifiValid = true; // [TESTING] Bypassed for testing
-    let geofenceValid = true; // [TESTING] Bypassed for testing
+    let wifiValid = true;
+    let geofenceValid = true;
     let distance = 0;
+    let geofenceRadius = GEOFENCE_RADIUS_METERS;
 
-    // Use branch-specific geofence if available
+    // Use branch-specific geofence and wifi if available
+    let branchWifi: string | null = null;
     if (employee.branchId) {
       const [branch] = await db
         .select()
@@ -2483,6 +3157,12 @@ app.post('/api/pulses', async (req, res) => {
             parseFloat(branch.longitude)
           );
         }
+        if (branch.geofenceRadius) {
+          geofenceRadius = Number(branch.geofenceRadius) || geofenceRadius;
+        }
+        if (branch.wifiBssid) {
+          branchWifi = String(branch.wifiBssid).toUpperCase();
+        }
       }
     } else {
       // Fallback to default location
@@ -2494,8 +3174,22 @@ app.post('/api/pulses', async (req, res) => {
       );
     }
 
-    // Pulse is valid only if both checks pass
-    let isWithinGeofence = true; // [TESTING] Bypassed for testing
+    // Determine geofence validity
+    geofenceValid = distance <= geofenceRadius;
+
+    // Determine wifi validity: if branch specifies a wifiBssid, require match; otherwise treat as valid
+    if (branchWifi) {
+      if (!wifi_bssid) {
+        wifiValid = false;
+      } else {
+        wifiValid = String(wifi_bssid).toUpperCase() === branchWifi;
+      }
+    } else {
+      wifiValid = true;
+    }
+
+    // Pulse is within geofence if geofenceValid and not on active break
+    let isWithinGeofence = geofenceValid;
 
     // Check if employee has an active break
     const [activeBreak] = await db
@@ -2508,7 +3202,7 @@ app.post('/api/pulses', async (req, res) => {
       .limit(1);
 
     // Store pulse in database
-    const [pulse] = await db
+    const insertPulseResult = await db
       .insert(pulses)
       .values({
         employeeId: employee_id,
@@ -2519,14 +3213,17 @@ app.post('/api/pulses', async (req, res) => {
         sentFromDevice: true,
       })
       .returning();
+    const pulse = extractFirstRow(insertPulseResult);
+
+    const overallValid = activeBreak ? false : (wifiValid && geofenceValid);
 
     res.json({
       success: true,
       pulse: {
         id: pulse.id,
-  is_valid: activeBreak ? false : true, // [TESTING] Bypassed for testing
-  wifi_valid: true, // [TESTING] Bypassed for testing
-  geofence_valid: true, // [TESTING] Bypassed for testing
+        is_valid: overallValid,
+        wifi_valid: wifiValid,
+        geofence_valid: geofenceValid,
         distance_meters: Math.round(distance * 100) / 100,
         on_break: !!activeBreak,
       }
@@ -2550,7 +3247,7 @@ app.post('/api/branches', async (req, res) => {
       return res.status(400).json({ error: 'Branch name is required' });
     }
 
-    const [branch] = await db
+    const insertBranchResult = await db
       .insert(branches)
       .values({
         name,
@@ -2560,6 +3257,7 @@ app.post('/api/branches', async (req, res) => {
         geofenceRadius: geofence_radius || 100,
       })
       .returning();
+    const branch = extractFirstRow(insertBranchResult);
 
     res.json({
       success: true,
@@ -2597,18 +3295,22 @@ app.post('/api/branches/:branchId/assign-manager', async (req, res) => {
       return res.status(400).json({ error: 'Employee ID is required' });
     }
 
-    const [assignment] = await db
-      .insert(branchManagers)
-      .values({
-        employeeId: employee_id,
-        branchId,
-      })
+    // Update branch record with manager_id
+    const updateResult = await db
+      .update(branches)
+      .set({ managerId: employee_id })
+      .where(eq(branches.id, branchId))
       .returning();
+    const updatedBranch = extractFirstRow(updateResult);
+
+    if (!updatedBranch) {
+      return res.status(404).json({ error: 'Branch not found' });
+    }
 
     res.json({
       success: true,
       message: 'تم تعيين المدير للفرع بنجاح',
-      assignment,
+      branch: updatedBranch,
     });
   } catch (error) {
     console.error('Assign manager error:', error);
@@ -2721,7 +3423,7 @@ app.post('/api/breaks/request', async (req, res) => {
     }
 
     // Create break request
-    const [breakRequest] = await db
+    const insertBreakResult = await db
       .insert(breaks)
       .values({
         employeeId: employee_id,
@@ -2730,6 +3432,7 @@ app.post('/api/breaks/request', async (req, res) => {
         status: 'PENDING',
       })
       .returning();
+    const breakRequest = extractFirstRow(insertBreakResult);
 
     res.json({
       success: true,
@@ -2752,7 +3455,7 @@ app.post('/api/breaks', async (req, res) => {
     }
 
     // Create break request
-    const [breakRequest] = await db
+    const insertBreakResult = await db
       .insert(breaks)
       .values({
         employeeId: employee_id,
@@ -2761,6 +3464,7 @@ app.post('/api/breaks', async (req, res) => {
         status: 'PENDING',
       })
       .returning();
+    const breakRequest = extractFirstRow(insertBreakResult);
 
     res.json({
       success: true,
@@ -2799,11 +3503,12 @@ app.post('/api/breaks/:breakId/review', async (req, res) => {
       setData.payoutEligible = true;
     }
 
-    const [updated] = await db
+    const updateResult = await db
       .update(breaks)
       .set(setData)
       .where(eq(breaks.id, breakId))
       .returning();
+    const updated = extractFirstRow(updateResult);
 
     res.json({
       success: true,
@@ -2826,11 +3531,12 @@ app.post('/api/breaks/:breakId/apply-payout', async (req, res) => {
     if (!br) return res.status(404).json({ error: 'Break not found' });
     if (!br.payoutEligible) return res.status(400).json({ error: 'Payout is not eligible for this break' });
 
-    const [updated] = await db
+    const updateResult = await db
       .update(breaks)
       .set({ payoutApplied: true, payoutAppliedAt: new Date(), updatedAt: new Date(), approvedBy: manager_id })
       .where(eq(breaks.id, breakId))
       .returning();
+    const updated = extractFirstRow(updateResult);
 
     res.json({ success: true, message: 'تم صرف مستحقات الاستراحة المؤجلة', break: updated });
   } catch (error) {
@@ -2862,7 +3568,7 @@ app.post('/api/breaks/:breakId/start', async (req, res) => {
     const startTime = new Date();
     const endTime = new Date(startTime.getTime() + breakRecord.requestedDurationMinutes * 60000);
 
-    const [updated] = await db
+    const updateResult = await db
       .update(breaks)
       .set({
         status: 'ACTIVE',
@@ -2872,6 +3578,7 @@ app.post('/api/breaks/:breakId/start', async (req, res) => {
       })
       .where(eq(breaks.id, breakId))
       .returning();
+    const updated = extractFirstRow(updateResult);
 
     res.json({
       success: true,
@@ -2889,7 +3596,7 @@ app.post('/api/breaks/:breakId/end', async (req, res) => {
   try {
     const { breakId } = req.params;
 
-    const [updated] = await db
+    const updateResult = await db
       .update(breaks)
       .set({
         status: 'COMPLETED',
@@ -2897,6 +3604,7 @@ app.post('/api/breaks/:breakId/end', async (req, res) => {
       })
       .where(eq(breaks.id, breakId))
       .returning();
+    const updated = extractFirstRow(updateResult);
 
     res.json({
       success: true,
@@ -2910,6 +3618,10 @@ app.post('/api/breaks/:breakId/end', async (req, res) => {
 });
 
 // Listen on 0.0.0.0 to accept connections from all interfaces (including IPv4)
+console.log('[DEBUG] Cleaning demo employees and ensuring default owner on startup...');
+await ensureCleanAndDefaultOwner();
+console.log('[DEBUG] Cleanup and default owner check complete');
+
 console.log(`[DEBUG] About to call app.listen on port ${PORT}...`);
 
 const server = app.listen(PORT, '0.0.0.0', () => {

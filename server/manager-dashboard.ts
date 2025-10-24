@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { db } from './db.js';
-import { 
-  attendanceRequests, leaveRequests, advances, absenceNotifications, employees 
-} from '../shared/schema.js';
+import {
+  attendanceRequests, leaveRequests, advances, absenceNotifications, employees
+} from '@shared/schema.js';
 import { eq, desc } from 'drizzle-orm';
 
 const router = Router();

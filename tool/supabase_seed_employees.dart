@@ -7,6 +7,21 @@ import 'package:oldies_workers_app/config/app_config.dart';
 
 final _seedEmployees = [
   (
+    id: 'OWNER001',
+    name: 'محمد أحمد - المالك',
+    email: 'owner@oldies.com',
+    pin: '0000',
+    role: 'owner',
+    permissions: [
+      'manageEmployees',
+      'monitorAccess',
+      'viewPayroll',
+      'manageBranches',
+    ],
+    branch: 'جميع الفروع',
+    salary: 50000.0,
+  ),
+  (
     id: 'EMP001',
     name: 'مريم حسن',
     email: 'maryam.hassan@example.com',

@@ -140,6 +140,8 @@ class AuthApiService {
   /// Map server role string to EmployeeRole enum
   static EmployeeRole _mapRoleFromString(String? role) {
     switch (role?.toLowerCase()) {
+      case 'owner':
+        return EmployeeRole.owner;
       case 'admin':
         return EmployeeRole.admin;
       case 'hr':
@@ -151,6 +153,24 @@ class AuthApiService {
       case 'staff':
       default:
         return EmployeeRole.staff;
+    }
+  }
+
+  /// Map EmployeeRole enum to server role string
+  static String _mapRoleToString(EmployeeRole role) {
+    switch (role) {
+      case EmployeeRole.owner:
+        return 'owner';
+      case EmployeeRole.admin:
+        return 'admin';
+      case EmployeeRole.hr:
+        return 'hr';
+      case EmployeeRole.monitor:
+        return 'monitor';
+      case EmployeeRole.manager:
+        return 'manager';
+      case EmployeeRole.staff:
+        return 'staff';
     }
   }
 }

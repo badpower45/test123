@@ -31,6 +31,17 @@ class _AccountSeed {
 
 final _seedAccounts = <_AccountSeed>[
   const _AccountSeed(
+    employeeId: 'OWNER001',
+    fullName: 'محمد أحمد - المالك',
+    email: 'owner@oldies.com',
+    password: 'Oldies#Owner1',
+    pin: '0000',
+    role: 'owner',
+    permissions: ['manageEmployees', 'monitorAccess', 'viewPayroll', 'manageBranches'],
+    branch: 'جميع الفروع',
+    salary: 50000,
+  ),
+  const _AccountSeed(
     employeeId: 'EMP001',
     fullName: 'مريم حسن',
     email: 'maryam.hassan@example.com',
