@@ -14,9 +14,10 @@ export const branches = pgTable('branches', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
   managerId: uuid('manager_id').references(() => users.id),
-  geoLat: numeric('geo_lat'),
-  geoLon: numeric('geo_lon'),
-  geoRadius: integer('geo_radius').default(100),
+  latitude: numeric('latitude'),
+  longitude: numeric('longitude'),
+  geofenceRadius: integer('geofence_radius').default(100),
+  wifiBssid: text('wifi_bssid'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({

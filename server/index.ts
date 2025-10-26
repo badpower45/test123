@@ -3138,16 +3138,16 @@ app.post('/api/pulses', async (req, res) => {
         .limit(1);
 
       if (branch) {
-        if (branch.geoLat && branch.geoLon) {
+        if (branch.latitude && branch.longitude) {
           distance = calculateDistance(
             latitude,
             longitude,
-            parseFloat(branch.geoLat),
-            parseFloat(branch.geoLon)
+            parseFloat(branch.latitude),
+            parseFloat(branch.longitude)
           );
         }
-        if (branch.geoRadius) {
-          geofenceRadius = Number(branch.geoRadius) || geofenceRadius;
+        if (branch.geofenceRadius) {
+          geofenceRadius = Number(branch.geofenceRadius) || geofenceRadius;
         }
         if (branch.wifiBssid) {
           branchWifi = String(branch.wifiBssid).toUpperCase();
@@ -3252,9 +3252,10 @@ app.post('/api/branches', async (req, res) => {
       .insert(branches)
       .values({
         name,
-        geoLat: latitude ? latitude.toString() : null,
-        geoLon: longitude ? longitude.toString() : null,
-        geoRadius: geofence_radius || 100,
+        latitude: latitude ? latitude.toString() : null,
+        longitude: longitude ? longitude.toString() : null,
+        geofenceRadius: geofence_radius || 100,
+        wifiBssid: wifi_bssid || null,
       })
       .returning();
 
