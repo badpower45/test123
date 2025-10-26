@@ -3252,7 +3252,6 @@ app.post('/api/branches', async (req, res) => {
       .insert(branches)
       .values({
         name,
-        address: null, // Add address if needed
         geoLat: latitude ? latitude.toString() : null,
         geoLon: longitude ? longitude.toString() : null,
         geoRadius: geofence_radius || 100,
