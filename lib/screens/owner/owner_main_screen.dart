@@ -529,7 +529,6 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
                 final role = employee['role']?.toString() ?? '';
                 final branch = employee['branch']?.toString() ?? '';
                 final hourlyRate = _formatCurrency(employee['hourlyRate']);
-                final monthlySalary = _formatCurrency(employee['monthlySalary']);
                 return Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                   child: Card(
