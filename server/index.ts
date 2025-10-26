@@ -3389,7 +3389,7 @@ app.post('/api/branches', async (req, res) => {
     }
 
     // Insert the branch and get the new branch ID
-    const [newBranch] = await db
+    const result = await db
       .insert(branches)
       .values({
         name,
@@ -3399,9 +3399,14 @@ app.post('/api/branches', async (req, res) => {
         wifiBssid: wifi_bssid || null,
       })
       .returning();
+    
+    const newBranch = extractFirstRow(result);
+    if (!newBranch) {
+      return res.status(500).json({ error: 'Failed to create branch' });
+    }
 
     // If wifi_bssid is provided, insert it into branchBssids table
-    if (wifi_bssid && wifi_bssid.trim() !== '' && newBranch && newBranch.id) {
+    if (wifi_bssid && wifi_bssid.trim() !== '' && newBranch.id) {
       await db
         .insert(branchBssids)
         .values({
