@@ -1719,6 +1719,11 @@ app.post('/api/employees', async (req, res) => {
       : req.body.pinCode;
     const pin = typeof pinSource === 'string' ? pinSource.trim() : '';
 
+    // Get branchId (UUID) from request
+    const branchIdInput = typeof req.body.branchId === 'string' ? req.body.branchId.trim() : undefined;
+    const branchId = branchIdInput && branchIdInput !== '' ? branchIdInput : null;
+
+    // Optional: Keep branch name for backward compatibility
     const branchInput = typeof req.body.branch === 'string' ? req.body.branch.trim() : undefined;
     const branch = branchInput ? branchInput : null;
 
@@ -1755,6 +1760,7 @@ app.post('/api/employees', async (req, res) => {
       pinHash,
       role,
       branch,
+      branchId,  // Save branchId (UUID) for geofencing
       active,
     };
 
@@ -1770,6 +1776,7 @@ app.post('/api/employees', async (req, res) => {
         fullName: employees.fullName,
         role: employees.role,
         branch: employees.branch,
+        branchId: employees.branchId,
         hourlyRate: employees.hourlyRate,
         active: employees.active,
         createdAt: employees.createdAt,
@@ -1779,6 +1786,8 @@ app.post('/api/employees', async (req, res) => {
     if (!newEmployee) {
       return res.status(500).json({ error: 'فشل إنشاء الموظف: استجابة غير متوقعة من قاعدة البيانات' });
     }
+
+    console.log(`[Employee Created] ID: ${id}, Name: ${fullName}, Branch ID: ${branchId || 'null'}, Branch: ${branch || 'null'}`);
 
     res.status(201).json({
       success: true,

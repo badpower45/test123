@@ -65,7 +65,8 @@ class OwnerApiService {
     required String employeeId,
     required String fullName,
     required String pin,
-    required String branch,
+    String? branchId,  // Changed to branchId (UUID)
+    String? branch,    // Optional: branch name for backward compatibility
     required double hourlyRate,
   }) async {
     final uri = Uri.parse(employeesEndpoint);
@@ -77,7 +78,8 @@ class OwnerApiService {
         'ownerId': ownerId,
         'fullName': fullName,
         'pin': pin,
-        'branch': branch,
+        'branchId': branchId,  // Send branchId (UUID)
+        'branch': branch,      // Optional: send branch name
         'hourlyRate': hourlyRate,
         'role': 'staff',
         'active': true,

@@ -969,7 +969,8 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
   final _pinController = TextEditingController();
   final _hourlyRateController = TextEditingController();
   late Future<List<Map<String, dynamic>>> _branchesFuture;
-  String _selectedBranch = '';
+  String? _selectedBranchId;  // Changed to store UUID
+  String? _selectedBranchName;  // Optional: store name
 
   @override
   void initState() {
@@ -997,7 +998,8 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
         employeeId: _idController.text.trim(),
         fullName: _nameController.text.trim(),
         pin: _pinController.text.trim(),
-        branch: _selectedBranch,
+        branchId: _selectedBranchId,  // Send branchId (UUID)
+        branch: _selectedBranchName,  // Optional: send branch name
         hourlyRate: hourlyRate,
       );
 
@@ -1095,20 +1097,38 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
                   }
                   final branches = snapshot.data ?? [];
                   return DropdownButtonFormField<String>(
-                    value: _selectedBranch.isEmpty ? null : _selectedBranch,
+                    value: _selectedBranchId,
                     decoration: const InputDecoration(
                       labelText: 'الفرع',
                       border: OutlineInputBorder(),
                     ),
                     items: [
-                      const DropdownMenuItem(value: '', child: Text('اختر الفرع')),
-                      ...branches.map((branch) => DropdownMenuItem(
-                        value: branch['name'] ?? '',
-                        child: Text(branch['name'] ?? ''),
-                      )),
+                      const DropdownMenuItem(value: null, child: Text('اختر الفرع')),
+                      ...branches.map((branch) {
+                        final branchId = branch['id']?.toString();
+                        final branchName = branch['name']?.toString() ?? 'فرع بدون اسم';
+                        return DropdownMenuItem(
+                          value: branchId,
+                          child: Text(branchName),
+                        );
+                      }),
                     ],
-                    onChanged: (value) => setState(() => _selectedBranch = value ?? ''),
-                    validator: (value) => value?.isEmpty == true ? 'مطلوب' : null,
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedBranchId = value;
+                        // Find and store branch name
+                        if (value != null) {
+                          final selectedBranch = branches.firstWhere(
+                            (b) => b['id']?.toString() == value,
+                            orElse: () => {},
+                          );
+                          _selectedBranchName = selectedBranch['name']?.toString();
+                        } else {
+                          _selectedBranchName = null;
+                        }
+                      });
+                    },
+                    validator: (value) => value == null || value.isEmpty ? 'مطلوب' : null,
                   );
                 },
               ),
