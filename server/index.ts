@@ -3247,7 +3247,8 @@ app.post('/api/branches', async (req, res) => {
       return res.status(400).json({ error: 'Branch name is required' });
     }
 
-    await db
+    // Insert the branch and get the new branch ID
+    const [newBranch] = await db
       .insert(branches)
       .values({
         name,
@@ -3255,11 +3256,27 @@ app.post('/api/branches', async (req, res) => {
         geoLat: latitude ? latitude.toString() : null,
         geoLon: longitude ? longitude.toString() : null,
         geoRadius: geofence_radius || 100,
-      });
+      })
+      .returning();
+
+    // If wifi_bssid is provided, insert it into branchBssids table
+    if (wifi_bssid && wifi_bssid.trim() !== '' && newBranch && newBranch.id) {
+      await db
+        .insert(branchBssids)
+        .values({
+          branchId: newBranch.id,
+          bssidAddress: wifi_bssid.trim().toUpperCase(),
+        });
+      
+      console.log(`[Branch Created] Branch ID: ${newBranch.id}, Name: ${name}, BSSID: ${wifi_bssid.trim().toUpperCase()}`);
+    } else {
+      console.log(`[Branch Created] Branch ID: ${newBranch?.id}, Name: ${name}, No BSSID provided`);
+    }
 
     res.json({
       success: true,
       message: 'تم إنشاء الفرع بنجاح',
+      branchId: newBranch.id,
     });
   } catch (error) {
     console.error('Create branch error:', error);

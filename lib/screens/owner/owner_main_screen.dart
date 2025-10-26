@@ -3,6 +3,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:network_info_plus/network_info_plus.dart';
 
 import '../../services/branch_manager_api_service.dart';
 import '../../services/owner_api_service.dart';
@@ -1168,8 +1169,46 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
         _longitudeController.text = position.longitude.toString();
       });
     } catch (error) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('خطأ في الحصول على الموقع: $error')),
+      );
+    }
+  }
+
+  Future<void> _getCurrentWifiBssid() async {
+    try {
+      final networkInfo = NetworkInfo();
+      final wifiBSSID = await networkInfo.getWifiBSSID();
+      
+      if (wifiBSSID != null && wifiBSSID.isNotEmpty) {
+        setState(() {
+          _wifiNameController.text = wifiBSSID;
+        });
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('تم جلب BSSID بنجاح'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('لم يتم العثور على شبكة Wi-Fi. تأكد من الاتصال بالشبكة'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('خطأ في الحصول على BSSID: $error'),
+          backgroundColor: AppColors.error,
+        ),
       );
     }
   }
@@ -1248,12 +1287,29 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
               ),
               const SizedBox(height: 16),
 
-              TextFormField(
-                controller: _wifiNameController,
-                decoration: const InputDecoration(
-                  labelText: 'اسم الواي فاي',
-                  border: OutlineInputBorder(),
-                ),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _wifiNameController,
+                      decoration: const InputDecoration(
+                        labelText: 'Wi-Fi BSSID',
+                        hintText: 'XX:XX:XX:XX:XX:XX',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    onPressed: _getCurrentWifiBssid,
+                    icon: const Icon(Icons.wifi),
+                    tooltip: 'جلب BSSID الحالي',
+                    style: IconButton.styleFrom(
+                      backgroundColor: AppColors.primaryOrange.withOpacity(0.1),
+                      foregroundColor: AppColors.primaryOrange,
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 16),
 
