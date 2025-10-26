@@ -3400,29 +3400,30 @@ app.post('/api/branches', async (req, res) => {
       })
       .returning();
     
-    const newBranch = extractFirstRow(result);
+    const newBranch: any = extractFirstRow(result);
     if (!newBranch) {
       return res.status(500).json({ error: 'Failed to create branch' });
     }
 
     // If wifi_bssid is provided, insert it into branchBssids table
-    if (wifi_bssid && wifi_bssid.trim() !== '' && newBranch.id) {
+    const branchId = String(newBranch.id || '');
+    if (wifi_bssid && wifi_bssid.trim() !== '' && branchId) {
       await db
         .insert(branchBssids)
         .values({
-          branchId: newBranch.id,
+          branchId: branchId,
           bssidAddress: wifi_bssid.trim().toUpperCase(),
         });
       
-      console.log(`[Branch Created] Branch ID: ${newBranch.id}, Name: ${name}, BSSID: ${wifi_bssid.trim().toUpperCase()}`);
+      console.log(`[Branch Created] Branch ID: ${branchId}, Name: ${name}, BSSID: ${wifi_bssid.trim().toUpperCase()}`);
     } else {
-      console.log(`[Branch Created] Branch ID: ${newBranch?.id}, Name: ${name}, No BSSID provided`);
+      console.log(`[Branch Created] Branch ID: ${branchId || 'null'}, Name: ${name}, No BSSID provided`);
     }
 
     res.json({
       success: true,
       message: 'تم إنشاء الفرع بنجاح',
-      branchId: newBranch.id,
+      branchId: branchId,
     });
   } catch (error) {
     console.error('Create branch error:', error);
