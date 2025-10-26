@@ -1,5 +1,5 @@
 import { db } from './db.js';
-import { employees, attendance, pulses } from '@shared/schema.js';
+import { employees, attendance, pulses } from '../shared/schema.js';
 
 async function seedHistoricalData() {
   try {
@@ -43,11 +43,10 @@ async function seedHistoricalData() {
       const pulseTime = new Date(now.getTime() - (i * 5 * 60 * 1000)); // Every 5 minutes
       pulseRecords.push({
         employeeId: 'rr',
-        timestamp: pulseTime,
+        createdAt: pulseTime,
         latitude: 30.0444 + (Math.random() - 0.5) * 0.001,
         longitude: 31.2357 + (Math.random() - 0.5) * 0.001,
         isWithinGeofence: true,
-        sentFromDevice: true,
       });
     }
 

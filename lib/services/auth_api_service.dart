@@ -18,7 +18,7 @@ class AuthApiService {
     try {
       final response = await http
           .post(
-        Uri.parse(LOGIN_ENDPOINT),
+        Uri.parse(loginEndpoint),
         headers: _jsonHeaders,
         body: jsonEncode({
           'employee_id': employeeId,
@@ -83,7 +83,7 @@ class AuthApiService {
     try {
       final response = await http
           .post(
-        Uri.parse(LOGIN_ENDPOINT),
+        Uri.parse(loginEndpoint),
         headers: _jsonHeaders,
         body: jsonEncode({
           'email': email,

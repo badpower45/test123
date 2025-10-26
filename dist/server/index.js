@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import bcrypt from 'bcrypt';
 import { db } from './db.js';
-import { employees, attendance, attendanceRequests, leaveRequests, advances, deductions, absenceNotifications, pulses, branches, breaks } from '@shared/schema.js';
+import { employees, attendance, attendanceRequests, leaveRequests, advances, deductions, absenceNotifications, pulses, branches, breaks } from '../shared/schema.js';
 import { eq, and, gte, lte, lt, desc, sql, inArray } from 'drizzle-orm';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -39,12 +39,6 @@ function normalizeNumericFields(obj, fields) {
 function extractRows(result) {
     if (Array.isArray(result)) {
         return result;
-    }
-    if (result && typeof result === 'object') {
-        const rows = result.rows;
-        if (Array.isArray(rows)) {
-            return rows;
-        }
     }
     return [];
 }
@@ -285,97 +279,6 @@ app.post('/api/branch/attendance/edit', async (req, res) => {
         res.status(500).json({ error: 'Internal server error', message: err?.message });
     }
 });
-const CORE_DEMO_EMPLOYEES = [
-    { id: 'OWNER001', fullName: 'محمد أحمد - المالك', pinHash: '0000', role: 'owner', branch: 'جميع الفروع' },
-    { id: 'MGR_MAADI', fullName: 'Manager Maadi', pinHash: '8888', role: 'manager', branch: 'Maadi' },
-    { id: 'EMP_MAADI', fullName: 'Employee Maadi', pinHash: '5555', role: 'staff', branch: 'Maadi' },
-];
-const EXTENDED_DEMO_EMPLOYEES = [
-    { id: 'EMP001', fullName: 'أحمد علي', pinHash: '1234', role: 'staff', branch: 'فرع المعادي' },
-    { id: 'EMP002', fullName: 'سارة أحمد', pinHash: '2222', role: 'staff', branch: 'فرع المعادي' },
-    { id: 'EMP003', fullName: 'محمد حسن', pinHash: '3333', role: 'manager', branch: 'فرع المعادي' },
-    { id: 'EMP004', fullName: 'فاطمة محمد', pinHash: '4444', role: 'staff', branch: 'فرع المعادي' },
-];
-const ALL_DEMO_EMPLOYEES = [...CORE_DEMO_EMPLOYEES, ...EXTENDED_DEMO_EMPLOYEES];
-async function upsertDemoEmployees(records) {
-    for (const e of records) {
-        try {
-            await db
-                .insert(employees)
-                .values({
-                id: e.id,
-                fullName: e.fullName,
-                pinHash: e.pinHash,
-                role: e.role,
-                branch: e.branch,
-                active: true,
-                updatedAt: new Date(),
-            })
-                .onConflictDoUpdate({
-                target: employees.id,
-                set: {
-                    fullName: e.fullName,
-                    pinHash: e.pinHash,
-                    role: e.role,
-                    branch: e.branch,
-                    active: true,
-                    updatedAt: new Date(),
-                },
-            });
-        }
-        catch (err) {
-            console.warn('[seed] failed to upsert employee', e.id, err);
-        }
-    }
-}
-const ensureCoreDemoEmployees = async () => {
-    try {
-        await upsertDemoEmployees(CORE_DEMO_EMPLOYEES);
-        console.log('[seed] Core demo accounts ensured:', CORE_DEMO_EMPLOYEES.map(d => d.id).join(', '));
-    }
-    catch (error) {
-        console.error('[seed] ensureCoreDemoEmployees failed:', error);
-    }
-};
-// Full demo dataset (includes core accounts plus legacy Arabic records)
-const ensureDemoData = async () => {
-    try {
-        await upsertDemoEmployees(ALL_DEMO_EMPLOYEES);
-        console.log('[seed] Demo employees ensured:', ALL_DEMO_EMPLOYEES.map(d => d.id).join(', '));
-        // Add demo earnings for EMP_MAADI (300 EGP TODAY via pulses for testing)
-        // 300 EGP at 40 EGP/hour = 7.5 hours
-        // 7.5 hours * 120 pulses/hour (30 sec interval) = 900 pulses
-        const today = new Date();
-        today.setHours(9, 0, 0, 0); // Start at 9 AM today
-        // FORCE DELETE all old pulses for EMP_MAADI and recreate fresh
-        console.log('[seed] Deleting old pulses for EMP_MAADI...');
-        await db.delete(pulses).where(eq(pulses.employeeId, 'EMP_MAADI'));
-        console.log('[seed] Adding 900 demo pulses for EMP_MAADI (300 EGP today for testing)...');
-        const demoPulses = [];
-        for (let i = 0; i < 900; i++) {
-            const pulseTime = new Date(today.getTime() + i * 30 * 1000); // Every 30 seconds
-            demoPulses.push({
-                employeeId: 'EMP_MAADI',
-                timestamp: pulseTime,
-                latitude: 29.9602,
-                longitude: 31.2569,
-                isWithinGeofence: true,
-                isWithinWifi: true,
-                isFake: false,
-            });
-        }
-        // Insert in batches to avoid timeout
-        const batchSize = 100;
-        for (let i = 0; i < demoPulses.length; i += batchSize) {
-            const batch = demoPulses.slice(i, i + batchSize);
-            await db.insert(pulses).values(batch);
-        }
-        console.log('[seed] Added 900 pulses for EMP_MAADI successfully!');
-    }
-    catch (error) {
-        console.error('[seed] ensureDemoData failed:', error);
-    }
-};
 process.on('uncaughtException', (error) => {
     console.error('[FATAL] Uncaught Exception:', error);
     process.exit(1);
@@ -387,17 +290,6 @@ process.on('unhandledRejection', (reason, promise) => {
 // Health check endpoint
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', message: 'Oldies Workers API is running' });
-});
-// Dev endpoint to trigger seeding on-demand
-app.get('/api/dev/seed', async (req, res) => {
-    try {
-        await ensureDemoData();
-        res.json({ success: true, message: 'Demo data ensured' });
-    }
-    catch (err) {
-        console.error('Dev seed error:', err);
-        res.status(500).json({ error: 'Internal server error', message: err?.message });
-    }
 });
 // =============================================================================
 // AUTHENTICATION & LOGIN
@@ -424,10 +316,17 @@ app.post('/api/auth/login', async (req, res) => {
             });
             return res.status(401).json({ error: 'Invalid credentials' });
         }
-        // Verify PIN (demo: plaintext match against pinHash)
+        // Verify PIN using bcrypt
         const providedPin = normalizedPin;
-        const storedPin = String(employee.pinHash || '').trim();
-        if (!storedPin || providedPin !== storedPin) {
+        const storedPinHash = employee.pinHash;
+        if (!storedPinHash) {
+            console.warn('[auth/login] No PIN hash found for employee', {
+                employeeId: normalizedEmployeeId,
+            });
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+        const isValidPin = await bcrypt.compare(providedPin, storedPinHash);
+        if (!isValidPin) {
             console.warn('[auth/login] Invalid PIN attempt', {
                 employeeId: normalizedEmployeeId,
             });
@@ -1079,7 +978,7 @@ app.post('/api/advances/:advanceId/review', async (req, res) => {
             reviewedAt: new Date(),
         })
             .where(eq(advances.id, advanceId))
-            .returning();
+            .returning({ id: advances.id, employeeId: advances.employeeId, amount: advances.amount, eligibleAmount: advances.eligibleAmount, currentSalary: advances.currentSalary, status: advances.status, reviewedBy: advances.reviewedBy, reviewedAt: advances.reviewedAt });
         const updated = extractFirstRow(updateResult);
         // If approved, deduct the advance amount from salary by creating a deduction record
         if (action === 'approve' && updated) {
@@ -1491,53 +1390,77 @@ app.get('/api/employees/:id/current-earnings', async (req, res) => {
 // Create employee
 app.post('/api/employees', async (req, res) => {
     try {
-        const { id, fullName, pin, branch, hourlyRate, role, active } = req.body;
-        // Validate required fields
+        const rawId = typeof req.body.id === 'string' && req.body.id.trim() ? req.body.id : req.body.employeeId;
+        const id = typeof rawId === 'string' ? rawId.trim() : '';
+        const nameSource = typeof req.body.fullName === 'string' && req.body.fullName.trim()
+            ? req.body.fullName
+            : req.body.name;
+        const fullName = typeof nameSource === 'string' ? nameSource.trim() : '';
+        const pinSource = typeof req.body.pin === 'string' && req.body.pin.trim()
+            ? req.body.pin
+            : req.body.pinCode;
+        const pin = typeof pinSource === 'string' ? pinSource.trim() : '';
+        const branchInput = typeof req.body.branch === 'string' ? req.body.branch.trim() : undefined;
+        const branch = branchInput ? branchInput : null;
+        const roleInput = typeof req.body.role === 'string' ? req.body.role.trim().toLowerCase() : undefined;
+        const allowedRoles = new Set(['owner', 'admin', 'manager', 'hr', 'monitor', 'staff']);
+        const role = roleInput && allowedRoles.has(roleInput) ? roleInput : 'staff';
+        const activeRaw = req.body.active;
+        const active = typeof activeRaw === 'string'
+            ? activeRaw.toLowerCase() !== 'false'
+            : activeRaw === undefined
+                ? true
+                : Boolean(activeRaw);
+        const hourlyRateRaw = req.body.hourlyRate ?? req.body.hourly_rate;
+        let hourlyRate;
+        if (hourlyRateRaw !== undefined && hourlyRateRaw !== null && String(hourlyRateRaw).trim() !== '') {
+            const parsed = Number(hourlyRateRaw);
+            if (!Number.isFinite(parsed) || parsed < 0) {
+                return res.status(400).json({ error: 'hourlyRate must be a positive number' });
+            }
+            hourlyRate = parsed;
+        }
         if (!id || !fullName || !pin) {
             return res.status(400).json({ error: 'id, fullName, and pin are required' });
         }
-        // Hash the PIN
-        const saltRounds = 10;
-        const pinHash = await bcrypt.hash(pin, saltRounds);
-        // Prepare insert data
+        const pinHash = await bcrypt.hash(pin, 10);
         const insertData = {
             id,
             fullName,
             pinHash,
-            role: role || 'staff',
+            role,
             branch,
-            active: active !== undefined ? active : true,
+            active,
         };
-        // Add optional fields
         if (hourlyRate !== undefined) {
             insertData.hourlyRate = hourlyRate;
         }
-        const result = await db
+        const [newEmployee] = await db
             .insert(employees)
             .values(insertData)
-            .returning();
-        const newEmployee = (() => {
-            if (Array.isArray(result)) {
-                return result[0];
-            }
-            if (result && typeof result === 'object' && 'rows' in result) {
-                const rows = result.rows;
-                if (Array.isArray(rows)) {
-                    return rows[0];
-                }
-            }
-            return null;
-        })();
+            .returning({
+            id: employees.id,
+            fullName: employees.fullName,
+            role: employees.role,
+            branch: employees.branch,
+            hourlyRate: employees.hourlyRate,
+            active: employees.active,
+            createdAt: employees.createdAt,
+            updatedAt: employees.updatedAt,
+        });
         if (!newEmployee) {
             return res.status(500).json({ error: 'فشل إنشاء الموظف: استجابة غير متوقعة من قاعدة البيانات' });
         }
-        res.json({
+        res.status(201).json({
             success: true,
             message: 'تم إضافة الموظف بنجاح',
-            employee: newEmployee,
+            employee: normalizeNumericFields(newEmployee, ['hourlyRate']),
         });
     }
     catch (error) {
+        if (error?.code === '23505') {
+            return res.status(409).json({ error: 'يوجد موظف بنفس المعرف بالفعل' });
+        }
         console.error('Create employee error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
@@ -2699,7 +2622,7 @@ app.post('/api/pulses', async (req, res) => {
             timestamp: timestamp ? new Date(timestamp) : new Date(),
             sentFromDevice: true,
         })
-            .returning();
+            .returning({ id: pulses.id, employeeId: pulses.employeeId, latitude: pulses.latitude, longitude: pulses.longitude, isWithinGeofence: pulses.isWithinGeofence, timestamp: pulses.timestamp, sentFromDevice: pulses.sentFromDevice });
         const pulse = extractFirstRow(insertPulseResult);
         const overallValid = activeBreak ? false : (wifiValid && geofenceValid);
         res.json({
@@ -2729,7 +2652,7 @@ app.post('/api/branches', async (req, res) => {
         if (!name) {
             return res.status(400).json({ error: 'Branch name is required' });
         }
-        const insertBranchResult = await db
+        await db
             .insert(branches)
             .values({
             name,
@@ -2737,13 +2660,10 @@ app.post('/api/branches', async (req, res) => {
             latitude: latitude ? latitude.toString() : null,
             longitude: longitude ? longitude.toString() : null,
             geofenceRadius: geofence_radius || 100,
-        })
-            .returning();
-        const branch = extractFirstRow(insertBranchResult);
+        });
         res.json({
             success: true,
             message: 'تم إنشاء الفرع بنجاح',
-            branch,
         });
     }
     catch (error) {
@@ -3058,9 +2978,6 @@ app.post('/api/breaks/:breakId/end', async (req, res) => {
     }
 });
 // Listen on 0.0.0.0 to accept connections from all interfaces (including IPv4)
-console.log('[DEBUG] Ensuring core demo accounts on startup...');
-await ensureCoreDemoEmployees();
-console.log('[DEBUG] Core demo account check complete');
 console.log(`[DEBUG] About to call app.listen on port ${PORT}...`);
 const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Oldies Workers API server running on port ${PORT}`);

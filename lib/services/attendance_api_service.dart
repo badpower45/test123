@@ -7,7 +7,7 @@ import '../models/attendance_report.dart';
 
 class AttendanceApiService {
   static Future<Map<String, dynamic>> fetchEmployeeStatus(String employeeId) async {
-    final uri = Uri.parse('$API_BASE_URL/employees/$employeeId/status');
+    final uri = Uri.parse('$apiBaseUrl/employees/$employeeId/status');
     final response = await http.get(uri, headers: _jsonHeaders);
     final body = _decodeBody(response.body);
     if (response.statusCode >= 200 && response.statusCode < 300) {
@@ -31,7 +31,7 @@ class AttendanceApiService {
 
     try {
       response = await http.post(
-        Uri.parse(CHECK_IN_ENDPOINT),
+        Uri.parse(checkInEndpoint),
         headers: _jsonHeaders,
         body: jsonEncode({
           'employee_id': employeeId,
@@ -64,7 +64,7 @@ class AttendanceApiService {
 
     try {
       response = await http.post(
-        Uri.parse(CHECK_OUT_ENDPOINT),
+        Uri.parse(checkOutEndpoint),
         headers: _jsonHeaders,
         body: jsonEncode({
           'employee_id': employeeId,
@@ -92,7 +92,7 @@ class AttendanceApiService {
     required DateTime startDate,
     required DateTime endDate,
   }) async {
-    final uri = Uri.parse('$ATTENDANCE_REPORT_ENDPOINT/$employeeId').replace(
+    final uri = Uri.parse('$attendanceReportEndpoint/$employeeId').replace(
       queryParameters: {
         'start_date': _formatDate(startDate),
         'end_date': _formatDate(endDate),

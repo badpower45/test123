@@ -1,7 +1,10 @@
 import { pgTable, uuid, text, timestamp, boolean, numeric, index, doublePrecision, pgEnum, integer, date } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
-// Employee role enum
+// User role enum for multi-branch
+export const userRoleEnum = pgEnum('user_role', ['OWNER', 'MANAGER', 'EMPLOYEE']);
+
+// Legacy employee role enum (kept for compatibility)
 export const employeeRoleEnum = pgEnum('employee_role', ['owner', 'admin', 'manager', 'hr', 'monitor', 'staff']);
 
 // =============================================================================
@@ -10,11 +13,11 @@ export const employeeRoleEnum = pgEnum('employee_role', ['owner', 'admin', 'mana
 export const branches = pgTable('branches', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
-  wifiBssid: text('wifi_bssid'),
-  latitude: numeric('latitude'),
-  longitude: numeric('longitude'),
-  geofenceRadius: integer('geofence_radius').default(100),
-  managerId: text('manager_id').references(() => employees.id),
+  address: text('address'),
+  managerId: uuid('manager_id').references(() => users.id),
+  geoLat: numeric('geo_lat'),
+  geoLon: numeric('geo_lon'),
+  geoRadius: integer('geo_radius').default(100),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
@@ -153,25 +156,32 @@ export const absenceNotifications = pgTable('absence_notifications', {
   dateIdx: index('idx_absence_notifications_date').on(table.absenceDate),
 }));
 
-// Pulses table - location tracking (from original schema)
+// Pulses table - location tracking (updated for multi-branch)
 export const pulses = pgTable('pulses', {
   id: uuid('id').primaryKey().defaultRandom(),
   employeeId: text('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
+  branchId: uuid('branch_id').references(() => branches.id, { onDelete: 'cascade' }),
   timestamp: timestamp('timestamp', { withTimezone: true }).defaultNow().notNull(),
   latitude: doublePrecision('latitude'),
   longitude: doublePrecision('longitude'),
   location: text('location'),
+  bssidAddress: text('bssid_address'),
   isWithinGeofence: boolean('is_within_geofence').default(false),
   isFake: boolean('is_fake').default(false).notNull(),
+  isSynced: boolean('is_synced').default(true),
   sentFromDevice: boolean('sent_from_device').default(true).notNull(),
   sentViaSupabase: boolean('sent_via_supabase').default(false).notNull(),
   offlineBatchId: uuid('offline_batch_id'),
   source: text('source'),
+  status: text('status').default('IN'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   employeeIdIdx: index('idx_pulses_employee_id').on(table.employeeId),
+  branchIdIdx: index('idx_pulses_branch_id').on(table.branchId),
   timestampIdx: index('idx_pulses_timestamp').on(table.timestamp),
   latLonIdx: index('idx_pulses_latitude_longitude').on(table.latitude, table.longitude),
+  geofenceIdx: index('idx_pulses_geofence').on(table.isWithinGeofence),
+  createdAtIdx: index('idx_pulses_created_at').on(table.createdAt),
 }));
 
 // Legacy profiles table (kept for compatibility)
@@ -203,11 +213,31 @@ export const shifts = pgTable('shifts', {
 }));
 
 // =============================================================================
-// ADMIN USERS AND PERMISSIONS
+// USERS TABLE - Multi-branch users
+// =============================================================================
+export const users = pgTable('users', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  username: text('username').unique().notNull(),
+  passwordHash: text('password_hash').notNull(),
+  role: userRoleEnum('role').notNull(),
+  branchId: uuid('branch_id').references(() => branches.id),
+  fullName: text('full_name').notNull(),
+  email: text('email').unique(),
+  isActive: boolean('is_active').default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  usernameIdx: index('idx_users_username').on(table.username),
+  roleIdx: index('idx_users_role').on(table.role),
+  branchIdIdx: index('idx_users_branch_id').on(table.branchId),
+}));
+
+// =============================================================================
+// ADMIN USERS AND PERMISSIONS (Legacy - kept for compatibility)
 // =============================================================================
 
-// Admin users table
-export const users = pgTable('users', {
+// Legacy admin users table
+export const adminUsers = pgTable('admin_users', {
   id: uuid('id').primaryKey().defaultRandom(),
   email: text('email').unique().notNull(),
   passwordHash: text('password_hash').notNull(),
@@ -216,8 +246,8 @@ export const users = pgTable('users', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 }, (table) => ({
-  emailIdx: index('idx_users_email').on(table.email),
-  isActiveIdx: index('idx_users_is_active').on(table.isActive),
+  emailIdx: index('idx_admin_users_email').on(table.email),
+  isActiveIdx: index('idx_admin_users_is_active').on(table.isActive),
 }));
 
 // Roles table
@@ -269,7 +299,18 @@ export const userRoles = pgTable('user_roles', {
   roleIdIdx: index('idx_user_roles_role_id').on(table.roleId),
 }));
 
-// Branch-Managers junction table
+// Branch_BSSIDs table - Multiple BSSIDs per branch
+export const branchBssids = pgTable('branch_bssids', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  branchId: uuid('branch_id').notNull().references(() => branches.id, { onDelete: 'cascade' }),
+  bssidAddress: text('bssid_address').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  branchIdIdx: index('idx_branch_bssids_branch_id').on(table.branchId),
+  bssidAddressIdx: index('idx_branch_bssids_bssid_address').on(table.bssidAddress),
+}));
+
+// Legacy Branch-Managers junction table (kept for compatibility)
 export const branchManagers = pgTable('branch_managers', {
   id: uuid('id').primaryKey().defaultRandom(),
   employeeId: text('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
@@ -329,9 +370,6 @@ export type NewDeduction = typeof deductions.$inferInsert;
 export type AbsenceNotification = typeof absenceNotifications.$inferSelect;
 export type NewAbsenceNotification = typeof absenceNotifications.$inferInsert;
 
-export type Pulse = typeof pulses.$inferSelect;
-export type NewPulse = typeof pulses.$inferInsert;
-
 export type Profile = typeof profiles.$inferSelect;
 export type NewProfile = typeof profiles.$inferInsert;
 
@@ -355,6 +393,12 @@ export type NewUserRole = typeof userRoles.$inferInsert;
 
 export type Branch = typeof branches.$inferSelect;
 export type NewBranch = typeof branches.$inferInsert;
+
+export type BranchBssid = typeof branchBssids.$inferSelect;
+export type NewBranchBssid = typeof branchBssids.$inferInsert;
+
+export type Pulse = typeof pulses.$inferSelect;
+export type NewPulse = typeof pulses.$inferInsert;
 
 export type BranchManager = typeof branchManagers.$inferSelect;
 export type NewBranchManager = typeof branchManagers.$inferInsert;

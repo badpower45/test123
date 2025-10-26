@@ -11,7 +11,7 @@ import '../models/shift_status.dart';
 
 class RequestsApiService {
   static Future<void> deleteRejectedBreaks(String employeeId) async {
-    final uri = Uri.parse('$BREAKS_ENDPOINT/delete-rejected');
+    final uri = Uri.parse('$breaksEndpoint/delete-rejected');
     final response = await http.post(
       uri,
       headers: _jsonHeaders,
@@ -25,7 +25,7 @@ class RequestsApiService {
   }
 
   static Future<void> deleteRejectedLeaves(String employeeId) async {
-    final uri = Uri.parse(LEAVE_REQUESTS_DELETE_REJECTED_ENDPOINT);
+    final uri = Uri.parse(leaveRequestsDeleteRejectedEndpoint);
     final response = await http.post(
       uri,
       headers: _jsonHeaders,
@@ -39,7 +39,7 @@ class RequestsApiService {
   }
 
   static Future<void> deleteRejectedAdvances(String employeeId) async {
-    final uri = Uri.parse(ADVANCES_DELETE_REJECTED_ENDPOINT);
+    final uri = Uri.parse(advancesDeleteRejectedEndpoint);
     final response = await http.post(
       uri,
       headers: _jsonHeaders,
@@ -53,7 +53,7 @@ class RequestsApiService {
   }
 
   static Future<ShiftStatus> fetchShiftStatus(String employeeId) async {
-    final uri = Uri.parse('$SHIFT_STATUS_ENDPOINT/$employeeId');
+    final uri = Uri.parse('$shiftStatusEndpoint/$employeeId');
     final response = await http.get(uri);
     final body = _decodeBody(response.body);
 
@@ -92,7 +92,7 @@ class RequestsApiService {
     String? reason,
   }) async {
     final response = await http.post(
-      Uri.parse(LEAVE_REQUEST_ENDPOINT),
+      Uri.parse(leaveRequestEndpoint),
       headers: _jsonHeaders,
       body: jsonEncode({
         'employee_id': employeeId,
@@ -111,7 +111,7 @@ class RequestsApiService {
   }
 
   static Future<List<LeaveRequest>> fetchLeaveRequests(String employeeId) async {
-    final uri = Uri.parse(LEAVE_REQUESTS_ENDPOINT).replace(
+    final uri = Uri.parse(leaveRequestsEndpoint).replace(
       queryParameters: {'employee_id': employeeId},
     );
     final response = await http.get(uri);
@@ -131,7 +131,7 @@ class RequestsApiService {
     required double amount,
   }) async {
     final response = await http.post(
-      Uri.parse(ADVANCE_REQUEST_ENDPOINT),
+      Uri.parse(advanceRequestEndpoint),
       headers: _jsonHeaders,
       body: jsonEncode({
         'employee_id': employeeId,
@@ -148,7 +148,7 @@ class RequestsApiService {
   }
 
   static Future<List<AdvanceRequest>> fetchAdvanceRequests(String employeeId) async {
-    final uri = Uri.parse(ADVANCES_ENDPOINT).replace(
+    final uri = Uri.parse(advancesEndpoint).replace(
       queryParameters: {'employee_id': employeeId},
     );
     final response = await http.get(uri);
@@ -164,7 +164,7 @@ class RequestsApiService {
   }
 
   static Future<Map<String, dynamic>> fetchCurrentEarnings(String employeeId) async {
-    final uri = Uri.parse('$CURRENT_EARNINGS_ENDPOINT/$employeeId/current-earnings');
+    final uri = Uri.parse('$currentEarningsEndpoint/$employeeId/current-earnings');
     final response = await http.get(uri);
     final body = _decodeBody(response.body);
 
@@ -180,7 +180,7 @@ class RequestsApiService {
     required int durationMinutes,
   }) async {
     final response = await http.post(
-      Uri.parse(BREAKS_REQUEST_ENDPOINT),
+      Uri.parse(breaksRequestEndpoint),
       headers: _jsonHeaders,
       body: jsonEncode({
         'employee_id': employeeId,
@@ -197,7 +197,7 @@ class RequestsApiService {
   }
 
   static Future<void> startBreak({required String breakId}) async {
-    final uri = Uri.parse('$BREAKS_ENDPOINT/$breakId/start');
+    final uri = Uri.parse('$breaksEndpoint/$breakId/start');
     final response = await http.post(uri, headers: _jsonHeaders);
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
@@ -209,7 +209,7 @@ class RequestsApiService {
   }
 
   static Future<void> endBreak({required String breakId}) async {
-    final uri = Uri.parse('$BREAKS_ENDPOINT/$breakId/end');
+    final uri = Uri.parse('$breaksEndpoint/$breakId/end');
     final response = await http.post(uri, headers: _jsonHeaders);
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
@@ -221,7 +221,7 @@ class RequestsApiService {
   }
 
   static Future<List<Break>> fetchBreaks({required String employeeId}) async {
-    final uri = Uri.parse(BREAKS_ENDPOINT).replace(
+    final uri = Uri.parse(breaksEndpoint).replace(
       queryParameters: {'employee_id': employeeId},
     );
     final response = await http.get(uri);
@@ -247,8 +247,8 @@ class RequestsApiService {
     AttendanceRequestType requestType = AttendanceRequestType.checkIn,
   }) async {
     final endpoint = requestType == AttendanceRequestType.checkIn
-        ? ATTENDANCE_REQUEST_CHECKIN_ENDPOINT
-        : ATTENDANCE_REQUEST_CHECKOUT_ENDPOINT;
+        ? attendanceRequestCheckinEndpoint
+        : attendanceRequestCheckoutEndpoint;
 
     final response = await http.post(
       Uri.parse(endpoint),
@@ -270,7 +270,7 @@ class RequestsApiService {
 
   static Future<List<AttendanceRequest>> fetchAttendanceRequests(
       String employeeId) async {
-    final uri = Uri.parse(ATTENDANCE_REQUESTS_ENDPOINT).replace(
+    final uri = Uri.parse(attendanceRequestsEndpoint).replace(
       queryParameters: {'employee_id': employeeId},
     );
     final response = await http.get(uri);

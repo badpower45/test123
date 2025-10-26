@@ -15,7 +15,7 @@ class PulseBackendClient {
   static Future<bool> sendPulse(Pulse pulse) async {
     try {
       final response = await http.post(
-        Uri.parse(PULSE_ENDPOINT),
+        Uri.parse(pulseEndpoint),
         headers: const {'Content-Type': 'application/json'},
         body: jsonEncode(pulse.toApiPayload()),
       );

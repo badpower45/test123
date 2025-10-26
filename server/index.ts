@@ -7,8 +7,8 @@ import { db } from './db.js';
 import {
   employees, attendance, attendanceRequests, leaveRequests, advances,
   deductions, absenceNotifications, pulses, users, roles, permissions,
-  rolePermissions, userRoles, branches, branchManagers, breaks
-} from '@shared/schema.js';
+  rolePermissions, userRoles, branches, branchBssids, branchManagers, breaks
+} from '../shared/schema.js';
 import { eq, and, gte, lte, lt, desc, sql, between, inArray } from 'drizzle-orm';
 import { requirePermission, getUserPermissions, checkUserPermission } from './auth.js';
 
@@ -17,6 +17,12 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = Number(process.env.PORT) || 5000;
+
+// Debug logs for environment
+console.log('[DEBUG] Server starting...');
+console.log('[DEBUG] PORT:', PORT);
+console.log('[DEBUG] NODE_ENV:', process.env.NODE_ENV);
+console.log('[DEBUG] DATABASE_URL present:', !!process.env.DATABASE_URL);
 
 app.use(cors());
 app.use(express.json());
@@ -47,20 +53,14 @@ function normalizeNumericFields(obj: any, fields: string[]): any {
   return normalized;
 }
 
-function extractRows<T>(result: T[] | { rows?: T[] } | null | undefined): T[] {
+function extractRows<T>(result: any): T[] {
   if (Array.isArray(result)) {
     return result;
-  }
-  if (result && typeof result === 'object') {
-    const rows = (result as { rows?: unknown }).rows;
-    if (Array.isArray(rows)) {
-      return rows as T[];
-    }
   }
   return [];
 }
 
-function extractFirstRow<T>(result: T[] | { rows?: T[] } | null | undefined): T | undefined {
+function extractFirstRow<T>(result: any): T | undefined {
   const rows = extractRows<T>(result);
   return rows.length > 0 ? rows[0] : undefined;
 }
@@ -305,73 +305,6 @@ app.post('/api/branch/attendance/edit', async (req, res) => {
   }
 });
 
-// -----------------------------------------------------------------------------
-// Demo data seeding helpers (for local/dev and startup safety)
-// -----------------------------------------------------------------------------
-type DemoSeedEmployee = {
-  id: string;
-  fullName: string;
-  pinHash: string;
-  role: 'owner' | 'admin' | 'manager' | 'hr' | 'monitor' | 'staff';
-  branch?: string;
-};
-
-// Default owner account for initial login
-const DEFAULT_OWNER: DemoSeedEmployee = {
-  id: 'OWNER001',
-  fullName: 'مالك النظام',
-  pinHash: '1234', // Default PIN, can be changed via interface
-  role: 'owner',
-  branch: 'جميع الفروع'
-};
-
-async function upsertDemoEmployees(records: DemoSeedEmployee[]) {
-  for (const e of records) {
-    try {
-      await db
-        .insert(employees)
-        .values({
-          id: e.id,
-          fullName: e.fullName,
-          pinHash: e.pinHash,
-          role: e.role,
-          branch: e.branch,
-          active: true,
-          updatedAt: new Date(),
-        })
-        .onConflictDoUpdate({
-          target: employees.id,
-          set: {
-            fullName: e.fullName,
-            pinHash: e.pinHash,
-            role: e.role,
-            branch: e.branch,
-            active: true,
-            updatedAt: new Date(),
-          },
-        });
-    } catch (err) {
-      console.warn('[seed] failed to upsert employee', e.id, err);
-    }
-  }
-}
-
-// Delete demo employees and ensure default owner account exists
-const ensureCleanAndDefaultOwner = async () => {
-  try {
-    // Delete demo employees from database
-    const demoIds = ['OWNER001', 'MGR_MAADI', 'EMP_MAADI', 'EMP001', 'EMP002', 'EMP003', 'EMP004', 'EMP005'];
-    await db.delete(employees).where(inArray(employees.id, demoIds));
-    console.log('[seed] Demo employees deleted:', demoIds.join(', '));
-
-    // Ensure default owner
-    await upsertDemoEmployees([DEFAULT_OWNER]);
-    console.log('[seed] Default owner account ensured:', DEFAULT_OWNER.id);
-  } catch (error) {
-    console.error('[seed] ensureCleanAndDefaultOwner failed:', error);
-  }
-};
-
 process.on('uncaughtException', (error) => {
   console.error('[FATAL] Uncaught Exception:', error);
   process.exit(1);
@@ -385,17 +318,6 @@ process.on('unhandledRejection', (reason, promise) => {
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', message: 'Oldies Workers API is running' });
-});
-
-// Dev endpoint to trigger cleanup and seeding on-demand
-app.get('/api/dev/seed', async (req, res) => {
-  try {
-    await ensureCleanAndDefaultOwner();
-    res.json({ success: true, message: 'Demo employees deleted and default owner ensured' });
-  } catch (err: any) {
-    console.error('Dev seed error:', err);
-    res.status(500).json({ error: 'Internal server error', message: err?.message });
-  }
 });
 
 // =============================================================================
@@ -432,10 +354,27 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Verify PIN (demo: plaintext match against pinHash)
+    // Verify PIN using bcrypt
     const providedPin = normalizedPin;
-    const storedPin = String(employee.pinHash || '').trim();
-    if (!storedPin || providedPin !== storedPin) {
+    const storedPinHash = employee.pinHash;
+    if (!storedPinHash) {
+      console.warn('[auth/login] No PIN hash found for employee', {
+        employeeId: normalizedEmployeeId,
+      });
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // Check if PIN is valid (handle both bcrypt hashes and plain text PINs)
+    let isValidPin = false;
+    if (storedPinHash.startsWith('$2b$') || storedPinHash.startsWith('$2a$')) {
+      // It's a bcrypt hash, use bcrypt comparison
+      isValidPin = await bcrypt.compare(providedPin, storedPinHash);
+    } else {
+      // It's plain text, do direct comparison
+      isValidPin = providedPin === storedPinHash;
+    }
+
+    if (!isValidPin) {
       console.warn('[auth/login] Invalid PIN attempt', {
         employeeId: normalizedEmployeeId,
       });
@@ -510,12 +449,23 @@ app.post('/api/attendance/check-in', async (req, res) => {
 
     // Create pulse for location tracking
     if (latitude && longitude) {
-      await db.insert(pulses).values({
-        employeeId: employee_id,
-        latitude,
-        longitude,
-        timestamp: new Date(),
-      });
+      // Note: pulses table requires userId and branchId
+      // Need employee record for branchId
+      const [employee] = await db
+        .select()
+        .from(employees)
+        .where(eq(employees.id, employee_id))
+        .limit(1);
+
+      if (employee && employee.branchId) {
+        await db.insert(pulses).values({
+          employeeId: employee_id,
+          branchId: employee.branchId,
+          latitude,
+          longitude,
+          isWithinGeofence: true,
+        });
+      }
     }
 
     res.json({
@@ -575,12 +525,22 @@ app.post('/api/attendance/check-out', async (req, res) => {
 
     // Create pulse for location tracking
     if (latitude && longitude) {
-      await db.insert(pulses).values({
-        employeeId: employee_id,
-        latitude,
-        longitude,
-        timestamp: new Date(),
-      });
+      const [employee] = await db
+        .select()
+        .from(employees)
+        .where(eq(employees.id, employee_id))
+        .limit(1);
+
+      if (employee) {
+        await db.insert(pulses).values({
+          employeeId: employee_id,
+          branchId: employee.branchId,
+          latitude,
+          longitude,
+          status: 'IN',
+          createdAt: new Date(),
+        });
+      }
     }
 
     res.json({
@@ -624,8 +584,8 @@ app.get('/api/pulses/active/:employeeId', async (req, res) => {
       .where(and(
         eq(pulses.employeeId, employeeId),
         eq(pulses.isWithinGeofence, true),
-        gte(pulses.timestamp, startTs),
-        lte(pulses.timestamp, now)
+        gte(pulses.createdAt, startTs),
+        lte(pulses.createdAt, now)
       ));
 
     const validPulseCount = Number(result[0]?.count) || 0;
@@ -665,8 +625,8 @@ app.get('/api/pulses/period/:employeeId', async (req, res) => {
       .where(and(
         eq(pulses.employeeId, employeeId),
         eq(pulses.isWithinGeofence, true),
-        gte(pulses.timestamp, startTs),
-        lte(pulses.timestamp, endTs)
+        gte(pulses.createdAt, startTs),
+        lte(pulses.createdAt, endTs)
       ));
 
     const validPulseCount = Number(result[0]?.count) || 0;
@@ -1111,8 +1071,8 @@ app.post('/api/advances/request', async (req, res) => {
       .where(and(
         eq(pulses.employeeId, employee_id),
         eq(pulses.isWithinGeofence, true),
-        gte(pulses.timestamp, periodStart),
-        lte(pulses.timestamp, now)
+        gte(pulses.createdAt, periodStart),
+        lte(pulses.createdAt, now)
       ));
 
     const validPulseCount = validPulsesResult[0]?.count || 0;
@@ -1212,8 +1172,8 @@ app.post('/api/advances/:advanceId/review', async (req, res) => {
         reviewedAt: new Date(),
       })
       .where(eq(advances.id, advanceId))
-      .returning();
-    const updated = extractFirstRow(updateResult);
+      .returning({ id: advances.id, employeeId: advances.employeeId, amount: advances.amount, eligibleAmount: advances.eligibleAmount, currentSalary: advances.currentSalary, status: advances.status, reviewedBy: advances.reviewedBy, reviewedAt: advances.reviewedAt });
+    const updated = extractFirstRow(updateResult) as any;
 
     // If approved, deduct the advance amount from salary by creating a deduction record
     if (action === 'approve' && updated) {
@@ -1441,8 +1401,8 @@ app.get('/api/reports/comprehensive/:employeeId', async (req, res) => {
       .where(and(
         eq(pulses.employeeId, employeeId),
         eq(pulses.isWithinGeofence, true),
-        gte(pulses.timestamp, new Date(start_date as string)),
-        lte(pulses.timestamp, new Date(end_date as string))
+        gte(pulses.createdAt, new Date(start_date as string)),
+        lte(pulses.createdAt, new Date(end_date as string))
       ));
 
     const validPulseCount = validPulsesResult[0]?.count || 0;
@@ -1714,8 +1674,8 @@ app.get('/api/employees/:id/current-earnings', async (req, res) => {
       .where(and(
         eq(pulses.employeeId, id),
         eq(pulses.isWithinGeofence, true),
-        gte(pulses.timestamp, periodStart),
-        lte(pulses.timestamp, now)
+        gte(pulses.createdAt, periodStart),
+        lte(pulses.createdAt, now)
       ));
 
     const validPulseCount = Number(validPulsesResult[0]?.count) || 0;
@@ -1746,59 +1706,89 @@ app.get('/api/employees/:id/current-earnings', async (req, res) => {
 // Create employee
 app.post('/api/employees', async (req, res) => {
   try {
-    const { id, fullName, pin, branch, hourlyRate, role, active } = req.body;
+    const rawId = typeof req.body.id === 'string' && req.body.id.trim() ? req.body.id : req.body.employeeId;
+    const id = typeof rawId === 'string' ? rawId.trim() : '';
 
-    // Validate required fields
+    const nameSource = typeof req.body.fullName === 'string' && req.body.fullName.trim()
+      ? req.body.fullName
+      : req.body.name;
+    const fullName = typeof nameSource === 'string' ? nameSource.trim() : '';
+
+    const pinSource = typeof req.body.pin === 'string' && req.body.pin.trim()
+      ? req.body.pin
+      : req.body.pinCode;
+    const pin = typeof pinSource === 'string' ? pinSource.trim() : '';
+
+    const branchInput = typeof req.body.branch === 'string' ? req.body.branch.trim() : undefined;
+    const branch = branchInput ? branchInput : null;
+
+    const roleInput = typeof req.body.role === 'string' ? req.body.role.trim().toLowerCase() : undefined;
+    const allowedRoles = new Set(['owner', 'admin', 'manager', 'hr', 'monitor', 'staff']);
+    const role = roleInput && allowedRoles.has(roleInput) ? roleInput : 'staff';
+
+    const activeRaw = req.body.active;
+    const active = typeof activeRaw === 'string'
+      ? activeRaw.toLowerCase() !== 'false'
+      : activeRaw === undefined
+        ? true
+        : Boolean(activeRaw);
+
+    const hourlyRateRaw = req.body.hourlyRate ?? req.body.hourly_rate;
+    let hourlyRate: number | undefined;
+    if (hourlyRateRaw !== undefined && hourlyRateRaw !== null && String(hourlyRateRaw).trim() !== '') {
+      const parsed = Number(hourlyRateRaw);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        return res.status(400).json({ error: 'hourlyRate must be a positive number' });
+      }
+      hourlyRate = parsed;
+    }
+
     if (!id || !fullName || !pin) {
       return res.status(400).json({ error: 'id, fullName, and pin are required' });
     }
 
-    // Hash the PIN
-    const saltRounds = 10;
-    const pinHash = await bcrypt.hash(pin, saltRounds);
+    const pinHash = await bcrypt.hash(pin, 10);
 
-    // Prepare insert data
     const insertData: any = {
       id,
       fullName,
       pinHash,
-      role: role || 'staff',
+      role,
       branch,
-      active: active !== undefined ? active : true,
+      active,
     };
 
-    // Add optional fields
     if (hourlyRate !== undefined) {
       insertData.hourlyRate = hourlyRate;
     }
 
-    const result = await db
+    const [newEmployee] = await db
       .insert(employees)
       .values(insertData)
-      .returning();
-    const newEmployee = (() => {
-      if (Array.isArray(result)) {
-        return result[0];
-      }
-      if (result && typeof result === 'object' && 'rows' in result) {
-        const rows = (result as any).rows;
-        if (Array.isArray(rows)) {
-          return rows[0];
-        }
-      }
-      return null;
-    })();
+      .returning({
+        id: employees.id,
+        fullName: employees.fullName,
+        role: employees.role,
+        branch: employees.branch,
+        hourlyRate: employees.hourlyRate,
+        active: employees.active,
+        createdAt: employees.createdAt,
+        updatedAt: employees.updatedAt,
+      });
 
     if (!newEmployee) {
       return res.status(500).json({ error: 'فشل إنشاء الموظف: استجابة غير متوقعة من قاعدة البيانات' });
     }
 
-    res.json({
+    res.status(201).json({
       success: true,
       message: 'تم إضافة الموظف بنجاح',
-      employee: newEmployee,
+      employee: normalizeNumericFields(newEmployee, ['hourlyRate']),
     });
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.code === '23505') {
+      return res.status(409).json({ error: 'يوجد موظف بنفس المعرف بالفعل' });
+    }
     console.error('Create employee error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -2519,8 +2509,8 @@ app.get('/api/owner/payroll/summary', async (req, res) => {
       })
       .from(pulses)
       .where(and(
-        gte(pulses.timestamp, startDateTime),
-        lte(pulses.timestamp, endDateTime)
+        gte(pulses.createdAt, startDateTime),
+        lte(pulses.createdAt, endDateTime)
       ))
       .groupBy(pulses.employeeId);
 
@@ -2831,10 +2821,10 @@ app.post('/api/payroll/calculate', async (req, res) => {
       .where(and(
         eq(pulses.employeeId, employee_id),
         eq(pulses.isWithinGeofence, true),
-        gte(pulses.timestamp, new Date(start_date)),
-        lte(pulses.timestamp, new Date(end_date))
+        gte(pulses.createdAt, new Date(start_date)),
+        lte(pulses.createdAt, new Date(end_date))
       ))
-      .orderBy(pulses.timestamp);
+      .orderBy(pulses.createdAt);
 
     let totalValidPulses = validPulses.length;
     let totalWorkHours = 0;
@@ -2851,7 +2841,7 @@ app.post('/api/payroll/calculate', async (req, res) => {
       dayEnd.setHours(23, 59, 59, 999);
 
       const dayPulses = validPulses.filter(p => {
-        const pulseTime = new Date(p.timestamp);
+        const pulseTime = new Date(p.createdAt);
         return pulseTime >= dayStart && pulseTime <= dayEnd;
       });
 
@@ -2999,7 +2989,7 @@ app.get('/api/employees/:employeeId/status', async (req, res) => {
       .from(pulses)
       .where(and(
         eq(pulses.employeeId, employeeId),
-        sql`DATE(${pulses.timestamp}) = ${today}`
+        sql`DATE(${pulses.createdAt}) = ${today}`
       ));
 
     // Get last 10 pulses
@@ -3007,7 +2997,7 @@ app.get('/api/employees/:employeeId/status', async (req, res) => {
       .select()
       .from(pulses)
       .where(eq(pulses.employeeId, employeeId))
-      .orderBy(sql`${pulses.timestamp} DESC`)
+      .orderBy(sql`${pulses.createdAt} DESC`)
       .limit(10);
 
     // Calculate total pulses count
@@ -3041,11 +3031,10 @@ app.get('/api/employees/:employeeId/status', async (req, res) => {
         todayValid: validTodayPulses,
         recent: recentPulses.map(p => ({
           id: p.id,
-          timestamp: p.timestamp,
+          timestamp: p.createdAt,
           latitude: p.latitude,
           longitude: p.longitude,
           isWithinGeofence: p.isWithinGeofence,
-          isFake: p.isFake,
         })),
       },
     });
@@ -3149,16 +3138,16 @@ app.post('/api/pulses', async (req, res) => {
         .limit(1);
 
       if (branch) {
-        if (branch.latitude && branch.longitude) {
+        if (branch.geoLat && branch.geoLon) {
           distance = calculateDistance(
             latitude,
             longitude,
-            parseFloat(branch.latitude),
-            parseFloat(branch.longitude)
+            parseFloat(branch.geoLat),
+            parseFloat(branch.geoLon)
           );
         }
-        if (branch.geofenceRadius) {
-          geofenceRadius = Number(branch.geofenceRadius) || geofenceRadius;
+        if (branch.geoRadius) {
+          geofenceRadius = Number(branch.geoRadius) || geofenceRadius;
         }
         if (branch.wifiBssid) {
           branchWifi = String(branch.wifiBssid).toUpperCase();
@@ -3177,12 +3166,21 @@ app.post('/api/pulses', async (req, res) => {
     // Determine geofence validity
     geofenceValid = distance <= geofenceRadius;
 
-    // Determine wifi validity: if branch specifies a wifiBssid, require match; otherwise treat as valid
-    if (branchWifi) {
-      if (!wifi_bssid) {
-        wifiValid = false;
+    // Determine wifi validity: check against branchBssids table
+    if (employee.branchId) {
+      const bssids = await db
+        .select()
+        .from(branchBssids)
+        .where(eq(branchBssids.branchId, employee.branchId));
+
+      if (bssids.length > 0) {
+        if (!wifi_bssid) {
+          wifiValid = false;
+        } else {
+          wifiValid = bssids.some(b => b.bssidAddress.toUpperCase() === String(wifi_bssid).toUpperCase());
+        }
       } else {
-        wifiValid = String(wifi_bssid).toUpperCase() === branchWifi;
+        wifiValid = true; // No BSSIDs set, allow any
       }
     } else {
       wifiValid = true;
@@ -3206,14 +3204,16 @@ app.post('/api/pulses', async (req, res) => {
       .insert(pulses)
       .values({
         employeeId: employee_id,
+        branchId: employee.branchId,
         latitude,
         longitude,
+        bssidAddress: wifi_bssid,
         isWithinGeofence: activeBreak ? false : isWithinGeofence,
-        timestamp: timestamp ? new Date(timestamp) : new Date(),
-        sentFromDevice: true,
+        status: 'IN', // Default status
+        createdAt: timestamp ? new Date(timestamp) : new Date(),
       })
-      .returning();
-    const pulse = extractFirstRow(insertPulseResult);
+      .returning({ id: pulses.id, employeeId: pulses.employeeId, branchId: pulses.branchId, latitude: pulses.latitude, longitude: pulses.longitude, bssidAddress: pulses.bssidAddress, isWithinGeofence: pulses.isWithinGeofence, status: pulses.status, createdAt: pulses.createdAt });
+    const pulse = extractFirstRow(insertPulseResult) as any;
 
     const overallValid = activeBreak ? false : (wifiValid && geofenceValid);
 
@@ -3247,22 +3247,19 @@ app.post('/api/branches', async (req, res) => {
       return res.status(400).json({ error: 'Branch name is required' });
     }
 
-    const insertBranchResult = await db
+    await db
       .insert(branches)
       .values({
         name,
-        wifiBssid: wifi_bssid,
-        latitude: latitude ? latitude.toString() : null,
-        longitude: longitude ? longitude.toString() : null,
-        geofenceRadius: geofence_radius || 100,
-      })
-      .returning();
-    const branch = extractFirstRow(insertBranchResult);
+        address: null, // Add address if needed
+        geoLat: latitude ? latitude.toString() : null,
+        geoLon: longitude ? longitude.toString() : null,
+        geoRadius: geofence_radius || 100,
+      });
 
     res.json({
       success: true,
       message: 'تم إنشاء الفرع بنجاح',
-      branch,
     });
   } catch (error) {
     console.error('Create branch error:', error);
@@ -3618,10 +3615,6 @@ app.post('/api/breaks/:breakId/end', async (req, res) => {
 });
 
 // Listen on 0.0.0.0 to accept connections from all interfaces (including IPv4)
-console.log('[DEBUG] Cleaning demo employees and ensuring default owner on startup...');
-await ensureCleanAndDefaultOwner();
-console.log('[DEBUG] Cleanup and default owner check complete');
-
 console.log(`[DEBUG] About to call app.listen on port ${PORT}...`);
 
 const server = app.listen(PORT, '0.0.0.0', () => {
@@ -3667,6 +3660,96 @@ server.on('error', (error: any) => {
 setInterval(() => {
   console.log('[DEBUG] Process still alive, server listening:', server.listening);
 }, 10000);
+
+// =============================================================================
+// DEVELOPMENT - Seed Database
+// =============================================================================
+
+app.get('/api/dev/seed', async (req, res) => {
+  try {
+    console.log('🌱 Seeding database...');
+
+    // Check if already seeded
+    const existingEmployees = await db.select().from(employees).limit(1);
+    if (existingEmployees.length > 0) {
+      return res.json({
+        success: true,
+        message: 'Database already seeded',
+        note: 'Delete employees table data if you want to re-seed'
+      });
+    }
+
+    // Hash PINs using bcrypt
+    const defaultPinHash = await bcrypt.hash('1234', 10);
+    const emp002PinHash = await bcrypt.hash('5555', 10);
+    const mgrPinHash = await bcrypt.hash('8888', 10);
+
+    // Seed employees
+    const employeesToInsert = [
+      {
+        id: 'OWNER001',
+        fullName: 'Ahmed Owner',
+        role: 'owner' as const,
+        branch: 'MAIN',
+        branchId: null,
+        pinHash: defaultPinHash,
+        monthlySalary: '0',
+        hourlyRate: '0',
+        active: true,
+      },
+      {
+        id: 'EMP001',
+        fullName: 'Ahmed Mohamed',
+        role: 'staff' as const,
+        branch: 'MAADI',
+        branchId: null,
+        pinHash: defaultPinHash,
+        monthlySalary: '3000',
+        hourlyRate: '40',
+        active: true,
+      },
+      {
+        id: 'EMP_MAADI',
+        fullName: 'Mohamed Ali',
+        role: 'staff' as const,
+        branch: 'MAADI',
+        branchId: null,
+        pinHash: emp002PinHash,
+        monthlySalary: '3500',
+        hourlyRate: '40',
+        active: true,
+      },
+      {
+        id: 'MGR_MAADI',
+        fullName: 'Sara Manager',
+        role: 'manager' as const,
+        branch: 'MAADI',
+        branchId: null,
+        pinHash: mgrPinHash,
+        monthlySalary: '5000',
+        hourlyRate: '50',
+        active: true,
+      },
+    ];
+
+    await db.insert(employees).values(employeesToInsert);
+    console.log('✅ Seeded employees');
+
+    res.json({
+      success: true,
+      message: 'Database seeded successfully',
+      employees: [
+        { id: 'OWNER001', pin: '1234', role: 'owner' },
+        { id: 'EMP001', pin: '1234', role: 'staff' },
+        { id: 'EMP_MAADI', pin: '5555', role: 'staff' },
+        { id: 'MGR_MAADI', pin: '8888', role: 'manager' },
+      ]
+    });
+  } catch (error) {
+    console.error('Seed error:', error);
+    res.status(500).json({ error: 'Seed failed', message: error?.message });
+  }
+});
 
 // 404 handler (JSON)
 app.use((req, res) => {

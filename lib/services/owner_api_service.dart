@@ -14,7 +14,7 @@ class OwnerApiService {
   static Future<Map<String, dynamic>> getDashboard({
     required String ownerId,
   }) async {
-    final uri = Uri.parse(OWNER_DASHBOARD_ENDPOINT).replace(
+    final uri = Uri.parse(ownerDashboardEndpoint).replace(
       queryParameters: {'owner_id': ownerId},
     );
     final response = await http.get(uri, headers: _jsonHeaders);
@@ -27,7 +27,7 @@ class OwnerApiService {
   static Future<Map<String, dynamic>> getEmployees({
     required String ownerId,
   }) async {
-    final uri = Uri.parse(OWNER_EMPLOYEES_OVERVIEW_ENDPOINT).replace(
+    final uri = Uri.parse(ownerEmployeesOverviewEndpoint).replace(
       queryParameters: {'owner_id': ownerId},
     );
     final response = await http.get(uri, headers: _jsonHeaders);
@@ -42,7 +42,7 @@ class OwnerApiService {
     required String employeeId,
     required double hourlyRate,
   }) async {
-    final endpoint = OWNER_EMPLOYEE_HOURLY_RATE_ENDPOINT.replaceFirst(
+    final endpoint = ownerEmployeeHourlyRateEndpoint.replaceFirst(
       ':employeeId',
       employeeId,
     );
@@ -68,24 +68,37 @@ class OwnerApiService {
     required String branch,
     required double hourlyRate,
   }) async {
-    final uri = Uri.parse(EMPLOYEES_ENDPOINT);
+    final uri = Uri.parse(employeesEndpoint);
     final response = await http.post(
       uri,
-      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-      body: {
-        'employeeId': employeeId,
+      headers: _jsonHeaders,
+      body: jsonEncode({
+        'id': employeeId,
+        'ownerId': ownerId,
         'fullName': fullName,
         'pin': pin,
         'branch': branch,
-        'hourlyRate': hourlyRate.toString(),
+        'hourlyRate': hourlyRate,
         'role': 'staff',
-        'active': 'true',
-      },
+        'active': true,
+      }),
     );
-    if (response.statusCode == 201) {
+
+    if (response.statusCode == 201 || response.statusCode == 200) {
       return jsonDecode(response.body) as Map<String, dynamic>;
     }
-    throw Exception('فشل إضافة الموظف: ${response.statusCode}');
+
+    if (response.statusCode == 409) {
+      throw Exception('معرف الموظف مستخدم بالفعل');
+    }
+
+    try {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final message = data['error'] ?? 'خطأ غير معروف';
+      throw Exception('فشل إضافة الموظف: $message');
+    } catch (_) {
+      throw Exception('فشل إضافة الموظف: ${response.statusCode}');
+    }
   }
 
   static Future<Map<String, dynamic>> getPayrollSummary({
@@ -93,7 +106,7 @@ class OwnerApiService {
     required String startDate,
     required String endDate,
   }) async {
-    final uri = Uri.parse(OWNER_PAYROLL_SUMMARY_ENDPOINT).replace(
+    final uri = Uri.parse(ownerPayrollSummaryEndpoint).replace(
       queryParameters: {
         'owner_id': ownerId,
         'start_date': startDate,

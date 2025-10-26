@@ -5,7 +5,7 @@ import '../constants/api_endpoints.dart';
 class BranchApiService {
   static Future<List<Map<String, dynamic>>> getBranches() async {
     try {
-      final response = await http.get(Uri.parse(BRANCHES_ENDPOINT));
+      final response = await http.get(Uri.parse(branchesEndpoint));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         return List<Map<String, dynamic>>.from(data['branches'] ?? []);
@@ -34,7 +34,7 @@ class BranchApiService {
       };
 
       final response = await http.post(
-        Uri.parse(BRANCHES_ENDPOINT),
+        Uri.parse(branchesEndpoint),
         headers: {'Content-Type': 'application/json'},
         body: json.encode(body),
       );
@@ -57,7 +57,7 @@ class BranchApiService {
   }) async {
     try {
       final response = await http.post(
-        Uri.parse(BRANCH_ASSIGN_MANAGER_ENDPOINT.replaceFirst(':branchId', branchId)),
+        Uri.parse(branchAssignManagerEndpoint.replaceFirst(':branchId', branchId)),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({'employee_id': employeeId}),
       );
@@ -77,7 +77,7 @@ class BranchApiService {
   static Future<List<Map<String, dynamic>>> getBranchEmployees(String branchId) async {
     try {
       final response = await http.get(
-        Uri.parse(BRANCH_EMPLOYEES_ENDPOINT.replaceFirst(':branchId', branchId)),
+        Uri.parse(branchEmployeesEndpoint.replaceFirst(':branchId', branchId)),
       );
 
       if (response.statusCode == 200) {

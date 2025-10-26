@@ -61,8 +61,7 @@ class _LoginScreenState extends State<LoginScreen> {
       // Clear any local/demo employees to avoid stale data overriding server state
       await EmployeeRepository.clearAll();
 
-      // Save employee to local cache (server-authoritative)
-      await EmployeeRepository.addEmployee(employee);
+      // Do not save to local cache - rely entirely on server database
 
       if (!mounted) return;
 

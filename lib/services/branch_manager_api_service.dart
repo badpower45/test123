@@ -5,7 +5,7 @@ import '../constants/api_endpoints.dart';
 class BranchManagerApiService {
   static Future<Map<String, dynamic>> getBranchRequests(String branchName) async {
     final encodedBranch = Uri.encodeComponent(branchName);
-    final url = '$API_BASE_URL/branch/$encodedBranch/requests';
+    final url = '$apiBaseUrl/branch/$encodedBranch/requests';
     print('🔍 Fetching requests from: $url'); // Debug log
     final response = await http.get(Uri.parse(url));
     print('📥 Response status: ${response.statusCode}'); // Debug log
@@ -19,7 +19,7 @@ class BranchManagerApiService {
 
   static Future<Map<String, dynamic>> getAttendanceReport(String branchName) async {
     final encodedBranch = Uri.encodeComponent(branchName);
-    final url = '$API_BASE_URL/branch/$encodedBranch/attendance-report';
+    final url = '$apiBaseUrl/branch/$encodedBranch/attendance-report';
     final response = await http.get(Uri.parse(url));
     if (response.statusCode == 200) {
       return jsonDecode(response.body);
@@ -33,7 +33,7 @@ class BranchManagerApiService {
     required String id,
     required String action,
   }) async {
-    final url = '$API_BASE_URL/branch/request/$type/$id/$action';
+    final url = '$apiBaseUrl/branch/request/$type/$id/$action';
     final response = await http.post(Uri.parse(url));
     if (response.statusCode == 200) {
       return jsonDecode(response.body);
@@ -48,7 +48,7 @@ class BranchManagerApiService {
     required String action, // approve, reject, or postpone
     required String managerId,
   }) async {
-    final url = '$API_BASE_URL/breaks/$breakId/review';
+    final url = '$apiBaseUrl/breaks/$breakId/review';
     final response = await http.post(
       Uri.parse(url),
       headers: {'Content-Type': 'application/json'},
@@ -72,7 +72,7 @@ class BranchManagerApiService {
     required String reviewerId,
     String? notes,
   }) async {
-    final url = '$API_BASE_URL/attendance/requests/$requestId/review';
+    final url = '$apiBaseUrl/attendance/requests/$requestId/review';
     final response = await http.post(
       Uri.parse(url),
       headers: {'Content-Type': 'application/json'},
@@ -92,7 +92,7 @@ class BranchManagerApiService {
 
   // Get manager dashboard with all pending requests
   static Future<Map<String, dynamic>> getManagerDashboard() async {
-    final url = MANAGER_DASHBOARD_ENDPOINT;
+    final url = managerDashboardEndpoint;
     final response = await http.get(Uri.parse(url));
     if (response.statusCode == 200) {
       return jsonDecode(response.body);

@@ -5,30 +5,39 @@ const String offlinePulsesBox = 'offline_pulses';
 class Pulse extends HiveObject {
   Pulse({
     required this.employeeId,
+    this.branchId,
     required this.latitude,
     required this.longitude,
     required this.timestamp,
     this.wifiBssid,
-    bool isFake = false,
+    this.status = 'IN',
     this.isWithinGeofence,
-  }) : isFake = isFake;
+    this.isFake = false,
+    this.isSynced = true,
+  });
 
   final String employeeId;
+  final String? branchId;
   final double latitude;
   final double longitude;
   final DateTime timestamp;
   final String? wifiBssid;
-  final bool isFake;
+  final String status;
   final bool? isWithinGeofence;
+  final bool isFake;
+  final bool isSynced;
 
   Map<String, dynamic> toJson() => {
-        'employee_id': employeeId,
+        'user_id': employeeId,
+        'branch_id': branchId,
         'latitude': latitude,
         'longitude': longitude,
-        'wifi_bssid': wifiBssid,
+        'bssid_address': wifiBssid,
         'is_within_geofence': isWithinGeofence,
-        'timestamp': timestamp.toIso8601String(),
         'is_fake': isFake,
+        'status': status,
+        'created_at': timestamp.toIso8601String(),
+        'is_synced': isSynced,
       }..removeWhere((key, value) => value == null);
 
   Map<String, dynamic> toApiPayload() => {
@@ -37,20 +46,24 @@ class Pulse extends HiveObject {
         'longitude': longitude,
         'wifi_bssid': wifiBssid,
         'is_within_geofence': isWithinGeofence,
+        'is_fake': isFake,
         'timestamp': timestamp.toIso8601String(),
       }..removeWhere((key, value) => value == null);
 
   static Pulse fromJson(Map<String, dynamic> json) => Pulse(
-        employeeId: (json['employee_id'] ?? json['employeeId']) as String,
+        employeeId: (json['user_id'] ?? json['employeeId']) as String,
+        branchId: json['branch_id'] as String?,
         latitude: (json['latitude'] as num).toDouble(),
         longitude: (json['longitude'] as num).toDouble(),
         timestamp: DateTime.parse(
-          (json['timestamp'] ?? json['createdAt']) as String,
+          (json['created_at'] ?? json['timestamp'] ?? json['createdAt']) as String,
         ),
-        isFake: (json['is_fake'] ?? json['isFake'] ?? false) as bool,
-        wifiBssid: (json['wifi_bssid'] ?? json['wifiBssid']) as String?,
+        wifiBssid: (json['bssid_address'] ?? json['wifiBssid']) as String?,
+        status: (json['status'] ?? 'IN') as String,
         isWithinGeofence:
             (json['is_within_geofence'] ?? json['isWithinGeofence']) as bool?,
+        isFake: (json['is_fake'] ?? json['isFake'] ?? false) as bool,
+        isSynced: (json['is_synced'] ?? json['isSynced'] ?? true) as bool,
       );
 }
 
@@ -66,33 +79,42 @@ class PulseAdapter extends TypeAdapter<Pulse> {
     };
     return Pulse(
       employeeId: fields[0] as String,
-      latitude: fields[1] as double,
-      longitude: fields[2] as double,
-      timestamp: DateTime.parse(fields[3] as String),
-      isFake: fields[4] as bool? ?? false,
+      branchId: fields[1] as String?,
+      latitude: fields[2] as double,
+      longitude: fields[3] as double,
+      timestamp: DateTime.parse(fields[4] as String),
       wifiBssid: fields[5] as String?,
-      isWithinGeofence: fields[6] as bool?,
+      status: fields[6] as String? ?? 'IN',
+      isWithinGeofence: fields[7] as bool?,
+      isFake: fields[8] as bool? ?? false,
+      isSynced: fields[9] as bool? ?? true,
     );
   }
 
   @override
   void write(BinaryWriter writer, Pulse obj) {
     writer
-      ..writeByte(7)
+      ..writeByte(10)
       ..writeByte(0)
       ..write(obj.employeeId)
       ..writeByte(1)
-      ..write(obj.latitude)
+      ..write(obj.branchId)
       ..writeByte(2)
-      ..write(obj.longitude)
+      ..write(obj.latitude)
       ..writeByte(3)
-      ..write(obj.timestamp.toIso8601String())
+      ..write(obj.longitude)
       ..writeByte(4)
-      ..write(obj.isFake)
+      ..write(obj.timestamp.toIso8601String())
       ..writeByte(5)
       ..write(obj.wifiBssid)
       ..writeByte(6)
-      ..write(obj.isWithinGeofence);
+      ..write(obj.status)
+      ..writeByte(7)
+      ..write(obj.isWithinGeofence)
+      ..writeByte(8)
+      ..write(obj.isFake)
+      ..writeByte(9)
+      ..write(obj.isSynced);
   }
 }
 
