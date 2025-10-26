@@ -121,4 +121,74 @@ class OwnerApiService {
     }
     throw Exception('فشل تحميل ملخص الرواتب: ${response.statusCode}');
   }
+
+  static Future<Map<String, dynamic>> updateEmployee({
+    required String employeeId,
+    String? fullName,
+    String? pin,
+    String? role,
+    String? branch,
+    String? branchId,
+    double? hourlyRate,
+    bool? active,
+  }) async {
+    final endpoint = employeesEndpoint.endsWith('/')
+        ? '${employeesEndpoint}$employeeId'
+        : '$employeesEndpoint/$employeeId';
+    final uri = Uri.parse(endpoint);
+
+    final body = <String, dynamic>{};
+    if (fullName != null) body['fullName'] = fullName;
+    if (pin != null) body['pin'] = pin;
+    if (role != null) body['role'] = role;
+    if (branch != null) body['branch'] = branch;
+    if (branchId != null) body['branchId'] = branchId;
+    if (hourlyRate != null) body['hourlyRate'] = hourlyRate;
+    if (active != null) body['active'] = active;
+
+    final response = await http.put(
+      uri,
+      headers: _jsonHeaders,
+      body: jsonEncode(body),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+
+    try {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final message = data['error'] ?? 'خطأ غير معروف';
+      throw Exception('فشل تحديث الموظف: $message');
+    } catch (_) {
+      throw Exception('فشل تحديث الموظف: ${response.statusCode}');
+    }
+  }
+
+  static Future<Map<String, dynamic>> deleteEmployee({
+    required String employeeId,
+  }) async {
+    final endpoint = employeesEndpoint.endsWith('/')
+        ? '${employeesEndpoint}$employeeId'
+        : '$employeesEndpoint/$employeeId';
+    final uri = Uri.parse(endpoint);
+
+    final response = await http.delete(uri, headers: _jsonHeaders);
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+
+    if (response.statusCode == 404) {
+      throw Exception('الموظف غير موجود');
+    }
+
+    try {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final message = data['error'] ?? 'خطأ غير معروف';
+      throw Exception('فشل حذف الموظف: $message');
+    } catch (_) {
+      throw Exception('فشل حذف الموظف: ${response.statusCode}');
+    }
+  }
 }

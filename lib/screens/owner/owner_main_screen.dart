@@ -342,49 +342,111 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
     await future;
   }
 
-  Future<void> _editHourlyRate(Map<String, dynamic> employee) async {
-    final controller = TextEditingController(
-      text: employee['hourlyRate'] != null ? '${employee['hourlyRate']}' : '',
-    );
-    final result = await showDialog<double>(
+  Future<void> _editEmployee(Map<String, dynamic> employee) async {
+    final nameController = TextEditingController(text: employee['fullName']?.toString() ?? '');
+    final hourlyRateController = TextEditingController(text: employee['hourlyRate']?.toString() ?? '');
+    
+    final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('تعديل سعر الساعة (${employee['fullName'] ?? ''})'),
-        content: TextField(
-          controller: controller,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: const InputDecoration(labelText: 'سعر الساعة (جنيه)'),
+        title: Text('تعديل بيانات ${employee['fullName'] ?? 'الموظف'}'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameController,
+                decoration: const InputDecoration(labelText: 'الاسم الكامل'),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: hourlyRateController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'سعر الساعة (جنيه)'),
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('إلغاء')),
           TextButton(
             onPressed: () {
-              final parsed = double.tryParse(controller.text.trim());
-              if (parsed == null || parsed < 0) {
+              final name = nameController.text.trim();
+              final hourlyRate = double.tryParse(hourlyRateController.text.trim());
+              
+              if (name.isEmpty) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('يرجى إدخال رقم صالح')),
+                  const SnackBar(content: Text('الاسم مطلوب')),
                 );
                 return;
               }
-              Navigator.pop(context, parsed);
+              
+              if (hourlyRate == null || hourlyRate < 0) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('يرجى إدخال سعر ساعة صالح')),
+                );
+                return;
+              }
+              
+              Navigator.pop(context, {'fullName': name, 'hourlyRate': hourlyRate});
             },
             child: const Text('حفظ'),
           ),
         ],
       ),
     );
-    if (result == null) {
-      return;
-    }
+    
+    if (result == null) return;
+    
     try {
-      await OwnerApiService.updateHourlyRate(
-        ownerId: widget.ownerId,
+      await OwnerApiService.updateEmployee(
         employeeId: '${employee['id']}',
-        hourlyRate: result,
+        fullName: result['fullName'],
+        hourlyRate: result['hourlyRate'],
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تم تحديث سعر الساعة بنجاح')),
+        const SnackBar(content: Text('تم تحديث بيانات الموظف بنجاح')),
+      );
+      await _refresh();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error.toString().replaceFirst('Exception: ', '')),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    }
+  }
+
+  Future<void> _deleteEmployee(String employeeId, String employeeName) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('تأكيد الحذف'),
+        content: Text('هل أنت متأكد من حذف الموظف "$employeeName"؟\n\nسيتم حذف جميع البيانات المرتبطة به.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('إلغاء'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('حذف'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      await OwnerApiService.deleteEmployee(employeeId: employeeId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم حذف الموظف بنجاح')),
       );
       await _refresh();
     } catch (error) {
@@ -463,6 +525,7 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
               _buildSummary(summary),
               ...employees.map((employee) {
                 final name = employee['fullName']?.toString() ?? '';
+                final employeeId = employee['id']?.toString() ?? '';
                 final role = employee['role']?.toString() ?? '';
                 final branch = employee['branch']?.toString() ?? '';
                 final hourlyRate = _formatCurrency(employee['hourlyRate']);
@@ -478,16 +541,29 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
                         child: Text(name.isNotEmpty ? name.substring(0, 1) : '?'),
                       ),
                       title: Text(name),
-                      subtitle: Text('الدور: $role • الفرع: ${branch.isEmpty ? 'غير محدد' : branch}'),
-                      trailing: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.end,
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('سعر الساعة: $hourlyRate'),
-                          Text('الراتب الشهري: $monthlySalary'),
+                          Text('الدور: $role • الفرع: ${branch.isEmpty ? 'غير محدد' : branch}'),
+                          Text('سعر الساعة: $hourlyRate جنيه', style: TextStyle(fontSize: 12)),
                         ],
                       ),
-                      onTap: () => _editHourlyRate(employee),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.edit, color: Colors.blue),
+                            tooltip: 'تعديل',
+                            onPressed: () => _editEmployee(employee),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.delete, color: Colors.red),
+                            tooltip: 'حذف',
+                            onPressed: () => _deleteEmployee(employeeId, name),
+                          ),
+                        ],
+                      ),
+                      isThreeLine: true,
                     ),
                   ),
                 );

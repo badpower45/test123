@@ -1803,6 +1803,138 @@ app.post('/api/employees', async (req, res) => {
   }
 });
 
+// Update employee
+app.put('/api/employees/:id', async (req, res) => {
+  try {
+    const employeeId = req.params.id;
+
+    const updateData: any = {};
+
+    if (req.body.fullName !== undefined) {
+      const fullName = typeof req.body.fullName === 'string' ? req.body.fullName.trim() : '';
+      if (!fullName) {
+        return res.status(400).json({ error: 'fullName cannot be empty' });
+      }
+      updateData.fullName = fullName;
+    }
+
+    if (req.body.pin !== undefined) {
+      const pin = typeof req.body.pin === 'string' ? req.body.pin.trim() : '';
+      if (!pin) {
+        return res.status(400).json({ error: 'pin cannot be empty' });
+      }
+      updateData.pinHash = await bcrypt.hash(pin, 10);
+    }
+
+    if (req.body.role !== undefined) {
+      const roleInput = typeof req.body.role === 'string' ? req.body.role.trim().toLowerCase() : '';
+      const allowedRoles = new Set(['owner', 'admin', 'manager', 'hr', 'monitor', 'staff']);
+      if (!allowedRoles.has(roleInput)) {
+        return res.status(400).json({ error: 'Invalid role' });
+      }
+      updateData.role = roleInput;
+    }
+
+    if (req.body.branch !== undefined) {
+      updateData.branch = req.body.branch ? String(req.body.branch).trim() : null;
+    }
+
+    if (req.body.branchId !== undefined) {
+      updateData.branchId = req.body.branchId ? String(req.body.branchId).trim() : null;
+    }
+
+    if (req.body.hourlyRate !== undefined) {
+      const parsed = Number(req.body.hourlyRate);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        return res.status(400).json({ error: 'hourlyRate must be a positive number' });
+      }
+      updateData.hourlyRate = parsed;
+    }
+
+    if (req.body.active !== undefined) {
+      updateData.active = Boolean(req.body.active);
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ error: 'No fields to update' });
+    }
+
+    updateData.updatedAt = new Date();
+
+    const [updatedEmployee] = await db
+      .update(employees)
+      .set(updateData)
+      .where(eq(employees.id, employeeId))
+      .returning({
+        id: employees.id,
+        fullName: employees.fullName,
+        role: employees.role,
+        branch: employees.branch,
+        branchId: employees.branchId,
+        hourlyRate: employees.hourlyRate,
+        active: employees.active,
+        updatedAt: employees.updatedAt,
+      });
+
+    if (!updatedEmployee) {
+      return res.status(404).json({ error: 'الموظف غير موجود' });
+    }
+
+    console.log(`[Employee Updated] ID: ${employeeId}, Changes: ${Object.keys(updateData).join(', ')}`);
+
+    res.json({
+      success: true,
+      message: 'تم تحديث بيانات الموظف بنجاح',
+      employee: normalizeNumericFields(updatedEmployee, ['hourlyRate']),
+    });
+  } catch (error) {
+    console.error('Update employee error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Delete employee
+app.delete('/api/employees/:id', async (req, res) => {
+  try {
+    const employeeId = req.params.id;
+
+    // Check if employee exists
+    const [existingEmployee] = await db
+      .select({ id: employees.id, fullName: employees.fullName })
+      .from(employees)
+      .where(eq(employees.id, employeeId))
+      .limit(1);
+
+    if (!existingEmployee) {
+      return res.status(404).json({ error: 'الموظف غير موجود' });
+    }
+
+    // Delete related records first (to maintain referential integrity)
+    // Delete attendance records
+    await db.delete(attendance).where(eq(attendance.employeeId, employeeId));
+
+    // Delete pulses
+    await db.delete(pulses).where(eq(pulses.employeeId, employeeId));
+
+    // Delete breaks
+    await db.delete(breaks).where(eq(breaks.employeeId, employeeId));
+
+    // Finally, delete the employee
+    await db.delete(employees).where(eq(employees.id, employeeId));
+
+    console.log(`[Employee Deleted] ID: ${employeeId}, Name: ${existingEmployee.fullName}`);
+
+    res.json({
+      success: true,
+      message: 'تم حذف الموظف بنجاح',
+      employeeId,
+    });
+  } catch (error) {
+    console.error('Delete employee error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // =============================================================================
 // SHIFT MANAGEMENT - إدارة الشيفتات
 // =============================================================================
@@ -3337,6 +3469,122 @@ app.post('/api/branches/:branchId/assign-manager', async (req, res) => {
     });
   } catch (error) {
     console.error('Assign manager error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Update branch
+app.put('/api/branches/:id', async (req, res) => {
+  try {
+    const branchId = req.params.id;
+    const { name, wifi_bssid, latitude, longitude, geofence_radius } = req.body;
+
+    const updateData: any = {};
+
+    if (name !== undefined) {
+      const trimmedName = typeof name === 'string' ? name.trim() : '';
+      if (!trimmedName) {
+        return res.status(400).json({ error: 'Branch name cannot be empty' });
+      }
+      updateData.name = trimmedName;
+    }
+
+    if (latitude !== undefined) {
+      updateData.latitude = latitude ? latitude.toString() : null;
+    }
+
+    if (longitude !== undefined) {
+      updateData.longitude = longitude ? longitude.toString() : null;
+    }
+
+    if (geofence_radius !== undefined) {
+      updateData.geofenceRadius = geofence_radius || 100;
+    }
+
+    if (wifi_bssid !== undefined) {
+      updateData.wifiBssid = wifi_bssid || null;
+
+      // Update branchBssids table
+      if (wifi_bssid && wifi_bssid.trim() !== '') {
+        // Delete old BSSIDs for this branch
+        await db.delete(branchBssids).where(eq(branchBssids.branchId, branchId));
+        
+        // Insert new BSSID
+        await db.insert(branchBssids).values({
+          branchId,
+          bssidAddress: wifi_bssid.trim().toUpperCase(),
+        });
+      } else {
+        // If wifi_bssid is null/empty, delete all BSSIDs for this branch
+        await db.delete(branchBssids).where(eq(branchBssids.branchId, branchId));
+      }
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ error: 'No fields to update' });
+    }
+
+    const [updatedBranch] = await db
+      .update(branches)
+      .set(updateData)
+      .where(eq(branches.id, branchId))
+      .returning();
+
+    if (!updatedBranch) {
+      return res.status(404).json({ error: 'الفرع غير موجود' });
+    }
+
+    console.log(`[Branch Updated] ID: ${branchId}, Changes: ${Object.keys(updateData).join(', ')}`);
+
+    res.json({
+      success: true,
+      message: 'تم تحديث بيانات الفرع بنجاح',
+      branch: updatedBranch,
+    });
+  } catch (error) {
+    console.error('Update branch error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Delete branch
+app.delete('/api/branches/:id', async (req, res) => {
+  try {
+    const branchId = req.params.id;
+
+    // Check if branch exists
+    const [existingBranch] = await db
+      .select({ id: branches.id, name: branches.name })
+      .from(branches)
+      .where(eq(branches.id, branchId))
+      .limit(1);
+
+    if (!existingBranch) {
+      return res.status(404).json({ error: 'الفرع غير موجود' });
+    }
+
+    // Delete related BSSIDs
+    await db.delete(branchBssids).where(eq(branchBssids.branchId, branchId));
+
+    // Note: We don't delete employees, just unlink them from the branch
+    // Set branchId to null for all employees in this branch
+    await db
+      .update(employees)
+      .set({ branchId: null, branch: null })
+      .where(eq(employees.branchId, branchId));
+
+    // Finally, delete the branch
+    await db.delete(branches).where(eq(branches.id, branchId));
+
+    console.log(`[Branch Deleted] ID: ${branchId}, Name: ${existingBranch.name}`);
+
+    res.json({
+      success: true,
+      message: 'تم حذف الفرع بنجاح',
+      branchId,
+    });
+  } catch (error) {
+    console.error('Delete branch error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
