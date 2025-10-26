@@ -25,7 +25,12 @@ class AuthApiService {
           'pin': pin,
         }),
       )
-          .timeout(const Duration(seconds: 12));
+          .timeout(
+            const Duration(seconds: 8),  // تقليل من 12 إلى 8 ثواني
+            onTimeout: () {
+              throw TimeoutException('انتهت مهلة الاتصال بالخادم');
+            },
+          );
 
       if (response.statusCode == 200) {
         dynamic decoded;
@@ -65,12 +70,11 @@ class AuthApiService {
       } else {
         throw Exception('خطأ في الاتصال بالخادم: ${response.statusCode}');
       }
+    } on TimeoutException {
+      throw Exception('انتهت مهلة الاتصال بالخادم. تحقق من الإنترنت.');
     } catch (e) {
-      if (e is TimeoutException) {
-        throw Exception('انتهت مهلة الاتصال بالخادم. تحقق من الإنترنت وحاول مجدداً.');
-      }
       if (e is Exception) rethrow;
-      throw Exception('فشل الاتصال بالخادم');
+      throw Exception('فشل الاتصال بالخادم. تحقق من الإنترنت.');
     }
   }
 

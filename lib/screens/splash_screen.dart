@@ -35,7 +35,7 @@ class _SplashScreenState extends State<SplashScreen>
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 2000),
+      duration: const Duration(milliseconds: 1200),  // تقليل من 2000 إلى 1200
     )..forward();
     _iconFade = CurvedAnimation(
       parent: _controller,
@@ -206,25 +206,46 @@ class _SplashScreenState extends State<SplashScreen>
     );
 
     return Scaffold(
-      body: AnimatedBuilder(
-        animation: _controller,
-        builder: (context, child) {
-          final gradient = LinearGradient(
-            colors: [
-              _backgroundStart.value ?? const Color(0xFF0F172A),
-              _backgroundEnd.value ?? const Color(0xFF274B7A),
-            ],
-            begin: Alignment.topRight,
-            end: Alignment.bottomLeft,
-          );
-          return Container(
-            decoration: BoxDecoration(gradient: gradient),
-            child: child,
-          );
+      body: GestureDetector(
+        onTap: () {
+          // Allow user to skip splash by tapping
+          if (!_controller.isCompleted) {
+            _controller.animateTo(1.0, duration: const Duration(milliseconds: 300));
+          }
         },
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
+        child: AnimatedBuilder(
+          animation: _controller,
+          builder: (context, child) {
+            final gradient = LinearGradient(
+              colors: [
+                _backgroundStart.value ?? const Color(0xFF0F172A),
+                _backgroundEnd.value ?? const Color(0xFF274B7A),
+              ],
+              begin: Alignment.topRight,
+              end: Alignment.bottomLeft,
+            );
+            return Container(
+              decoration: BoxDecoration(gradient: gradient),
+              child: child,
+            );
+          },
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              // Skip hint at bottom
+              Positioned(
+                bottom: 32,
+                child: FadeTransition(
+                  opacity: _ctaFade,
+                  child: Text(
+                    'اضغط للمتابعة',
+                    style: ctaStyle.copyWith(
+                      fontSize: 14,
+                      color: Colors.white.withOpacity(0.6),
+                    ),
+                  ),
+                ),
+              ),
             Positioned(
               top: -140,
               right: -60,
@@ -430,6 +451,6 @@ class _SplashScreenState extends State<SplashScreen>
           ],
         ),
       ),
-    );
+    ));
   }
 }
