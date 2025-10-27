@@ -3376,6 +3376,7 @@ app.get('/api/employees/:employeeId/status', async (req, res) => {
         fullName: employee.fullName,
         role: employee.role,
         branch: employee.branch,
+        branchId: employee.branchId,
         active: employee.active,
       },
       attendance: todayAttendance ? {
