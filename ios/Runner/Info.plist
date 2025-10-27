@@ -51,5 +51,21 @@
 	<string>تواصل أولديزز وركرز متابعة موقعك في الخلفية لتسجيل نبضات الحضور بشكل مستمر.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
 	<string>تحتاج أولديزز وركرز إلى صلاحية الموقع في الخلفية للحفاظ على حضورك محدثاً حتى عند إغلاق التطبيق.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>location</string>
+		<string>processing</string>
+		<string>remote-notification</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.oldies.workers.geofence</string>
+		<string>com.oldies.workers.sync</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>تستخدم أولديزز وركرز الشبكة المحلية للتحقق من WiFi BSSID للتأكد من وجودك في مكان العمل.</string>
+	<key>NSUserTrackingUsageDescription</key>
+	<string>نستخدم هذه المعلومات لتحسين تجربتك في التطبيق.</string>
 </dict>
 </plist>

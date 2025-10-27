@@ -34,6 +34,15 @@ class NotificationService {
     await _notifications
         .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
         ?.requestNotificationsPermission();
+    
+    // Request permissions on iOS
+    await _notifications
+        .resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>()
+        ?.requestPermissions(
+          alert: true,
+          badge: true,
+          sound: true,
+        );
   }
 
   void _onNotificationTapped(NotificationResponse response) {
