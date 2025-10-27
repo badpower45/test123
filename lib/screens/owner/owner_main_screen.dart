@@ -381,53 +381,32 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
     final nameController = TextEditingController(text: employee['fullName']?.toString() ?? '');
     final hourlyRateController = TextEditingController(text: employee['hourlyRate']?.toString() ?? '');
     
+    // Parse existing shift times
+    TimeOfDay? shiftStart;
+    TimeOfDay? shiftEnd;
+    if (employee['shiftStartTime'] != null) {
+      final parts = employee['shiftStartTime'].toString().split(':');
+      if (parts.length == 2) {
+        shiftStart = TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1]));
+      }
+    }
+    if (employee['shiftEndTime'] != null) {
+      final parts = employee['shiftEndTime'].toString().split(':');
+      if (parts.length == 2) {
+        shiftEnd = TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1]));
+      }
+    }
+    String shiftType = employee['shiftType']?.toString() ?? 'AM';
+    
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text('تعديل بيانات ${employee['fullName'] ?? 'الموظف'}'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(labelText: 'الاسم الكامل'),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: hourlyRateController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: 'سعر الساعة (جنيه)'),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('إلغاء')),
-          TextButton(
-            onPressed: () {
-              final name = nameController.text.trim();
-              final hourlyRate = double.tryParse(hourlyRateController.text.trim());
-              
-              if (name.isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('الاسم مطلوب')),
-                );
-                return;
-              }
-              
-              if (hourlyRate == null || hourlyRate < 0) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('يرجى إدخال سعر ساعة صالح')),
-                );
-                return;
-              }
-              
-              Navigator.pop(context, {'fullName': name, 'hourlyRate': hourlyRate});
-            },
-            child: const Text('حفظ'),
-          ),
-        ],
+      builder: (context) => _EditEmployeeDialog(
+        employee: employee,
+        nameController: nameController,
+        hourlyRateController: hourlyRateController,
+        initialShiftStart: shiftStart,
+        initialShiftEnd: shiftEnd,
+        initialShiftType: shiftType,
       ),
     );
     
@@ -438,6 +417,9 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
         employeeId: '${employee['id']}',
         fullName: result['fullName'],
         hourlyRate: result['hourlyRate'],
+        shiftStartTime: result['shiftStartTime'],
+        shiftEndTime: result['shiftEndTime'],
+        shiftType: result['shiftType'],
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -2049,6 +2031,157 @@ class _BranchCardState extends State<_BranchCard> {
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('إلغاء')),
         ],
       ),
+    );
+  }
+}
+
+class _EditEmployeeDialog extends StatefulWidget {
+  const _EditEmployeeDialog({
+    required this.employee,
+    required this.nameController,
+    required this.hourlyRateController,
+    this.initialShiftStart,
+    this.initialShiftEnd,
+    required this.initialShiftType,
+  });
+
+  final Map<String, dynamic> employee;
+  final TextEditingController nameController;
+  final TextEditingController hourlyRateController;
+  final TimeOfDay? initialShiftStart;
+  final TimeOfDay? initialShiftEnd;
+  final String initialShiftType;
+
+  @override
+  State<_EditEmployeeDialog> createState() => _EditEmployeeDialogState();
+}
+
+class _EditEmployeeDialogState extends State<_EditEmployeeDialog> {
+  TimeOfDay? _shiftStart;
+  TimeOfDay? _shiftEnd;
+  late String _shiftType;
+
+  @override
+  void initState() {
+    super.initState();
+    _shiftStart = widget.initialShiftStart;
+    _shiftEnd = widget.initialShiftEnd;
+    _shiftType = widget.initialShiftType;
+  }
+
+  String _formatTime(TimeOfDay? time) {
+    if (time == null) return 'غير محدد';
+    final hour = time.hour.toString().padLeft(2, '0');
+    final minute = time.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
+  }
+
+  Future<void> _pickTime({required bool isStart}) async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: (isStart ? _shiftStart : _shiftEnd) ?? TimeOfDay.now(),
+    );
+    if (picked != null) {
+      setState(() {
+        if (isStart) {
+          _shiftStart = picked;
+        } else {
+          _shiftEnd = picked;
+        }
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('تعديل بيانات ${widget.employee['fullName'] ?? 'الموظف'}'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              controller: widget.nameController,
+              decoration: const InputDecoration(labelText: 'الاسم الكامل'),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: widget.hourlyRateController,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: 'سعر الساعة (جنيه)'),
+            ),
+            const SizedBox(height: 16),
+            const Divider(),
+            const SizedBox(height: 8),
+            Text('مواعيد الشيفت:', style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value: _shiftType,
+              decoration: const InputDecoration(
+                labelText: 'نوع الشيفت',
+                border: OutlineInputBorder(),
+              ),
+              items: const [
+                DropdownMenuItem(value: 'AM', child: Text('صباحي (AM)')),
+                DropdownMenuItem(value: 'PM', child: Text('مسائي (PM)')),
+              ],
+              onChanged: (value) {
+                if (value != null) {
+                  setState(() => _shiftType = value);
+                }
+              },
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () => _pickTime(isStart: true),
+              icon: const Icon(Icons.access_time),
+              label: Text('بداية الشيفت: ${_formatTime(_shiftStart)}'),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: () => _pickTime(isStart: false),
+              icon: const Icon(Icons.access_time),
+              label: Text('نهاية الشيفت: ${_formatTime(_shiftEnd)}'),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('إلغاء'),
+        ),
+        TextButton(
+          onPressed: () {
+            final name = widget.nameController.text.trim();
+            final hourlyRate = double.tryParse(widget.hourlyRateController.text.trim());
+            
+            if (name.isEmpty) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('الاسم مطلوب')),
+              );
+              return;
+            }
+            
+            if (hourlyRate == null || hourlyRate < 0) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('يرجى إدخال سعر ساعة صالح')),
+              );
+              return;
+            }
+            
+            Navigator.pop(context, {
+              'fullName': name,
+              'hourlyRate': hourlyRate,
+              'shiftStartTime': _shiftStart != null ? _formatTime(_shiftStart) : null,
+              'shiftEndTime': _shiftEnd != null ? _formatTime(_shiftEnd) : null,
+              'shiftType': _shiftType,
+            });
+          },
+          child: const Text('حفظ'),
+        ),
+      ],
     );
   }
 }

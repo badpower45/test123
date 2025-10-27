@@ -493,7 +493,10 @@ app.post('/api/attendance/check-in', async (req, res) => {
       if (branch) {
         const branchLat = branch.latitude ? Number(branch.latitude) : null;
         const branchLng = branch.longitude ? Number(branch.longitude) : null;
-        const radius = branch.geofenceRadius || 100; // Default 100 meters
+        const radius = branch.geofenceRadius || 500; // Increased default to 500 meters
+
+        console.log(`Geofence data: branchLat=${branchLat}, branchLng=${branchLng}, radius=${radius}`);
+        console.log(`Employee location: lat=${latitude}, lng=${longitude}`);
 
         if (branchLat && branchLng) {
           // Calculate distance using Haversine formula
@@ -509,17 +512,25 @@ app.post('/api/attendance/check-in', async (req, res) => {
           const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
           const distance = R * c;
 
-          console.log(`Geofence check: distance=${distance.toFixed(2)}m, radius=${radius}m`);
+          console.log(`Geofence check: distance=${distance.toFixed(2)}m, radius=${radius}m, allowed=${distance <= radius}`);
 
           if (distance > radius) {
             return res.status(403).json({ 
               error: 'أنت خارج نطاق الموقع المسموح. يجب أن تكون داخل الفرع لتسجيل الحضور.',
               distance: Math.round(distance),
               allowedRadius: radius,
+              branchLocation: { lat: branchLat, lng: branchLng },
+              yourLocation: { lat: latitude, lng: longitude },
             });
           }
+        } else {
+          console.log(`Warning: Branch ${employee.branchId} has no location set`);
         }
+      } else {
+        console.log(`Warning: Branch ${employee.branchId} not found`);
       }
+    } else {
+      console.log(`Geofence check skipped: branchId=${employee.branchId}, lat=${latitude}, lng=${longitude}`);
     }
 
     // Create new attendance record
@@ -2048,6 +2059,18 @@ app.put('/api/employees/:id', async (req, res) => {
 
     if (req.body.active !== undefined) {
       updateData.active = Boolean(req.body.active);
+    }
+
+    if (req.body.shiftStartTime !== undefined) {
+      updateData.shiftStartTime = req.body.shiftStartTime ? String(req.body.shiftStartTime).trim() : null;
+    }
+
+    if (req.body.shiftEndTime !== undefined) {
+      updateData.shiftEndTime = req.body.shiftEndTime ? String(req.body.shiftEndTime).trim() : null;
+    }
+
+    if (req.body.shiftType !== undefined) {
+      updateData.shiftType = req.body.shiftType ? String(req.body.shiftType).trim() : null;
     }
 
     if (Object.keys(updateData).length === 0) {

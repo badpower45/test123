@@ -138,6 +138,9 @@ class OwnerApiService {
     String? branchId,
     double? hourlyRate,
     bool? active,
+    String? shiftStartTime,
+    String? shiftEndTime,
+    String? shiftType,
   }) async {
     final endpoint = employeesEndpoint.endsWith('/')
         ? '${employeesEndpoint}$employeeId'
@@ -152,6 +155,9 @@ class OwnerApiService {
     if (branchId != null) body['branchId'] = branchId;
     if (hourlyRate != null) body['hourlyRate'] = hourlyRate;
     if (active != null) body['active'] = active;
+    if (shiftStartTime != null) body['shiftStartTime'] = shiftStartTime;
+    if (shiftEndTime != null) body['shiftEndTime'] = shiftEndTime;
+    if (shiftType != null) body['shiftType'] = shiftType;
 
     final response = await http.put(
       uri,
