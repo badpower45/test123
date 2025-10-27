@@ -8,7 +8,9 @@ import 'package:network_info_plus/network_info_plus.dart';
 import '../../services/branch_manager_api_service.dart';
 import '../../services/owner_api_service.dart';
 import '../../services/branch_api_service.dart';
+import '../../services/auth_service.dart';
 import '../../theme/app_colors.dart';
+import '../login_screen.dart';
 
 class OwnerMainScreen extends StatefulWidget {
   const OwnerMainScreen({super.key, required this.ownerId, this.ownerName});
@@ -69,6 +71,39 @@ class _OwnerMainScreenState extends State<OwnerMainScreen> {
             tooltip: 'تحديث البيانات',
             onPressed: () {
               setState(() {}); // Trigger refresh of current tab
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            tooltip: 'تسجيل الخروج',
+            onPressed: () async {
+              final confirmed = await showDialog<bool>(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: const Text('تسجيل الخروج'),
+                  content: const Text('هل أنت متأكد من تسجيل الخروج؟'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('إلغاء'),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      style: TextButton.styleFrom(foregroundColor: Colors.red),
+                      child: const Text('تسجيل الخروج'),
+                    ),
+                  ],
+                ),
+              );
+
+              if (confirmed == true) {
+                await AuthService.logout();
+                if (!mounted) return;
+                Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (context) => const LoginScreen()),
+                  (route) => false,
+                );
+              }
             },
           ),
         ],
