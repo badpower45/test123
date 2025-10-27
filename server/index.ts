@@ -868,13 +868,15 @@ app.post('/api/attendance/request-checkout', async (req, res) => {
 // Get pending requests (for manager)
 app.get('/api/attendance/requests', async (req, res) => {
   try {
-    const { status = 'pending' } = req.query;
+    const { status = 'pending', manager_id } = req.query;
 
-    const requests = await db
+    let query = db
       .select({
         id: attendanceRequests.id,
         employeeId: attendanceRequests.employeeId,
         employeeName: employees.fullName,
+        employeeBranch: employees.branch,
+        employeeBranchId: employees.branchId,
         requestType: attendanceRequests.requestType,
         requestedTime: attendanceRequests.requestedTime,
         reason: attendanceRequests.reason,
@@ -883,8 +885,37 @@ app.get('/api/attendance/requests', async (req, res) => {
       })
       .from(attendanceRequests)
       .innerJoin(employees, eq(attendanceRequests.employeeId, employees.id))
-      .where(eq(attendanceRequests.status, status as 'pending' | 'approved' | 'rejected'))
-      .orderBy(desc(attendanceRequests.createdAt));
+      .where(eq(attendanceRequests.status, status as 'pending' | 'approved' | 'rejected'));
+
+    // If manager_id provided, filter by employees in that manager's branch
+    if (manager_id && typeof manager_id === 'string') {
+      // Get manager's branch
+      const [manager] = await db
+        .select()
+        .from(employees)
+        .where(eq(employees.id, manager_id))
+        .limit(1);
+
+      if (manager && manager.branchId) {
+        // Find branches where this manager is assigned
+        const managerBranches = await db
+          .select()
+          .from(branches)
+          .where(eq(branches.managerId, manager_id));
+
+        const branchIds = managerBranches.map(b => b.id);
+        
+        if (branchIds.length > 0) {
+          // Filter requests to only employees in manager's branches
+          query = query.where(sql`${employees.branchId} = ANY(${branchIds})`);
+        } else {
+          // Manager has no branches, return empty
+          return res.json({ requests: [] });
+        }
+      }
+    }
+
+    const requests = await query.orderBy(desc(attendanceRequests.createdAt));
 
     res.json({ requests });
   } catch (error) {
@@ -1074,13 +1105,15 @@ app.post('/api/leave/request', async (req, res) => {
 // Get leave requests
 app.get('/api/leave/requests', async (req, res) => {
   try {
-    const { employee_id, status } = req.query;
+    const { employee_id, status, manager_id } = req.query;
 
     let query = db
       .select({
         id: leaveRequests.id,
         employeeId: leaveRequests.employeeId,
         employeeName: employees.fullName,
+        employeeBranch: employees.branch,
+        employeeBranchId: employees.branchId,
         startDate: leaveRequests.startDate,
         endDate: leaveRequests.endDate,
         leaveType: leaveRequests.leaveType,
@@ -1100,6 +1133,23 @@ app.get('/api/leave/requests', async (req, res) => {
 
     if (status) {
       query = query.where(eq(leaveRequests.status, status as 'pending' | 'approved' | 'rejected'));
+    }
+
+    // If manager_id provided, filter by employees in that manager's branch
+    if (manager_id && typeof manager_id === 'string' && !employee_id) {
+      const managerBranches = await db
+        .select()
+        .from(branches)
+        .where(eq(branches.managerId, manager_id));
+
+      const branchIds = managerBranches.map(b => b.id);
+      
+      if (branchIds.length > 0) {
+        query = query.where(sql`${employees.branchId} = ANY(${branchIds})`);
+      } else {
+        // Manager has no branches, return empty
+        return res.json({ requests: [] });
+      }
     }
 
     const requests = await query.orderBy(desc(leaveRequests.createdAt));
