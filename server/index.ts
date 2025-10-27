@@ -414,6 +414,53 @@ app.post('/api/attendance/check-in', async (req, res) => {
     if (!employee_id) {
       return res.status(400).json({ error: 'Employee ID is required' });
     }
+    
+    // Fetch employee to check shift times
+    const [employee] = await db
+      .select()
+      .from(employees)
+      .where(eq(employees.id, employee_id))
+      .limit(1);
+
+    if (!employee) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    // Validate shift time if shift is defined
+    if (employee.shiftStartTime && employee.shiftEndTime) {
+      const now = new Date();
+      const currentHour = now.getHours();
+      const currentMinute = now.getMinutes();
+      const currentTime = currentHour * 60 + currentMinute; // Convert to minutes since midnight
+
+      // Parse shift times (format: "HH:mm")
+      const [startHour, startMinute] = employee.shiftStartTime.split(':').map(Number);
+      const [endHour, endMinute] = employee.shiftEndTime.split(':').map(Number);
+      const shiftStart = startHour * 60 + startMinute;
+      const shiftEnd = endHour * 60 + endMinute;
+
+      // Allow 30 minutes before shift start and during shift
+      const allowedStart = shiftStart - 30;
+      
+      // Check if current time is within allowed window
+      let isWithinShift = false;
+      if (shiftEnd > shiftStart) {
+        // Normal shift (e.g., 9:00 - 17:00)
+        isWithinShift = currentTime >= allowedStart && currentTime <= shiftEnd;
+      } else {
+        // Night shift crossing midnight (e.g., 21:00 - 05:00)
+        isWithinShift = currentTime >= allowedStart || currentTime <= shiftEnd;
+      }
+
+      if (!isWithinShift) {
+        return res.status(403).json({ 
+          error: 'لا يمكن تسجيل الحضور خارج وقت الشيفت المحدد',
+          shiftStartTime: employee.shiftStartTime,
+          shiftEndTime: employee.shiftEndTime,
+          shiftType: employee.shiftType,
+        });
+      }
+    }
 
     const today = new Date().toISOString().split('T')[0];
 
@@ -449,14 +496,6 @@ app.post('/api/attendance/check-in', async (req, res) => {
 
     // Create pulse for location tracking
     if (latitude && longitude) {
-      // Note: pulses table requires userId and branchId
-      // Need employee record for branchId
-      const [employee] = await db
-        .select()
-        .from(employees)
-        .where(eq(employees.id, employee_id))
-        .limit(1);
-
       if (employee && employee.branchId) {
         await db.insert(pulses).values({
           employeeId: employee_id,
@@ -1761,6 +1800,11 @@ app.post('/api/employees', async (req, res) => {
     }
 
     const pinHash = await bcrypt.hash(pin, 10);
+    
+    // Get shift times from request
+    const shiftStartTime = typeof req.body.shiftStartTime === 'string' ? req.body.shiftStartTime.trim() : undefined;
+    const shiftEndTime = typeof req.body.shiftEndTime === 'string' ? req.body.shiftEndTime.trim() : undefined;
+    const shiftType = typeof req.body.shiftType === 'string' ? req.body.shiftType.trim() : undefined;
 
     const insertData: any = {
       id,
@@ -1774,6 +1818,16 @@ app.post('/api/employees', async (req, res) => {
 
     if (hourlyRate !== undefined) {
       insertData.hourlyRate = hourlyRate;
+    }
+    
+    if (shiftStartTime) {
+      insertData.shiftStartTime = shiftStartTime;
+    }
+    if (shiftEndTime) {
+      insertData.shiftEndTime = shiftEndTime;
+    }
+    if (shiftType) {
+      insertData.shiftType = shiftType;
     }
 
     const [newEmployee] = await db

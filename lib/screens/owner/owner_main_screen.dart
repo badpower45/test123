@@ -1081,6 +1081,11 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
   late Future<List<Map<String, dynamic>>> _branchesFuture;
   String? _selectedBranchId;  // Changed to store UUID
   String? _selectedBranchName;  // Optional: store name
+  
+  // Shift times
+  TimeOfDay? _shiftStartTime;
+  TimeOfDay? _shiftEndTime;
+  String _shiftType = 'AM'; // Default to AM shift
 
   @override
   void initState() {
@@ -1102,6 +1107,16 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
 
     try {
       final hourlyRate = double.parse(_hourlyRateController.text.trim());
+      
+      // Format shift times as HH:mm strings
+      String? shiftStart;
+      String? shiftEnd;
+      if (_shiftStartTime != null) {
+        shiftStart = '${_shiftStartTime!.hour.toString().padLeft(2, '0')}:${_shiftStartTime!.minute.toString().padLeft(2, '0')}';
+      }
+      if (_shiftEndTime != null) {
+        shiftEnd = '${_shiftEndTime!.hour.toString().padLeft(2, '0')}:${_shiftEndTime!.minute.toString().padLeft(2, '0')}';
+      }
 
       await OwnerApiService.createEmployee(
         ownerId: widget.ownerId,
@@ -1111,6 +1126,9 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
         branchId: _selectedBranchId,  // Send branchId (UUID)
         branch: _selectedBranchName,  // Optional: send branch name
         hourlyRate: hourlyRate,
+        shiftStartTime: shiftStart,
+        shiftEndTime: shiftEnd,
+        shiftType: _shiftType,
       );
 
       if (!mounted) return;
@@ -1243,6 +1261,103 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
                 },
               ),
               const SizedBox(height: 16),
+
+              // Shift Type Selection
+              const Text(
+                'نوع الشيفت',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: RadioListTile<String>(
+                      title: const Text('صباحي (AM)'),
+                      value: 'AM',
+                      groupValue: _shiftType,
+                      onChanged: (value) {
+                        setState(() {
+                          _shiftType = value!;
+                        });
+                      },
+                    ),
+                  ),
+                  Expanded(
+                    child: RadioListTile<String>(
+                      title: const Text('مسائي (PM)'),
+                      value: 'PM',
+                      groupValue: _shiftType,
+                      onChanged: (value) {
+                        setState(() {
+                          _shiftType = value!;
+                        });
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+
+              // Shift Start Time
+              InkWell(
+                onTap: () async {
+                  final time = await showTimePicker(
+                    context: context,
+                    initialTime: _shiftStartTime ?? const TimeOfDay(hour: 9, minute: 0),
+                  );
+                  if (time != null) {
+                    setState(() {
+                      _shiftStartTime = time;
+                    });
+                  }
+                },
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'وقت بداية الشيفت',
+                    border: OutlineInputBorder(),
+                    suffixIcon: Icon(Icons.access_time),
+                  ),
+                  child: Text(
+                    _shiftStartTime != null
+                        ? '${_shiftStartTime!.hour.toString().padLeft(2, '0')}:${_shiftStartTime!.minute.toString().padLeft(2, '0')}'
+                        : 'اختر وقت البداية',
+                    style: TextStyle(
+                      color: _shiftStartTime != null ? Colors.black : Colors.grey,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // Shift End Time
+              InkWell(
+                onTap: () async {
+                  final time = await showTimePicker(
+                    context: context,
+                    initialTime: _shiftEndTime ?? const TimeOfDay(hour: 17, minute: 0),
+                  );
+                  if (time != null) {
+                    setState(() {
+                      _shiftEndTime = time;
+                    });
+                  }
+                },
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'وقت نهاية الشيفت',
+                    border: OutlineInputBorder(),
+                    suffixIcon: Icon(Icons.access_time),
+                  ),
+                  child: Text(
+                    _shiftEndTime != null
+                        ? '${_shiftEndTime!.hour.toString().padLeft(2, '0')}:${_shiftEndTime!.minute.toString().padLeft(2, '0')}'
+                        : 'اختر وقت النهاية',
+                    style: TextStyle(
+                      color: _shiftEndTime != null ? Colors.black : Colors.grey,
+                    ),
+                  ),
+                ),
+              ),
 
               const SizedBox(height: 24),
 

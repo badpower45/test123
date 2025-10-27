@@ -68,6 +68,9 @@ class OwnerApiService {
     String? branchId,  // Changed to branchId (UUID)
     String? branch,    // Optional: branch name for backward compatibility
     required double hourlyRate,
+    String? shiftStartTime,  // Format: "HH:mm"
+    String? shiftEndTime,    // Format: "HH:mm"
+    String? shiftType,       // "AM" or "PM"
   }) async {
     final uri = Uri.parse(employeesEndpoint);
     final response = await http.post(
@@ -83,6 +86,9 @@ class OwnerApiService {
         'hourlyRate': hourlyRate,
         'role': 'staff',
         'active': true,
+        'shiftStartTime': shiftStartTime,
+        'shiftEndTime': shiftEndTime,
+        'shiftType': shiftType,
       }),
     );
 
