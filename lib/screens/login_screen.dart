@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 
-import '../theme/app_colors.dart';
-import '../services/auth_api_service.dart';
-import '../services/employee_repository.dart';
 import '../models/employee.dart';
-import 'employee/employee_main_screen.dart';
-import 'manager/manager_main_screen.dart';
-import 'branch_manager_screen.dart';
-import 'owner/owner_main_screen.dart';
+import '../screens/branch_manager_screen.dart';
+import '../screens/employee/employee_main_screen.dart';
+import '../screens/manager/manager_main_screen.dart';
+import '../screens/owner/owner_main_screen.dart';
+import '../services/auth_api_service.dart';
+import '../services/auth_service.dart';
+import '../theme/app_colors.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -58,10 +58,13 @@ class _LoginScreenState extends State<LoginScreen> {
         pin: pin,
       );
 
-      // Clear any local/demo employees to avoid stale data overriding server state
-      await EmployeeRepository.clearAll();
-
-      // Do not save to local cache - rely entirely on server database
+      // Save login data to SharedPreferences for persistent login
+      await AuthService.saveLoginData(
+        employeeId: employee.id,
+        role: employee.role.name,
+        branch: employee.branch,
+        fullName: employee.fullName,
+      );
 
       if (!mounted) return;
 

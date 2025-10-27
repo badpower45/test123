@@ -2,7 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../theme/app_colors.dart';
+import '../services/auth_service.dart';
+import '../models/employee.dart';
 import 'login_screen.dart';
+import 'owner/owner_main_screen.dart';
+import 'manager/manager_main_screen.dart';
+import 'employee/employee_main_screen.dart';
+import 'branch_manager_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -125,24 +131,56 @@ class _SplashScreenState extends State<SplashScreen>
     });
   }
 
-  void _navigateToLogin() {
-    if (!mounted) {
-      return;
+  void _navigateToLogin() async {
+    if (!mounted) return;
+
+    // Check if user is already logged in
+    final loginData = await AuthService.getLoginData();
+    
+    if (loginData.isNotEmpty && loginData['employeeId'] != null) {
+      // User is logged in, navigate to appropriate screen based on role
+      final employeeId = loginData['employeeId']!;
+      final role = loginData['role'] ?? 'staff';
+      final branch = loginData['branch'] ?? '';
+      final fullName = loginData['fullName'] ?? '';
+
+      Widget targetScreen;
+
+      if (role.toLowerCase() == 'owner') {
+        targetScreen = OwnerMainScreen(ownerId: employeeId, ownerName: fullName);
+      } else if (role.toLowerCase() == 'admin' || role.toLowerCase() == 'hr') {
+        targetScreen = BranchManagerScreen(managerId: employeeId, branchName: branch);
+      } else if (role.toLowerCase() == 'manager') {
+        targetScreen = ManagerMainScreen(managerId: employeeId, branch: branch, role: role);
+      } else {
+        targetScreen = EmployeeMainScreen(employeeId: employeeId, role: role, branch: branch);
+      }
+
+      Navigator.of(context).pushReplacement(
+        PageRouteBuilder<void>(
+          transitionDuration: const Duration(milliseconds: 550),
+          pageBuilder: (context, animation, secondaryAnimation) {
+            return FadeTransition(
+              opacity: CurvedAnimation(parent: animation, curve: Curves.easeInOut),
+              child: targetScreen,
+            );
+          },
+        ),
+      );
+    } else {
+      // No saved login, go to login screen
+      Navigator.of(context).pushReplacement(
+        PageRouteBuilder<void>(
+          transitionDuration: const Duration(milliseconds: 550),
+          pageBuilder: (context, animation, secondaryAnimation) {
+            return FadeTransition(
+              opacity: CurvedAnimation(parent: animation, curve: Curves.easeInOut),
+              child: const LoginScreen(),
+            );
+          },
+        ),
+      );
     }
-    Navigator.of(context).pushReplacement(
-      PageRouteBuilder<void>(
-        transitionDuration: const Duration(milliseconds: 550),
-        pageBuilder: (context, animation, secondaryAnimation) {
-          return FadeTransition(
-            opacity: CurvedAnimation(
-              parent: animation,
-              curve: Curves.easeInOut,
-            ),
-            child: const LoginScreen(),
-          );
-        },
-      ),
-    );
   }
 
   @override
