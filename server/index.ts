@@ -3894,6 +3894,71 @@ app.post('/api/breaks/:breakId/end', async (req, res) => {
   }
 });
 
+// ============ Geofence Violations ============
+
+// Report a geofence violation
+app.post('/api/alerts/geofence-violation', async (req, res) => {
+  try {
+    const { employeeId, timestamp, latitude, longitude } = req.body;
+
+    if (!employeeId || !timestamp) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    console.log(`[Geofence] Violation reported for employee ${employeeId} at ${timestamp}`);
+
+    // Get employee info including manager
+    const employeeResult = await db
+      .select()
+      .from(employees)
+      .where(eq(employees.id, employeeId))
+      .limit(1);
+    
+    const employee = extractFirstRow(employeeResult);
+
+    if (!employee) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    // Get branch info to find manager
+    if (employee.branchId) {
+      const branchResult = await db
+        .select()
+        .from(branches)
+        .where(eq(branches.id, employee.branchId))
+        .limit(1);
+      
+      const branch = extractFirstRow(branchResult);
+
+      if (branch) {
+        console.log(`[Geofence] Employee ${employee.fullName} from branch ${branch.name} violated geofence`);
+        
+        // TODO: Send notification to branch manager
+        // You can implement push notifications or store alerts in a table
+        // For now, just log it
+        console.log(`[Geofence] Alert should be sent to branch ${branch.name} manager`);
+      }
+    }
+
+    // Store the violation (you can create an alerts table if needed)
+    // For now, just acknowledge receipt
+    res.json({
+      success: true,
+      message: 'تم تسجيل خروج الموظف من المنطقة',
+      employee: {
+        id: employee.id,
+        name: employee.fullName,
+        branch: employee.branch,
+      },
+      timestamp,
+      location: { latitude, longitude },
+    });
+  } catch (error) {
+    console.error('Geofence violation error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Listen on 0.0.0.0 to accept connections from all interfaces (including IPv4)
 console.log(`[DEBUG] About to call app.listen on port ${PORT}...`);
 

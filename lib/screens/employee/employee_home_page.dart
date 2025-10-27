@@ -11,6 +11,8 @@ import '../../services/location_service.dart';
 import '../../services/requests_api_service.dart';
 import '../../services/sync_service.dart';
 import '../../services/notification_service.dart';
+import '../../services/geofence_service.dart';
+import '../../services/auth_service.dart';
 import '../../database/offline_database.dart';
 import '../../theme/app_colors.dart';
 
@@ -176,6 +178,9 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         }
       }
       
+      // Start geofence monitoring after successful check-in
+      await _startGeofenceMonitoring();
+      
       setState(() {
         _isCheckedIn = true;
         _checkInTime = DateTime.now();
@@ -285,6 +290,9 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
       
       _timer?.cancel();
       
+      // Stop geofence monitoring on checkout
+      GeofenceService.instance.stopMonitoring();
+      
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
@@ -296,6 +304,29 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           ),
         );
       }
+    }
+  }
+
+  // Start geofence monitoring
+  Future<void> _startGeofenceMonitoring() async {
+    try {
+      // Get employee info from SharedPreferences
+      final loginData = await AuthService.getLoginData();
+      final employeeName = loginData['fullName'] ?? 'الموظف';
+
+      // Start monitoring with restaurant config
+      await GeofenceService.instance.startMonitoring(
+        employeeId: widget.employeeId,
+        employeeName: employeeName,
+        branchLatitude: RestaurantConfig.latitude,
+        branchLongitude: RestaurantConfig.longitude,
+        geofenceRadius: RestaurantConfig.allowedRadiusInMeters,
+        requiredBssid: RestaurantConfig.allowedWifiBssid,
+      );
+
+      print('[EmployeeHomePage] Geofence monitoring started');
+    } catch (e) {
+      print('[EmployeeHomePage] Failed to start geofence monitoring: $e');
     }
   }
 

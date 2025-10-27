@@ -193,7 +193,7 @@ class SyncService {
       Uri.parse('$apiBaseUrl/alerts/geofence-violation'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
-        'employee_id': violation['employee_id'],
+        'employeeId': violation['employee_id'],
         'timestamp': violation['timestamp'],
         'latitude': violation['latitude'],
         'longitude': violation['longitude'],
