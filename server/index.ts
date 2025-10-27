@@ -589,8 +589,16 @@ app.get('/api/pulses/active/:employeeId', async (req, res) => {
       ));
 
     const validPulseCount = Number(result[0]?.count) || 0;
-    const HOURLY_RATE = 40;
-    const pulseValue = (HOURLY_RATE / 3600) * 30; // قيمة كل نبضة
+
+    // Fetch employee to get their hourly rate (fallback to 40 if not set)
+    const [employeeRecord] = await db
+      .select()
+      .from(employees)
+      .where(eq(employees.id, employeeId))
+      .limit(1);
+
+    const hourlyRate = employeeRecord && employeeRecord.hourlyRate ? Number(employeeRecord.hourlyRate) : 40;
+    const pulseValue = (hourlyRate / 3600) * 30; // قيمة كل نبضة (30 ثانية)
     const earnings = validPulseCount * pulseValue;
 
     res.json({
