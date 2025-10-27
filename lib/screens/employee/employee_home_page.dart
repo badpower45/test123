@@ -2,12 +2,16 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:network_info_plus/network_info_plus.dart';
 
 import '../../constants/restaurant_config.dart';
 import '../../models/attendance_request.dart';
 import '../../services/attendance_api_service.dart';
 import '../../services/location_service.dart';
 import '../../services/requests_api_service.dart';
+import '../../services/sync_service.dart';
+import '../../services/notification_service.dart';
+import '../../database/offline_database.dart';
 import '../../theme/app_colors.dart';
 
 class EmployeeHomePage extends StatefulWidget {
@@ -25,17 +29,31 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
   String _elapsedTime = '00:00:00';
   Timer? _timer;
   bool _isLoading = false;
+  int _pendingCount = 0;
 
   @override
   void initState() {
     super.initState();
     _checkCurrentStatus();
+    _loadPendingCount();
+    // Refresh pending count every minute
+    Timer.periodic(const Duration(minutes: 1), (_) => _loadPendingCount());
   }
 
   @override
   void dispose() {
     _timer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _loadPendingCount() async {
+    final db = OfflineDatabase.instance;
+    final count = await db.getPendingCount();
+    if (mounted) {
+      setState(() {
+        _pendingCount = count;
+      });
+    }
   }
 
   Future<void> _checkCurrentStatus() async {
@@ -86,7 +104,10 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
     try {
       final locationService = LocationService();
       final position = await locationService.tryGetPosition();
+      final networkInfo = NetworkInfo();
+      final wifiBSSID = await networkInfo.getWifiBSSID();
 
+      // Validate location
       if (RestaurantConfig.enforceLocation) {
         if (position == null) {
           throw Exception('تعذر تحديد موقعك، يرجى تفعيل خدمة تحديد الموقع والمحاولة مرة أخرى.');
@@ -105,11 +126,55 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
       final latitude = position?.latitude ?? RestaurantConfig.latitude;
       final longitude = position?.longitude ?? RestaurantConfig.longitude;
 
-      await AttendanceApiService.checkIn(
-        employeeId: widget.employeeId,
-        latitude: latitude,
-        longitude: longitude,
-      );
+      // Check internet connection
+      final syncService = SyncService.instance;
+      final hasInternet = await syncService.hasInternet();
+
+      if (hasInternet) {
+        // Online mode: Send to API directly
+        await AttendanceApiService.checkIn(
+          employeeId: widget.employeeId,
+          latitude: latitude,
+          longitude: longitude,
+        );
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('✓ تم تسجيل الحضور بنجاح'),
+              backgroundColor: AppColors.success,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      } else {
+        // Offline mode: Save locally
+        final db = OfflineDatabase.instance;
+        await db.insertPendingCheckin(
+          employeeId: widget.employeeId,
+          timestamp: DateTime.now(),
+          latitude: latitude,
+          longitude: longitude,
+          wifiBssid: wifiBSSID,
+        );
+        
+        // Start sync service if not already running
+        syncService.startPeriodicSync();
+        
+        // Show offline notification
+        await NotificationService.instance.showOfflineModeNotification();
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('📴 تم حفظ الحضور محلياً - سيتم الرفع عند توفر الإنترنت'),
+              backgroundColor: AppColors.warning,
+              behavior: SnackBarBehavior.floating,
+              duration: Duration(seconds: 5),
+            ),
+          );
+        }
+      }
       
       setState(() {
         _isCheckedIn = true;
@@ -119,15 +184,6 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
       
       _startTimer();
       
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('✓ تم تسجيل الحضور بنجاح'),
-            backgroundColor: AppColors.success,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
@@ -167,11 +223,58 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
       final latitude = position?.latitude ?? RestaurantConfig.latitude;
       final longitude = position?.longitude ?? RestaurantConfig.longitude;
 
-      await AttendanceApiService.checkOut(
-        employeeId: widget.employeeId,
-        latitude: latitude,
-        longitude: longitude,
-      );
+      // Check internet connection
+      final syncService = SyncService.instance;
+      final hasInternet = await syncService.hasInternet();
+
+      if (hasInternet) {
+        // Online mode: Send to API directly
+        await AttendanceApiService.checkOut(
+          employeeId: widget.employeeId,
+          latitude: latitude,
+          longitude: longitude,
+        );
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('✓ تم تسجيل الانصراف بنجاح'),
+              backgroundColor: AppColors.success,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      } else {
+        // Offline mode: Save locally
+        final db = OfflineDatabase.instance;
+        
+        // For checkout we need attendance_id, but in offline mode we might not have it
+        // So we'll save with a placeholder and let the sync service handle it
+        await db.insertPendingCheckout(
+          employeeId: widget.employeeId,
+          attendanceId: null, // Will be resolved during sync
+          timestamp: DateTime.now(),
+          latitude: latitude,
+          longitude: longitude,
+        );
+        
+        // Start sync service if not already running
+        syncService.startPeriodicSync();
+        
+        // Show offline notification
+        await NotificationService.instance.showOfflineModeNotification();
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('📴 تم حفظ الانصراف محلياً - سيتم الرفع عند توفر الإنترنت'),
+              backgroundColor: AppColors.warning,
+              behavior: SnackBarBehavior.floating,
+              duration: Duration(seconds: 5),
+            ),
+          );
+        }
+      }
       
       setState(() {
         _isCheckedIn = false;
@@ -182,15 +285,6 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
       
       _timer?.cancel();
       
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('✓ تم تسجيل الانصراف بنجاح'),
-            backgroundColor: AppColors.success,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
@@ -599,6 +693,65 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
               ),
               
               const SizedBox(height: 16),
+              
+              // Pending Data Indicator
+              if (_pendingCount > 0)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: AppColors.warning.withOpacity(0.1),
+                    border: Border.all(color: AppColors.warning.withOpacity(0.3)),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.cloud_upload,
+                        color: AppColors.warning,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '$_pendingCount سجل في انتظار الرفع',
+                          style: const TextStyle(
+                            color: AppColors.warning,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () async {
+                          // Manual sync
+                          final syncService = SyncService.instance;
+                          final result = await syncService.syncPendingData();
+                          
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(result['message'] ?? 'تم'),
+                                backgroundColor: result['success'] 
+                                    ? AppColors.success 
+                                    : AppColors.error,
+                              ),
+                            );
+                            _loadPendingCount();
+                          }
+                        },
+                        child: const Text(
+                          'رفع الآن',
+                          style: TextStyle(
+                            color: AppColors.warning,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              
+              if (_pendingCount > 0) const SizedBox(height: 16),
               
               // Secondary Action - Attendance Request
               OutlinedButton(
