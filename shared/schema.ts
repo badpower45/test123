@@ -13,7 +13,7 @@ export const employeeRoleEnum = pgEnum('employee_role', ['owner', 'admin', 'mana
 export const branches = pgTable('branches', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
-  managerId: uuid('manager_id').references(() => users.id),
+  managerId: text('manager_id').references(() => employees.id), // Changed to text to reference employees
   latitude: numeric('latitude'),
   longitude: numeric('longitude'),
   geofenceRadius: integer('geofence_radius').default(100),

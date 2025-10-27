@@ -59,7 +59,7 @@ class BranchApiService {
       final response = await http.post(
         Uri.parse(branchAssignManagerEndpoint.replaceFirst(':branchId', branchId)),
         headers: {'Content-Type': 'application/json'},
-        body: json.encode({'employee_id': employeeId}),
+        body: json.encode({'employee_id': employeeId}),  // Changed from employeeId to employee_id
       );
 
       if (response.statusCode == 200) {

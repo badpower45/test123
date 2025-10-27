@@ -20,7 +20,7 @@ async function runMigration() {
     console.log('Connected to database');
 
     const sql = fs.readFileSync(
-      path.join(__dirname, 'migrations', 'fix_manager_id_type.sql'),
+      path.join(__dirname, 'migrations', 'fix_branches_manager_id_type.sql'),
       'utf8'
     );
 
