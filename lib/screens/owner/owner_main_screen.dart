@@ -881,7 +881,7 @@ class _OwnerPayrollTab extends StatefulWidget {
 class _OwnerPayrollTabState extends State<_OwnerPayrollTab> {
   late DateTime _startDate;
   late DateTime _endDate;
-  Future<Map<String, dynamic>>? _payrollFuture;
+  Future<List<Map<String, dynamic>>>? _employeesFuture;
 
   @override
   void initState() {
@@ -889,23 +889,32 @@ class _OwnerPayrollTabState extends State<_OwnerPayrollTab> {
     final now = DateTime.now();
     _startDate = DateTime(now.year, now.month, 1);
     _endDate = now;
-    _payrollFuture = _loadPayroll();
+    _employeesFuture = _loadEmployees();
   }
 
   String _formatDate(DateTime date) => '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
 
-  Future<Map<String, dynamic>> _loadPayroll() {
-    return OwnerApiService.getPayrollSummary(
-      ownerId: widget.ownerId,
-      startDate: _formatDate(_startDate),
-      endDate: _formatDate(_endDate),
-    );
+  Future<List<Map<String, dynamic>>> _loadEmployees() async {
+    try {
+      final payrollData = await OwnerApiService.getPayrollSummary(
+        ownerId: widget.ownerId,
+        startDate: _formatDate(_startDate),
+        endDate: _formatDate(_endDate),
+      );
+      final payroll = (payrollData['payroll'] as List?)
+          ?.whereType<Map>()
+          .map(Map<String, dynamic>.from)
+          .toList() ?? [];
+      return payroll;
+    } catch (e) {
+      throw Exception('فشل تحميل بيانات الرواتب: $e');
+    }
   }
 
   Future<void> _refresh() async {
-    final future = _loadPayroll();
+    final future = _loadEmployees();
     setState(() {
-      _payrollFuture = future;
+      _employeesFuture = future;
     });
     await future;
   }
@@ -938,61 +947,17 @@ class _OwnerPayrollTabState extends State<_OwnerPayrollTab> {
     await _refresh();
   }
 
-  Widget _buildSummary(Map<String, dynamic> summary) {
-    final totalHourly = (summary['totalHourlyPay'] as num?)?.toDouble() ?? 0;
-    final totalPulse = (summary['totalPulsePay'] as num?)?.toDouble() ?? 0;
-    final totalComputed = (summary['totalComputedPay'] as num?)?.toDouble() ?? 0;
-    final employeeCount = (summary['employeesCount'] as num?)?.toInt() ?? 0;
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Wrap(
-        spacing: 12,
-        runSpacing: 12,
-        children: [
-          _SummaryChip(label: 'عدد الموظفين', value: employeeCount, color: Colors.deepOrange),
-          _SummaryChip(label: 'إجمالي الأجور بالساعة', value: totalHourly, color: Colors.blueGrey, isCurrency: true),
-          _SummaryChip(label: 'إجمالي الأجور حسب النبضات', value: totalPulse, color: Colors.green, isCurrency: true),
-          _SummaryChip(label: 'إجمالي المستحق', value: totalComputed, color: Colors.indigo, isCurrency: true),
-        ],
+  void _showEmployeeDetails(Map<String, dynamic> employee) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-    );
-  }
-
-  Widget _buildPayrollTable(List<Map<String, dynamic>> payroll) {
-    if (payroll.isEmpty) {
-      return const Center(child: Padding(padding: EdgeInsets.all(32), child: Text('لا توجد بيانات رواتب في الفترة المختارة')));
-    }
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: DataTable(
-        columns: const [
-          DataColumn(label: Text('الموظف')),
-          DataColumn(label: Text('الدور')),
-          DataColumn(label: Text('الفرع')),
-          DataColumn(label: Text('ساعات العمل')),
-          DataColumn(label: Text('الساعة (جنيه)')),
-          DataColumn(label: Text('النبضات')),
-          DataColumn(label: Text('أجر الساعات')),
-          DataColumn(label: Text('أجر النبضات')),
-          DataColumn(label: Text('الإجمالي')),
-        ],
-        rows: payroll
-            .map(
-              (row) => DataRow(
-                cells: [
-                  DataCell(Text('${row['name'] ?? ''}')),
-                  DataCell(Text('${row['role'] ?? ''}')),
-                  DataCell(Text('${row['branch'] ?? ''}')),
-                  DataCell(Text('${row['totalWorkHours'] ?? ''}')),
-                  DataCell(Text('${row['hourlyRate'] ?? '—'}')),
-                  DataCell(Text('${row['totalValidPulses'] ?? 0}')),
-                  DataCell(Text('${row['hourlyPay'] ?? 0}')),
-                  DataCell(Text('${row['pulsePay'] ?? 0}')),
-                  DataCell(Text('${row['totalComputedPay'] ?? 0}')),
-                ],
-              ),
-            )
-            .toList(),
+      builder: (context) => _EmployeePayrollDetails(
+        employee: employee,
+        startDate: _formatDate(_startDate),
+        endDate: _formatDate(_endDate),
       ),
     );
   }
@@ -1001,62 +966,243 @@ class _OwnerPayrollTabState extends State<_OwnerPayrollTab> {
   Widget build(BuildContext context) {
     return RefreshIndicator(
       onRefresh: _refresh,
-      child: FutureBuilder<Map<String, dynamic>>(
-        future: _payrollFuture,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snapshot.hasError) {
-            return ListView(
-              physics: const AlwaysScrollableScrollPhysics(),
+      child: Column(
+        children: [
+          // Date Range Picker
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
               children: [
-                const SizedBox(height: 120),
-                Icon(Icons.error_outline, size: 64, color: AppColors.error.withOpacity(0.8)),
-                const SizedBox(height: 16),
-                Center(child: Text(snapshot.error.toString())),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.date_range),
+                    label: Text('من: ${_formatDate(_startDate)}'),
+                    onPressed: _pickStartDate,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.event),
+                    label: Text('إلى: ${_formatDate(_endDate)}'),
+                    onPressed: _pickEndDate,
+                  ),
+                ),
               ],
-            );
-          }
-          final data = snapshot.data ?? const {};
-          final payroll = (data['payroll'] as List?)?.whereType<Map>().map(Map<String, dynamic>.from).toList() ?? const [];
-          final summary = data['summary'] as Map<String, dynamic>? ?? const {};
-          final owner = data['owner'] is Map ? Map<String, dynamic>.from(data['owner'] as Map) : null;
-          return ListView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                child: Row(
+            ),
+          ),
+          
+          // Simple Employee Table
+          Expanded(
+            child: FutureBuilder<List<Map<String, dynamic>>>(
+              future: _employeesFuture,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (snapshot.hasError) {
+                  return Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.error_outline, size: 64, color: AppColors.error.withOpacity(0.8)),
+                        const SizedBox(height: 16),
+                        Text('${snapshot.error}'),
+                      ],
+                    ),
+                  );
+                }
+                
+                final employees = snapshot.data ?? [];
+                if (employees.isEmpty) {
+                  return const Center(
+                    child: Text('لا توجد بيانات رواتب في الفترة المختارة'),
+                  );
+                }
+                
+                return ListView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.all(16),
                   children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        icon: const Icon(Icons.date_range),
-                        label: Text('من: ${_formatDate(_startDate)}'),
-                        onPressed: _pickStartDate,
+                    Card(
+                      child: DataTable(
+                        headingRowColor: MaterialStateProperty.all(
+                          AppColors.primaryOrange.withOpacity(0.1),
+                        ),
+                        columns: const [
+                          DataColumn(label: Text('اسم الموظف', style: TextStyle(fontWeight: FontWeight.bold))),
+                          DataColumn(label: Text('الدور', style: TextStyle(fontWeight: FontWeight.bold))),
+                          DataColumn(label: Text('المبلغ الكلي', style: TextStyle(fontWeight: FontWeight.bold))),
+                        ],
+                        rows: employees.map((employee) {
+                          final name = employee['name']?.toString() ?? 'غير معروف';
+                          final role = employee['role']?.toString() ?? '-';
+                          final total = (employee['totalComputedPay'] as num?)?.toDouble() ?? 0;
+                          
+                          return DataRow(
+                            cells: [
+                              DataCell(
+                                Text(name),
+                                onTap: () => _showEmployeeDetails(employee),
+                              ),
+                              DataCell(
+                                Text(role),
+                                onTap: () => _showEmployeeDetails(employee),
+                              ),
+                              DataCell(
+                                Text(
+                                  '${total.toStringAsFixed(2)} جنيه',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.green,
+                                  ),
+                                ),
+                                onTap: () => _showEmployeeDetails(employee),
+                              ),
+                            ],
+                          );
+                        }).toList(),
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        icon: const Icon(Icons.event),
-                        label: Text('إلى: ${_formatDate(_endDate)}'),
-                        onPressed: _pickEndDate,
-                      ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// Employee Payroll Details Bottom Sheet
+class _EmployeePayrollDetails extends StatelessWidget {
+  const _EmployeePayrollDetails({
+    required this.employee,
+    required this.startDate,
+    required this.endDate,
+  });
+
+  final Map<String, dynamic> employee;
+  final String startDate;
+  final String endDate;
+
+  @override
+  Widget build(BuildContext context) {
+    final name = employee['name']?.toString() ?? 'غير معروف';
+    final role = employee['role']?.toString() ?? '-';
+    final branch = employee['branch']?.toString() ?? '-';
+    final workHours = (employee['totalWorkHours'] as num?)?.toDouble() ?? 0;
+    final hourlyRate = (employee['hourlyRate'] as num?)?.toDouble() ?? 0;
+    final hourlyPay = (employee['hourlyPay'] as num?)?.toDouble() ?? 0;
+    final pulsePay = (employee['pulsePay'] as num?)?.toDouble() ?? 0;
+    final total = (employee['totalComputedPay'] as num?)?.toDouble() ?? 0;
+    
+    return Container(
+      padding: const EdgeInsets.all(24),
+      height: MediaQuery.of(context).size.height * 0.7,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 30,
+                backgroundColor: AppColors.primaryOrange,
+                child: Text(
+                  name.isNotEmpty ? name[0].toUpperCase() : '?',
+                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                    ),
+                    Text(
+                      '$role - $branch',
+                      style: TextStyle(fontSize: 14, color: Colors.grey[600]),
                     ),
                   ],
                 ),
               ),
-              if (owner != null) _OwnerInfoCard(owner: owner),
-              _buildSummary(summary),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: _buildPayrollTable(payroll),
+              IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.pop(context),
               ),
-              const SizedBox(height: 24),
             ],
-          );
-        },
+          ),
+          const SizedBox(height: 24),
+          const Divider(),
+          const SizedBox(height: 16),
+          
+          Text(
+            'ملخص المرتب',
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 16),
+          
+          _DetailRow(label: 'الفترة', value: '$startDate إلى $endDate'),
+          _DetailRow(label: 'ساعات العمل', value: '${workHours.toStringAsFixed(2)} ساعة'),
+          _DetailRow(label: 'سعر الساعة', value: '${hourlyRate.toStringAsFixed(2)} جنيه'),
+          _DetailRow(label: 'أجر الساعات', value: '${hourlyPay.toStringAsFixed(2)} جنيه'),
+          _DetailRow(label: 'أجر النبضات', value: '${pulsePay.toStringAsFixed(2)} جنيه'),
+          const Divider(height: 32),
+          _DetailRow(
+            label: 'المبلغ الكلي',
+            value: '${total.toStringAsFixed(2)} جنيه',
+            isTotal: true,
+          ),
+          
+          const SizedBox(height: 24),
+          const Text(
+            'ملاحظة: التفاصيل اليومية (التاريخ، وقت الحضور، وقت الانصراف، بدل الإجازة، الخصومات، السلف) ستكون متاحة قريبًا.',
+            style: TextStyle(fontSize: 12, color: Colors.grey, fontStyle: FontStyle.italic),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DetailRow extends StatelessWidget {
+  const _DetailRow({
+    required this.label,
+    required this.value,
+    this.isTotal = false,
+  });
+
+  final String label;
+  final String value;
+  final bool isTotal;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: isTotal ? 18 : 16,
+              fontWeight: isTotal ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: isTotal ? 18 : 16,
+              fontWeight: isTotal ? FontWeight.bold : FontWeight.w600,
+              color: isTotal ? Colors.green : Colors.black87,
+            ),
+          ),
+        ],
       ),
     );
   }
