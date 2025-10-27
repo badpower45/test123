@@ -482,6 +482,46 @@ app.post('/api/attendance/check-in', async (req, res) => {
       });
     }
 
+    // Validate geofence if employee has branchId
+    if (employee.branchId && latitude && longitude) {
+      const [branch] = await db
+        .select()
+        .from(branches)
+        .where(eq(branches.id, employee.branchId))
+        .limit(1);
+
+      if (branch) {
+        const branchLat = branch.latitude ? Number(branch.latitude) : null;
+        const branchLng = branch.longitude ? Number(branch.longitude) : null;
+        const radius = branch.geofenceRadius || 100; // Default 100 meters
+
+        if (branchLat && branchLng) {
+          // Calculate distance using Haversine formula
+          const R = 6371e3; // Earth radius in meters
+          const φ1 = (branchLat * Math.PI) / 180;
+          const φ2 = (latitude * Math.PI) / 180;
+          const Δφ = ((latitude - branchLat) * Math.PI) / 180;
+          const Δλ = ((longitude - branchLng) * Math.PI) / 180;
+
+          const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+                    Math.cos(φ1) * Math.cos(φ2) *
+                    Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+          const distance = R * c;
+
+          console.log(`Geofence check: distance=${distance.toFixed(2)}m, radius=${radius}m`);
+
+          if (distance > radius) {
+            return res.status(403).json({ 
+              error: 'أنت خارج نطاق الموقع المسموح. يجب أن تكون داخل الفرع لتسجيل الحضور.',
+              distance: Math.round(distance),
+              allowedRadius: radius,
+            });
+          }
+        }
+      }
+    }
+
     // Create new attendance record
     const insertResult = await db
       .insert(attendance)
@@ -542,6 +582,49 @@ app.post('/api/attendance/check-out', async (req, res) => {
 
     if (!activeAttendance) {
       return res.status(400).json({ error: 'No active check-in found for today' });
+    }
+
+    // Validate geofence for check-out
+    const [employee] = await db
+      .select()
+      .from(employees)
+      .where(eq(employees.id, employee_id))
+      .limit(1);
+
+    if (employee && employee.branchId && latitude && longitude) {
+      const [branch] = await db
+        .select()
+        .from(branches)
+        .where(eq(branches.id, employee.branchId))
+        .limit(1);
+
+      if (branch) {
+        const branchLat = branch.latitude ? Number(branch.latitude) : null;
+        const branchLng = branch.longitude ? Number(branch.longitude) : null;
+        const radius = branch.geofenceRadius || 100;
+
+        if (branchLat && branchLng) {
+          const R = 6371e3;
+          const φ1 = (branchLat * Math.PI) / 180;
+          const φ2 = (latitude * Math.PI) / 180;
+          const Δφ = ((latitude - branchLat) * Math.PI) / 180;
+          const Δλ = ((longitude - branchLng) * Math.PI) / 180;
+
+          const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+                    Math.cos(φ1) * Math.cos(φ2) *
+                    Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+          const distance = R * c;
+
+          if (distance > radius) {
+            return res.status(403).json({ 
+              error: 'أنت خارج نطاق الموقع المسموح. يجب أن تكون داخل الفرع لتسجيل الانصراف.',
+              distance: Math.round(distance),
+              allowedRadius: radius,
+            });
+          }
+        }
+      }
     }
 
     // Calculate work hours

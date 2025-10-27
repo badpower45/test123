@@ -1227,6 +1227,7 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
   late Future<List<Map<String, dynamic>>> _branchesFuture;
   String? _selectedBranchId;  // Changed to store UUID
   String? _selectedBranchName;  // Optional: store name
+  bool _isManager = false;  // NEW: Is this employee a manager?
   
   // Shift times
   TimeOfDay? _shiftStartTime;
@@ -1275,12 +1276,26 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
         shiftStartTime: shiftStart,
         shiftEndTime: shiftEnd,
         shiftType: _shiftType,
+        role: _isManager ? 'manager' : 'staff',  // Set role based on checkbox
       );
+
+      // If marked as manager and branch selected, assign as branch manager
+      if (_isManager && _selectedBranchId != null) {
+        try {
+          await BranchApiService.assignManager(
+            branchId: _selectedBranchId!,
+            employeeId: _idController.text.trim(),
+          );
+        } catch (e) {
+          // Log but don't fail the whole operation
+          print('Could not assign as branch manager: $e');
+        }
+      }
 
       if (!mounted) return;
       Navigator.pop(context, true);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تم إضافة الموظف بنجاح')),
+        SnackBar(content: Text(_isManager ? 'تم إضافة المدير بنجاح' : 'تم إضافة الموظف بنجاح')),
       );
     } catch (error) {
       if (!mounted) return;
@@ -1405,6 +1420,20 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
                     validator: (value) => value == null || value.isEmpty ? 'مطلوب' : null,
                   );
                 },
+              ),
+              const SizedBox(height: 16),
+
+              // Manager Checkbox
+              CheckboxListTile(
+                title: const Text('تعيين كمدير للفرع'),
+                subtitle: const Text('إذا تم التحديد، سيكون هذا الموظف مدير الفرع المختار'),
+                value: _isManager,
+                onChanged: (value) {
+                  setState(() {
+                    _isManager = value ?? false;
+                  });
+                },
+                activeColor: AppColors.primaryOrange,
               ),
               const SizedBox(height: 16),
 
