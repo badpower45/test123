@@ -6,6 +6,7 @@ import 'package:geolocator/geolocator.dart';
 import '../../constants/restaurant_config.dart';
 import '../../models/attendance_request.dart';
 import '../../services/attendance_api_service.dart';
+import '../../services/branch_api_service.dart';
 import '../../services/location_service.dart';
 import '../../services/requests_api_service.dart';
 import '../../theme/app_colors.dart';
@@ -25,6 +26,8 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
   String _elapsedTime = '00:00:00';
   Timer? _timer;
   bool _isLoading = false;
+  String? _branchId;
+  Map<String, dynamic>? _branchData;
 
   @override
   void initState() {
@@ -41,12 +44,28 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
   Future<void> _checkCurrentStatus() async {
     try {
       final status = await AttendanceApiService.fetchEmployeeStatus(widget.managerId);
+      final branchId = status['employee']?['branchId'];
+      
       setState(() {
         _isCheckedIn = status['attendance']?['status'] == 'active';
         _checkInTime = status['attendance']?['checkInTime'] != null
             ? DateTime.parse(status['attendance']['checkInTime'])
             : null;
+        _branchId = branchId;
       });
+      
+      // Fetch branch data if available
+      if (branchId != null && branchId.toString().isNotEmpty) {
+        try {
+          final branchData = await BranchApiService.getBranchById(branchId.toString());
+          setState(() {
+            _branchData = branchData;
+          });
+        } catch (e) {
+          print('Failed to load branch data: $e');
+        }
+      }
+      
       if (_isCheckedIn && _checkInTime != null) {
         _startTimer();
       }
@@ -86,18 +105,29 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
       final locationService = LocationService();
       final position = await locationService.tryGetPosition();
 
-      if (RestaurantConfig.enforceLocation) {
+      if (RestaurantConfig.enforceLocation && _branchData != null) {
         if (position == null) {
           throw Exception('تعذر تحديد موقعك، يرجى تفعيل خدمة تحديد الموقع والمحاولة مرة أخرى.');
         }
-        final distance = Geolocator.distanceBetween(
-          RestaurantConfig.latitude,
-          RestaurantConfig.longitude,
-          position.latitude,
-          position.longitude,
-        );
-        if (distance > RestaurantConfig.allowedRadiusInMeters) {
-          throw Exception('أنت خارج نطاق الموقع المسموح للمطعم.');
+        
+        // Use branch coordinates if available
+        final branchLat = _branchData!['latitude'] as double?;
+        final branchLng = _branchData!['longitude'] as double?;
+        final branchRadius = (_branchData!['geofence_radius'] as int?) ?? 200;
+        
+        if (branchLat != null && branchLng != null) {
+          final distance = Geolocator.distanceBetween(
+            branchLat,
+            branchLng,
+            position.latitude,
+            position.longitude,
+          );
+          
+          print('Geofence check: branch=($branchLat, $branchLng), current=(${position.latitude}, ${position.longitude}), distance=${distance.toStringAsFixed(2)}m, radius=${branchRadius}m');
+          
+          if (distance > branchRadius) {
+            throw Exception('أنت خارج نطاق الموقع المسموح للمطعم (${distance.toStringAsFixed(0)}م من ${branchRadius}م).');
+          }
         }
       }
 
@@ -148,18 +178,29 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
       final locationService = LocationService();
       final position = await locationService.tryGetPosition();
 
-      if (RestaurantConfig.enforceLocation) {
+      if (RestaurantConfig.enforceLocation && _branchData != null) {
         if (position == null) {
           throw Exception('تعذر تحديد موقعك، يرجى تفعيل خدمة تحديد الموقع والمحاولة مرة أخرى.');
         }
-        final distance = Geolocator.distanceBetween(
-          RestaurantConfig.latitude,
-          RestaurantConfig.longitude,
-          position.latitude,
-          position.longitude,
-        );
-        if (distance > RestaurantConfig.allowedRadiusInMeters) {
-          throw Exception('أنت خارج نطاق الموقع المسموح للمطعم.');
+        
+        // Use branch coordinates if available
+        final branchLat = _branchData!['latitude'] as double?;
+        final branchLng = _branchData!['longitude'] as double?;
+        final branchRadius = (_branchData!['geofence_radius'] as int?) ?? 200;
+        
+        if (branchLat != null && branchLng != null) {
+          final distance = Geolocator.distanceBetween(
+            branchLat,
+            branchLng,
+            position.latitude,
+            position.longitude,
+          );
+          
+          print('Geofence check (checkout): distance=${distance.toStringAsFixed(2)}m, radius=${branchRadius}m');
+          
+          if (distance > branchRadius) {
+            throw Exception('أنت خارج نطاق الموقع المسموح للمطعم (${distance.toStringAsFixed(0)}م من ${branchRadius}م).');
+          }
         }
       }
 

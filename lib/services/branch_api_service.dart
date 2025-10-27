@@ -17,6 +17,20 @@ class BranchApiService {
     }
   }
 
+  static Future<Map<String, dynamic>> getBranchById(String branchId) async {
+    try {
+      final response = await http.get(Uri.parse('$branchesEndpoint/$branchId'));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        return data['branch'] as Map<String, dynamic>;
+      } else {
+        throw Exception('Failed to load branch: ${response.statusCode}');
+      }
+    } catch (error) {
+      throw Exception('Failed to load branch: $error');
+    }
+  }
+
   static Future<Map<String, dynamic>> createBranch({
     required String name,
     String? wifiBssid,
