@@ -3914,7 +3914,7 @@ app.post('/api/alerts/geofence-violation', async (req, res) => {
       .where(eq(employees.id, employeeId))
       .limit(1);
     
-    const employee = extractFirstRow(employeeResult);
+    const employee: any = extractFirstRow(employeeResult);
 
     if (!employee) {
       return res.status(404).json({ error: 'Employee not found' });
@@ -3928,7 +3928,7 @@ app.post('/api/alerts/geofence-violation', async (req, res) => {
         .where(eq(branches.id, employee.branchId))
         .limit(1);
       
-      const branch = extractFirstRow(branchResult);
+      const branch: any = extractFirstRow(branchResult);
 
       if (branch) {
         console.log(`[Geofence] Employee ${employee.fullName} from branch ${branch.name} violated geofence`);
