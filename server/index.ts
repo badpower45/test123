@@ -533,22 +533,23 @@ app.post('/api/attendance/check-in', async (req, res) => {
       console.log(`Geofence check skipped: branchId=${employee.branchId}, lat=${latitude}, lng=${longitude}`);
     }
 
-    // Create new attendance record
-    const insertResult = await db
-      .insert(attendance)
-      .values({
-        employeeId: employee_id,
-        checkInTime: new Date(),
-        date: today,
-        status: 'active',
-      })
-      .returning();
-    const newAttendance = extractFirstRow(insertResult);
+    // Use transaction to ensure atomicity
+    const result = await db.transaction(async (tx) => {
+      // Create new attendance record
+      const insertResult = await tx
+        .insert(attendance)
+        .values({
+          employeeId: employee_id,
+          checkInTime: new Date(),
+          date: today,
+          status: 'active',
+        })
+        .returning();
+      const newAttendance = extractFirstRow(insertResult);
 
-    // Create pulse for location tracking
-    if (latitude && longitude) {
-      if (employee && employee.branchId) {
-        await db.insert(pulses).values({
+      // Create pulse for location tracking
+      if (latitude && longitude && employee.branchId) {
+        await tx.insert(pulses).values({
           employeeId: employee_id,
           branchId: employee.branchId,
           latitude,
@@ -556,12 +557,14 @@ app.post('/api/attendance/check-in', async (req, res) => {
           isWithinGeofence: true,
         });
       }
-    }
+
+      return newAttendance;
+    });
 
     res.json({
       success: true,
       message: 'تم تسجيل الحضور بنجاح',
-      attendance: newAttendance,
+      attendance: result,
     });
   } catch (error) {
     console.error('Check-in error:', error);
@@ -643,29 +646,24 @@ app.post('/api/attendance/check-out', async (req, res) => {
     const checkInTime = new Date(activeAttendance.checkInTime!);
     const workHours = (checkOutTime.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
 
-    // Update attendance record
-    const updateResult = await db
-      .update(attendance)
-      .set({
-        checkOutTime,
-        workHours: workHours.toFixed(2),
-        status: 'completed',
-        updatedAt: new Date(),
-      })
-      .where(eq(attendance.id, activeAttendance.id))
-      .returning();
-    const updated = extractFirstRow(updateResult);
+    // Use transaction to ensure atomicity
+    const result = await db.transaction(async (tx) => {
+      // Update attendance record
+      const updateResult = await tx
+        .update(attendance)
+        .set({
+          checkOutTime,
+          workHours: workHours.toFixed(2),
+          status: 'completed',
+          updatedAt: new Date(),
+        })
+        .where(eq(attendance.id, activeAttendance.id))
+        .returning();
+      const updated = extractFirstRow(updateResult);
 
-    // Create pulse for location tracking
-    if (latitude && longitude) {
-      const [employee] = await db
-        .select()
-        .from(employees)
-        .where(eq(employees.id, employee_id))
-        .limit(1);
-
-      if (employee) {
-        await db.insert(pulses).values({
+      // Create pulse for location tracking
+      if (latitude && longitude && employee && employee.branchId) {
+        await tx.insert(pulses).values({
           employeeId: employee_id,
           branchId: employee.branchId,
           latitude,
@@ -674,12 +672,14 @@ app.post('/api/attendance/check-out', async (req, res) => {
           createdAt: new Date(),
         });
       }
-    }
+
+      return updated;
+    });
 
     res.json({
       success: true,
       message: 'تم تسجيل الانصراف بنجاح',
-      attendance: updated,
+      attendance: result,
       workHours: parseFloat(workHours.toFixed(2)),
     });
   } catch (error) {
