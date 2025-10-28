@@ -3635,14 +3635,14 @@ app.post('/api/pulses', async (req, res) => {
         latitude,
         longitude,
         bssidAddress: wifi_bssid,
-        isWithinGeofence: activeBreak ? false : isWithinGeofence,
+        isWithinGeofence: isWithinGeofence,
         status: 'IN', // Default status
         createdAt: timestamp ? new Date(timestamp) : new Date(),
       })
       .returning({ id: pulses.id, employeeId: pulses.employeeId, branchId: pulses.branchId, latitude: pulses.latitude, longitude: pulses.longitude, bssidAddress: pulses.bssidAddress, isWithinGeofence: pulses.isWithinGeofence, status: pulses.status, createdAt: pulses.createdAt });
     const pulse = extractFirstRow(insertPulseResult) as any;
 
-    const overallValid = activeBreak ? false : (wifiValid && geofenceValid);
+    const overallValid = (wifiValid && geofenceValid);
 
     res.json({
       success: true,
