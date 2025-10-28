@@ -7,9 +7,10 @@ import { db } from './db.js';
 import {
   employees, attendance, attendanceRequests, leaveRequests, advances,
   deductions, absenceNotifications, pulses, users, roles, permissions,
-  rolePermissions, userRoles, branches, branchBssids, branchManagers, breaks
+  rolePermissions, userRoles, branches, branchBssids, branchManagers, breaks,
+  deviceSessions, notifications, salaryCalculations
 } from '../shared/schema.js';
-import { eq, and, gte, lte, lt, desc, sql, between, inArray } from 'drizzle-orm';
+import { eq, and, gte, lte, lt, desc, sql, between, inArray, isNull, or } from 'drizzle-orm';
 import { requirePermission, getUserPermissions, checkUserPermission } from './auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -86,6 +87,52 @@ async function getOwnerRecord(ownerId?: string) {
   }
 
   return owner;
+}
+
+/**
+ * Send notification to user
+ */
+async function sendNotification(
+  recipientId: string,
+  type: string,
+  title: string,
+  message: string,
+  senderId?: string,
+  relatedId?: string
+) {
+  try {
+    await db.insert(notifications).values({
+      recipientId,
+      senderId: senderId || null,
+      type: type as any,
+      title,
+      message,
+      relatedId: relatedId || null,
+    });
+  } catch (error) {
+    console.error('Send notification error:', error);
+  }
+}
+
+/**
+ * Get owner employee ID
+ */
+async function getOwnerId(): Promise<string | null> {
+  try {
+    const owners = await db
+      .select()
+      .from(employees)
+      .where(eq(employees.role, 'owner'))
+      .limit(1);
+    
+    if (owners.length > 0) {
+      return owners[0].id;
+    }
+    return null;
+  } catch (error) {
+    console.error('Get owner ID error:', error);
+    return null;
+  }
 }
 
 // Force JSON-only API errors (avoid HTML bodies that cause Flutter FormatException)
@@ -561,6 +608,23 @@ app.post('/api/attendance/check-in', async (req, res) => {
       return newAttendance;
     });
 
+    // Send notification to owner
+    const ownerId = await getOwnerId();
+    if (ownerId) {
+      const checkInTime = new Date().toLocaleTimeString('ar-EG', { 
+        hour: '2-digit', 
+        minute: '2-digit' 
+      });
+      await sendNotification(
+        ownerId,
+        'CHECK_IN',
+        'تسجيل حضور جديد',
+        `${employee.fullName} سجل حضوره في ${checkInTime}`,
+        employee_id,
+        result?.id
+      );
+    }
+
     res.json({
       success: true,
       message: 'تم تسجيل الحضور بنجاح',
@@ -896,7 +960,10 @@ app.get('/api/attendance/requests', async (req, res) => {
       })
       .from(attendanceRequests)
       .innerJoin(employees, eq(attendanceRequests.employeeId, employees.id))
-      .where(eq(attendanceRequests.status, status as 'pending' | 'approved' | 'rejected'));
+      .$dynamic();
+
+    // أول فلترة (دي لازم تكون موجودة دايماً)
+    query = query.where(eq(attendanceRequests.status, status as 'pending' | 'approved' | 'rejected'));
 
     // If manager_id provided, filter by employees in that manager's branch
     if (manager_id && typeof manager_id === 'string') {
@@ -3895,9 +3962,29 @@ app.post('/api/breaks/request', async (req, res) => {
       return res.status(400).json({ error: 'employee_id and duration_minutes are required' });
     }
 
-    // Prevent duplicate break requests for the same day
+    // Check if employee has checked in today
     const today = new Date();
     today.setHours(0,0,0,0);
+    const todayString = today.toISOString().split('T')[0];
+
+    const [todayAttendance] = await db
+      .select()
+      .from(attendance)
+      .where(and(
+        eq(attendance.employeeId, employee_id),
+        eq(attendance.date, todayString),
+        isNull(attendance.checkOutTime) // Still checked in
+      ))
+      .limit(1);
+
+    if (!todayAttendance) {
+      return res.status(400).json({ 
+        error: 'يجب تسجيل الحضور أولاً قبل طلب الاستراحة',
+        code: 'NOT_CHECKED_IN'
+      });
+    }
+
+    // Prevent duplicate break requests for the same day
     const tomorrow = new Date(today);
     tomorrow.setDate(today.getDate() + 1);
 
@@ -4174,6 +4261,728 @@ app.post('/api/alerts/geofence-violation', async (req, res) => {
     });
   } catch (error) {
     console.error('Geofence violation error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// =============================================================================
+// NEW FEATURES - Device Sessions, Notifications, Salary Management
+// =============================================================================
+
+// ============ Device Sessions - Single Device Login ============
+
+// Check/Register device session on login
+app.post('/api/device/register', async (req, res) => {
+  try {
+    const { employeeId, deviceId, deviceName, deviceModel, osVersion, appVersion } = req.body;
+
+    if (!employeeId || !deviceId) {
+      return res.status(400).json({ error: 'Employee ID and Device ID are required' });
+    }
+
+    // Check if there's an active session for this employee on a different device
+    const activeSessions = await db
+      .select()
+      .from(deviceSessions)
+      .where(and(
+        eq(deviceSessions.employeeId, employeeId),
+        eq(deviceSessions.isActive, true)
+      ));
+
+    // If there's an active session on a different device, deactivate it
+    for (const session of activeSessions) {
+      if (session.deviceId !== deviceId) {
+        await db
+          .update(deviceSessions)
+          .set({ isActive: false })
+          .where(eq(deviceSessions.id, session.id));
+      }
+    }
+
+    // Check if this device already has a session
+    const existingSession = await db
+      .select()
+      .from(deviceSessions)
+      .where(and(
+        eq(deviceSessions.employeeId, employeeId),
+        eq(deviceSessions.deviceId, deviceId)
+      ))
+      .limit(1);
+
+    if (existingSession.length > 0) {
+      // Update existing session
+      const updateResult = await db
+        .update(deviceSessions)
+        .set({
+          isActive: true,
+          lastActiveAt: new Date(),
+          deviceName,
+          deviceModel,
+          osVersion,
+          appVersion,
+        })
+        .where(eq(deviceSessions.id, existingSession[0].id))
+        .returning();
+      const updated = extractFirstRow(updateResult);
+
+      res.json({
+        success: true,
+        message: 'تم تسجيل الدخول بنجاح',
+        session: updated,
+        wasLoggedOutFromOtherDevice: activeSessions.length > 1,
+      });
+    } else {
+      // Create new session
+      const insertResult = await db
+        .insert(deviceSessions)
+        .values({
+          employeeId,
+          deviceId,
+          deviceName,
+          deviceModel,
+          osVersion,
+          appVersion,
+          isActive: true,
+        })
+        .returning();
+      const newSession = extractFirstRow(insertResult);
+
+      res.json({
+        success: true,
+        message: 'تم تسجيل الدخول بنجاح',
+        session: newSession,
+        wasLoggedOutFromOtherDevice: activeSessions.length > 0,
+      });
+    }
+  } catch (error) {
+    console.error('Device registration error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ============ Notifications ============
+
+// Get notifications for an employee
+app.get('/api/notifications/:employeeId', async (req, res) => {
+  try {
+    const { employeeId } = req.params;
+    const { unreadOnly } = req.query;
+
+    let query = db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.recipientId, employeeId))
+      .orderBy(desc(notifications.createdAt));
+
+    if (unreadOnly === 'true') {
+      query = db
+        .select()
+        .from(notifications)
+        .where(and(
+          eq(notifications.recipientId, employeeId),
+          eq(notifications.isRead, false)
+        ))
+        .orderBy(desc(notifications.createdAt));
+    }
+
+    const result = await query;
+
+    res.json({
+      success: true,
+      notifications: result,
+      unreadCount: result.filter((n) => !n.isRead).length,
+    });
+  } catch (error) {
+    console.error('Get notifications error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Mark notification as read
+app.post('/api/notifications/:notificationId/read', async (req, res) => {
+  try {
+    const { notificationId } = req.params;
+
+    const updateResult = await db
+      .update(notifications)
+      .set({
+        isRead: true,
+        readAt: new Date(),
+      })
+      .where(eq(notifications.id, notificationId))
+      .returning();
+    const updated = extractFirstRow(updateResult);
+
+    res.json({
+      success: true,
+      notification: updated,
+    });
+  } catch (error) {
+    console.error('Mark notification read error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Send notification (helper endpoint - usually called internally)
+app.post('/api/notifications/send', async (req, res) => {
+  try {
+    const { recipientId, senderId, type, title, message, relatedId } = req.body;
+
+    if (!recipientId || !type || !title || !message) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const insertResult = await db
+      .insert(notifications)
+      .values({
+        recipientId,
+        senderId: senderId || null,
+        type,
+        title,
+        message,
+        relatedId: relatedId || null,
+      })
+      .returning();
+    const notification = extractFirstRow(insertResult);
+
+    res.json({
+      success: true,
+      notification,
+    });
+  } catch (error) {
+    console.error('Send notification error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ============ Attendance Time Modification ============
+
+// Modify check-in time
+app.post('/api/attendance/:attendanceId/modify-time', async (req, res) => {
+  try {
+    const { attendanceId } = req.params;
+    const { modifiedCheckInTime, modifiedBy, modificationReason } = req.body;
+
+    if (!modifiedCheckInTime || !modifiedBy) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // Get the attendance record
+    const attendanceRecords = await db
+      .select()
+      .from(attendance)
+      .where(eq(attendance.id, attendanceId))
+      .limit(1);
+
+    if (attendanceRecords.length === 0) {
+      return res.status(404).json({ error: 'Attendance record not found' });
+    }
+
+    const attendanceRecord = attendanceRecords[0];
+
+    // Store actual check-in time if not already stored
+    const actualCheckInTime = attendanceRecord.actualCheckInTime || attendanceRecord.checkInTime;
+
+    // Calculate new work hours if check-out exists
+    let newWorkHours = attendanceRecord.workHours;
+    if (attendanceRecord.checkOutTime) {
+      const modifiedIn = new Date(modifiedCheckInTime);
+      const checkOut = new Date(attendanceRecord.checkOutTime);
+      newWorkHours = ((checkOut.getTime() - modifiedIn.getTime()) / (1000 * 60 * 60)).toFixed(2);
+    }
+
+    // Update attendance record
+    const updateResult = await db
+      .update(attendance)
+      .set({
+        checkInTime: new Date(modifiedCheckInTime),
+        actualCheckInTime,
+        modifiedCheckInTime: new Date(modifiedCheckInTime),
+        modifiedBy,
+        modifiedAt: new Date(),
+        modificationReason,
+        workHours: newWorkHours,
+        updatedAt: new Date(),
+      })
+      .where(eq(attendance.id, attendanceId))
+      .returning();
+    const updated = extractFirstRow(updateResult);
+
+    res.json({
+      success: true,
+      message: 'تم تعديل وقت الحضور بنجاح',
+      attendance: updated,
+    });
+  } catch (error) {
+    console.error('Modify attendance time error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ============ Salary Calculations ============
+
+// Calculate salary for employee for a period
+app.post('/api/salary/calculate', async (req, res) => {
+  try {
+    const { employeeId, periodStart, periodEnd } = req.body;
+
+    if (!employeeId || !periodStart || !periodEnd) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // Get employee info
+    const employeeResult = await db
+      .select()
+      .from(employees)
+      .where(eq(employees.id, employeeId))
+      .limit(1);
+
+    if (employeeResult.length === 0) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    const employee = employeeResult[0];
+    const baseSalary = parseFloat(employee.monthlySalary || '0');
+    const hourlyRate = parseFloat(employee.hourlyRate || '0');
+
+    // Get attendance records for the period
+    const attendanceRecords = await db
+      .select()
+      .from(attendance)
+      .where(and(
+        eq(attendance.employeeId, employeeId),
+        gte(attendance.date, periodStart),
+        lte(attendance.date, periodEnd)
+      ));
+
+    // Calculate total work hours and days
+    let totalWorkHours = 0;
+    const workDays = new Set();
+
+    for (const record of attendanceRecords) {
+      if (record.workHours) {
+        totalWorkHours += parseFloat(record.workHours);
+        workDays.add(record.date);
+      }
+    }
+
+    const totalWorkDays = workDays.size;
+
+    // Get advances for the period
+    const advancesResult = await db
+      .select()
+      .from(advances)
+      .where(and(
+        eq(advances.employeeId, employeeId),
+        eq(advances.status, 'approved'),
+        or(
+          isNull(advances.deductedAt),
+          eq(advances.isDeducted, false)
+        ),
+        gte(advances.requestDate, periodStart),
+        lte(advances.requestDate, periodEnd)
+      ));
+
+    const advancesTotal = advancesResult.reduce((sum, adv) => sum + parseFloat(adv.amount), 0);
+
+    // Get deductions for the period
+    const deductionsResult = await db
+      .select()
+      .from(deductions)
+      .where(and(
+        eq(deductions.employeeId, employeeId),
+        gte(deductions.deductionDate, periodStart),
+        lte(deductions.deductionDate, periodEnd)
+      ));
+
+    const deductionsTotal = deductionsResult.reduce((sum, ded) => sum + parseFloat(ded.amount), 0);
+
+    // Get absence deductions
+    const absenceResult = await db
+      .select()
+      .from(absenceNotifications)
+      .where(and(
+        eq(absenceNotifications.employeeId, employeeId),
+        eq(absenceNotifications.deductionApplied, true),
+        gte(absenceNotifications.absenceDate, periodStart),
+        lte(absenceNotifications.absenceDate, periodEnd)
+      ));
+
+    const absenceDeductions = absenceResult.reduce((sum, abs) => sum + parseFloat(abs.deductionAmount || '0'), 0);
+
+    // Calculate net salary
+    const grossSalary = baseSalary + (totalWorkHours * hourlyRate);
+    const netSalary = grossSalary - advancesTotal - deductionsTotal - absenceDeductions;
+
+    // Save calculation
+    const insertResult = await db
+      .insert(salaryCalculations)
+      .values({
+        employeeId,
+        periodStart,
+        periodEnd,
+        baseSalary: baseSalary.toString(),
+        totalWorkHours: totalWorkHours.toString(),
+        totalWorkDays,
+        advancesTotal: advancesTotal.toString(),
+        deductionsTotal: deductionsTotal.toString(),
+        absenceDeductions: absenceDeductions.toString(),
+        netSalary: netSalary.toString(),
+      })
+      .returning();
+    const calculation = extractFirstRow(insertResult);
+
+    // Mark advances as deducted
+    if (advancesResult.length > 0) {
+      await db
+        .update(advances)
+        .set({ isDeducted: true, deductedAt: new Date() })
+        .where(inArray(advances.id, advancesResult.map(a => a.id)));
+    }
+
+    res.json({
+      success: true,
+      calculation,
+      breakdown: {
+        baseSalary,
+        totalWorkHours,
+        totalWorkDays,
+        hourlyRate,
+        hourlyEarnings: totalWorkHours * hourlyRate,
+        grossSalary,
+        advancesTotal,
+        deductionsTotal,
+        absenceDeductions,
+        netSalary,
+      },
+    });
+  } catch (error) {
+    console.error('Calculate salary error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get salary calculations for employee
+app.get('/api/salary/:employeeId', async (req, res) => {
+  try {
+    const { employeeId } = req.params;
+
+    const calculations = await db
+      .select()
+      .from(salaryCalculations)
+      .where(eq(salaryCalculations.employeeId, employeeId))
+      .orderBy(desc(salaryCalculations.periodStart));
+
+    res.json({
+      success: true,
+      calculations,
+    });
+  } catch (error) {
+    console.error('Get salary calculations error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ============ Attendance Statistics ============
+
+// Get attendance statistics for employee
+app.get('/api/attendance/stats/:employeeId', async (req, res) => {
+  try {
+    const { employeeId } = req.params;
+    const { startDate, endDate } = req.query;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'Start date and end date are required' });
+    }
+
+    // Get attendance records
+    const attendanceRecords = await db
+      .select()
+      .from(attendance)
+      .where(and(
+        eq(attendance.employeeId, employeeId),
+        gte(attendance.date, startDate as string),
+        lte(attendance.date, endDate as string)
+      ));
+
+    // Calculate statistics
+    let totalWorkHours = 0;
+    const workDays = new Set();
+    let completedDays = 0;
+
+    for (const record of attendanceRecords) {
+      if (record.workHours) {
+        totalWorkHours += parseFloat(record.workHours);
+      }
+      workDays.add(record.date);
+      if (record.status === 'completed') {
+        completedDays++;
+      }
+    }
+
+    const totalWorkDays = workDays.size;
+
+    res.json({
+      success: true,
+      stats: {
+        totalWorkDays,
+        completedDays,
+        totalWorkHours: totalWorkHours.toFixed(2),
+        averageHoursPerDay: totalWorkDays > 0 ? (totalWorkHours / totalWorkDays).toFixed(2) : '0',
+      },
+      records: attendanceRecords,
+    });
+  } catch (error) {
+    console.error('Get attendance stats error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ============ Owner: Get Employee Attendance Table ============
+
+// Get employee attendance table (same view as employee sees)
+app.get('/api/owner/employee-attendance/:employeeId', async (req, res) => {
+  try {
+    const { employeeId } = req.params;
+    const { startDate, endDate } = req.query;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'Start date and end date are required' });
+    }
+
+    // Get employee info
+    const employeeResult = await db
+      .select()
+      .from(employees)
+      .where(eq(employees.id, employeeId))
+      .limit(1);
+
+    if (employeeResult.length === 0) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    const employee = employeeResult[0];
+
+    // Get attendance records with JOIN to get leave requests
+    const attendanceRecords = await db
+      .select({
+        attendance: attendance,
+        leaveRequest: leaveRequests
+      })
+      .from(attendance)
+      .leftJoin(
+        leaveRequests,
+        and(
+          eq(leaveRequests.employeeId, employeeId),
+          eq(leaveRequests.leaveDate, attendance.date),
+          eq(leaveRequests.status, 'approved')
+        )
+      )
+      .where(and(
+        eq(attendance.employeeId, employeeId),
+        gte(attendance.date, startDate as string),
+        lte(attendance.date, endDate as string)
+      ))
+      .orderBy(desc(attendance.date));
+
+    // Get all advances for this employee in date range
+    const advancesResult = await db
+      .select()
+      .from(advances)
+      .where(and(
+        eq(advances.employeeId, employeeId),
+        gte(advances.requestDate, startDate as string),
+        lte(advances.requestDate, endDate as string)
+      ))
+      .orderBy(desc(advances.requestDate));
+
+    // Get all deductions for this employee in date range
+    const deductionsResult = await db
+      .select()
+      .from(deductions)
+      .where(and(
+        eq(deductions.employeeId, employeeId),
+        gte(deductions.deductionDate, startDate as string),
+        lte(deductions.deductionDate, endDate as string)
+      ))
+      .orderBy(desc(deductions.deductionDate));
+
+    // Build attendance table rows
+    const tableRows = attendanceRecords.map(record => {
+      const att = record.attendance;
+      const leave = record.leaveRequest;
+      
+      // Get advances for this date
+      const dayAdvances = advancesResult.filter(
+        adv => adv.requestDate === att.date && adv.status === 'approved'
+      );
+      const advancesAmount = dayAdvances.reduce((sum, adv) => sum + parseFloat(adv.amount || '0'), 0);
+      
+      // Get deductions for this date
+      const dayDeductions = deductionsResult.filter(
+        ded => ded.deductionDate === att.date
+      );
+      const deductionsAmount = dayDeductions.reduce((sum, ded) => sum + parseFloat(ded.amount || '0'), 0);
+      
+      return {
+        date: att.date,
+        checkIn: att.checkInTime || '--',
+        checkOut: att.checkOutTime || '--',
+        workHours: att.workHours ? parseFloat(att.workHours).toFixed(2) : '0.00',
+        advances: advancesAmount.toFixed(2),
+        leaveAllowance: leave ? parseFloat(leave.amount || '0').toFixed(2) : '0.00',
+        hasLeave: !!leave,
+        deductions: deductionsAmount.toFixed(2),
+        advancesList: dayAdvances,
+        deductionsList: dayDeductions
+      };
+    });
+
+    // Calculate totals
+    let totalWorkHours = 0;
+    let totalAdvances = 0;
+    let totalLeaveAllowances = 0;
+    let totalDeductions = 0;
+    const workDays = new Set();
+
+    for (const row of tableRows) {
+      totalWorkHours += parseFloat(row.workHours);
+      totalAdvances += parseFloat(row.advances);
+      totalLeaveAllowances += parseFloat(row.leaveAllowance);
+      totalDeductions += parseFloat(row.deductions);
+      if (parseFloat(row.workHours) > 0) {
+        workDays.add(row.date);
+      }
+    }
+
+    // Calculate net (after deducting advances from total)
+    const grossAmount = (employee.monthlySalary ? parseFloat(employee.monthlySalary) : 0);
+    const netAfterAdvances = grossAmount - totalAdvances;
+
+    res.json({
+      success: true,
+      employee: {
+        id: employee.id,
+        fullName: employee.fullName,
+        role: employee.role,
+        monthlySalary: employee.monthlySalary,
+        hourlyRate: employee.hourlyRate,
+      },
+      tableRows: tableRows,
+      summary: {
+        totalWorkDays: workDays.size,
+        totalWorkHours: totalWorkHours.toFixed(2),
+        totalAdvances: totalAdvances.toFixed(2),
+        totalLeaveAllowances: totalLeaveAllowances.toFixed(2),
+        totalDeductions: totalDeductions.toFixed(2),
+        grossSalary: grossAmount.toFixed(2),
+        netAfterAdvances: netAfterAdvances.toFixed(2),
+      },
+    });
+  } catch (error) {
+    console.error('Get employee attendance table error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ============ Attendance Presence Dashboard ============
+
+// Get current presence status (who is checked in/out)
+app.get('/api/attendance/presence', async (req, res) => {
+  try {
+    const { branchId } = req.query;
+    const today = new Date().toISOString().split('T')[0];
+
+    // Build query based on branch filter
+    let attendanceQuery;
+    if (branchId) {
+      // Get employees from specific branch
+      const branchEmployees = await db
+        .select()
+        .from(employees)
+        .where(and(
+          eq(employees.branchId, branchId as string),
+          eq(employees.active, true)
+        ));
+
+      const employeeIds = branchEmployees.map(e => e.id);
+
+      if (employeeIds.length === 0) {
+        return res.json({
+          success: true,
+          present: [],
+          absent: [],
+          summary: { present: 0, absent: 0, total: 0 },
+        });
+      }
+
+      attendanceQuery = db
+        .select()
+        .from(attendance)
+        .where(and(
+          inArray(attendance.employeeId, employeeIds),
+          eq(attendance.date, today)
+        ));
+    } else {
+      // Get all attendance for today
+      attendanceQuery = db
+        .select()
+        .from(attendance)
+        .where(eq(attendance.date, today));
+    }
+
+    const todayAttendance = await attendanceQuery;
+
+    // Get all active employees
+    let allEmployeesQuery = db
+      .select()
+      .from(employees)
+      .where(eq(employees.active, true));
+
+    if (branchId) {
+      allEmployeesQuery = db
+        .select()
+        .from(employees)
+        .where(and(
+          eq(employees.branchId, branchId as string),
+          eq(employees.active, true)
+        ));
+    }
+
+    const allEmployees = await allEmployeesQuery;
+
+    // Build presence map
+    const presentEmployees = [];
+    const absentEmployees = [];
+
+    for (const employee of allEmployees) {
+      const employeeAttendance = todayAttendance.find(a => a.employeeId === employee.id);
+
+      if (employeeAttendance) {
+        presentEmployees.push({
+          ...employee,
+          attendance: employeeAttendance,
+          status: employeeAttendance.status,
+          checkInTime: employeeAttendance.checkInTime,
+          checkOutTime: employeeAttendance.checkOutTime,
+        });
+      } else {
+        absentEmployees.push(employee);
+      }
+    }
+
+    res.json({
+      success: true,
+      present: presentEmployees,
+      absent: absentEmployees,
+      summary: {
+        present: presentEmployees.length,
+        absent: absentEmployees.length,
+        total: allEmployees.length,
+      },
+    });
+  } catch (error) {
+    console.error('Get presence status error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

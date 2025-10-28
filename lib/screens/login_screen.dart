@@ -7,6 +7,7 @@ import '../screens/manager/manager_main_screen.dart';
 import '../screens/owner/owner_main_screen.dart';
 import '../services/auth_api_service.dart';
 import '../services/auth_service.dart';
+import '../services/device_service.dart';
 import '../theme/app_colors.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -57,6 +58,25 @@ class _LoginScreenState extends State<LoginScreen> {
         employeeId: employeeId,
         pin: pin,
       );
+
+      // Register device for single device login
+      try {
+        final deviceResult = await DeviceService.registerDevice(employee.id);
+        final wasLoggedOut = deviceResult['wasLoggedOutFromOtherDevice'] as bool? ?? false;
+        
+        if (wasLoggedOut && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('تم تسجيل خروجك من الجهاز الآخر تلقائياً'),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+      } catch (e) {
+        print('Device registration failed: $e');
+        // Continue even if device registration fails
+      }
 
       // Save login data to SharedPreferences for persistent login
       await AuthService.saveLoginData(

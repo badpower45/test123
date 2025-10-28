@@ -57,6 +57,11 @@ export const attendance = pgTable('attendance', {
   employeeId: text('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
   checkInTime: timestamp('check_in_time', { withTimezone: true }),
   checkOutTime: timestamp('check_out_time', { withTimezone: true }),
+  actualCheckInTime: timestamp('actual_check_in_time', { withTimezone: true }), // الوقت الفعلي للحضور
+  modifiedCheckInTime: timestamp('modified_check_in_time', { withTimezone: true }), // الوقت المعدل
+  modifiedBy: text('modified_by').references(() => employees.id),
+  modifiedAt: timestamp('modified_at', { withTimezone: true }),
+  modificationReason: text('modification_reason'),
   workHours: numeric('work_hours'),
   date: date('date').notNull(),
   status: text('status').default('active').notNull(),
@@ -351,6 +356,86 @@ export const breaks = pgTable('breaks', {
   statusIdx: index('idx_breaks_status').on(table.status),
 }));
 
+// =============================================================================
+// DEVICE SESSIONS - Single Device Login Management
+// =============================================================================
+export const deviceSessions = pgTable('device_sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  employeeId: text('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
+  deviceId: text('device_id').notNull(),
+  deviceName: text('device_name'),
+  deviceModel: text('device_model'),
+  osVersion: text('os_version'),
+  appVersion: text('app_version'),
+  lastActiveAt: timestamp('last_active_at', { withTimezone: true }).defaultNow().notNull(),
+  isActive: boolean('is_active').default(true).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  employeeIdIdx: index('idx_device_sessions_employee_id').on(table.employeeId),
+  deviceIdIdx: index('idx_device_sessions_device_id').on(table.deviceId),
+  isActiveIdx: index('idx_device_sessions_is_active').on(table.isActive),
+}));
+
+// =============================================================================
+// NOTIFICATIONS - Real-time notifications system
+// =============================================================================
+export const notificationTypeEnum = pgEnum('notification_type', [
+  'CHECK_IN',
+  'CHECK_OUT',
+  'LEAVE_REQUEST',
+  'ADVANCE_REQUEST',
+  'ATTENDANCE_REQUEST',
+  'ABSENCE_ALERT',
+  'SALARY_PAID',
+  'GENERAL'
+]);
+
+export const notifications = pgTable('notifications', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  recipientId: text('recipient_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
+  senderId: text('sender_id').references(() => employees.id, { onDelete: 'set null' }),
+  type: notificationTypeEnum('type').notNull(),
+  title: text('title').notNull(),
+  message: text('message').notNull(),
+  relatedId: uuid('related_id'), // ID of related record (attendance, request, etc.)
+  isRead: boolean('is_read').default(false).notNull(),
+  readAt: timestamp('read_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  recipientIdIdx: index('idx_notifications_recipient_id').on(table.recipientId),
+  typeIdx: index('idx_notifications_type').on(table.type),
+  isReadIdx: index('idx_notifications_is_read').on(table.isRead),
+  createdAtIdx: index('idx_notifications_created_at').on(table.createdAt),
+}));
+
+// =============================================================================
+// SALARY CALCULATIONS - Salary computation and tracking
+// =============================================================================
+export const salaryCalculations = pgTable('salary_calculations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  employeeId: text('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
+  periodStart: date('period_start').notNull(),
+  periodEnd: date('period_end').notNull(),
+  baseSalary: numeric('base_salary').notNull(),
+  totalWorkHours: numeric('total_work_hours').default('0').notNull(),
+  totalWorkDays: integer('total_work_days').default(0).notNull(),
+  overtimeHours: numeric('overtime_hours').default('0'),
+  overtimeAmount: numeric('overtime_amount').default('0'),
+  advancesTotal: numeric('advances_total').default('0'),
+  deductionsTotal: numeric('deductions_total').default('0'),
+  absenceDeductions: numeric('absence_deductions').default('0'),
+  netSalary: numeric('net_salary').notNull(),
+  isPaid: boolean('is_paid').default(false).notNull(),
+  paidAt: timestamp('paid_at', { withTimezone: true }),
+  notes: text('notes'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  employeeIdIdx: index('idx_salary_calculations_employee_id').on(table.employeeId),
+  periodStartIdx: index('idx_salary_calculations_period_start').on(table.periodStart),
+  isPaidIdx: index('idx_salary_calculations_is_paid').on(table.isPaid),
+}));
+
 // Type exports for TypeScript
 export type Employee = typeof employees.$inferSelect;
 export type NewEmployee = typeof employees.$inferInsert;
@@ -408,3 +493,12 @@ export type NewBranchManager = typeof branchManagers.$inferInsert;
 
 export type Break = typeof breaks.$inferSelect;
 export type NewBreak = typeof breaks.$inferInsert;
+
+export type DeviceSession = typeof deviceSessions.$inferSelect;
+export type NewDeviceSession = typeof deviceSessions.$inferInsert;
+
+export type Notification = typeof notifications.$inferSelect;
+export type NewNotification = typeof notifications.$inferInsert;
+
+export type SalaryCalculation = typeof salaryCalculations.$inferSelect;
+export type NewSalaryCalculation = typeof salaryCalculations.$inferInsert;

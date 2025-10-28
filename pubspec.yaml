@@ -54,6 +54,8 @@ dependencies:
   workmanager: ^0.9.0
   flutter_background_service: ^5.0.5
   flutter_background_service_android: ^6.2.2
+  device_info_plus: ^10.1.2
+  package_info_plus: ^8.0.3
 
 dev_dependencies:
   flutter_test:

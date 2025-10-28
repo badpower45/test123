@@ -11,6 +11,7 @@ import '../../services/branch_api_service.dart';
 import '../../services/auth_service.dart';
 import '../../theme/app_colors.dart';
 import '../login_screen.dart';
+import 'employee_attendance_table_screen.dart';
 
 class OwnerMainScreen extends StatefulWidget {
   const OwnerMainScreen({super.key, required this.ownerId, this.ownerName});
@@ -930,16 +931,23 @@ class _OwnerPayrollTabState extends State<_OwnerPayrollTab> {
   }
 
   void _showEmployeeDetails(Map<String, dynamic> employee) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => _EmployeePayrollDetails(
-        employee: employee,
-        startDate: _formatDate(_startDate),
-        endDate: _formatDate(_endDate),
+    final employeeId = employee['id']?.toString();
+    final employeeName = employee['name']?.toString() ?? 'موظف';
+    
+    if (employeeId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('معرف الموظف غير موجود')),
+      );
+      return;
+    }
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => EmployeeAttendanceTableScreen(
+          employeeId: employeeId,
+          employeeName: employeeName,
+        ),
       ),
     );
   }
