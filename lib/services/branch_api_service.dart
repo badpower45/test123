@@ -22,7 +22,18 @@ class BranchApiService {
       final response = await http.get(Uri.parse('$branchesEndpoint/$branchId'));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        return data['branch'] as Map<String, dynamic>;
+        if (data.containsKey('branch') && data.containsKey('allowedBssids')) {
+          return {
+            'branch': data['branch'],
+            'allowedBssids': data['allowedBssids'] ?? [],
+          };
+        } else {
+          // Fallback for old endpoint format
+          return {
+            'branch': data,
+            'allowedBssids': [],
+          };
+        }
       } else {
         throw Exception('Failed to load branch: ${response.statusCode}');
       }

@@ -15,7 +15,7 @@ class GeofenceService {
   double? _branchLatitude;
   double? _branchLongitude;
   double? _geofenceRadius;
-  String? _requiredBssid;
+  List<String> _requiredBssids = [];
 
   // Start monitoring geofence
   Future<void> startMonitoring({
@@ -24,7 +24,7 @@ class GeofenceService {
     required double branchLatitude,
     required double branchLongitude,
     required double geofenceRadius,
-    String? requiredBssid,
+    required List<String> requiredBssids,
   }) async {
     if (_isMonitoring) {
       print('[GeofenceService] Already monitoring');
@@ -36,7 +36,7 @@ class GeofenceService {
     _branchLatitude = branchLatitude;
     _branchLongitude = branchLongitude;
     _geofenceRadius = geofenceRadius;
-    _requiredBssid = requiredBssid;
+    _requiredBssids = requiredBssids.map((e) => e.toUpperCase()).toList();
 
     // Request background location permission
     final permission = await Geolocator.requestPermission();
@@ -125,11 +125,11 @@ class GeofenceService {
 
       // Check WiFi BSSID if required
       bool isCorrectWifi = true;
-      if (_requiredBssid != null && _requiredBssid!.isNotEmpty) {
+      if (_requiredBssids.isNotEmpty) {
         try {
           final info = NetworkInfo();
-          final wifiBSSID = await info.getWifiBSSID();
-          isCorrectWifi = wifiBSSID == _requiredBssid;
+          final wifiBSSID = (await info.getWifiBSSID())?.toUpperCase();
+          isCorrectWifi = wifiBSSID != null && _requiredBssids.contains(wifiBSSID);
         } catch (e) {
           print('[GeofenceService] Failed to check WiFi: $e');
           isCorrectWifi = false;
@@ -186,7 +186,7 @@ class GeofenceService {
     required double branchLatitude,
     required double branchLongitude,
     required double geofenceRadius,
-    String? requiredBssid,
+    List<String>? requiredBssids,
   }) async {
     try {
       // Get current position
@@ -205,11 +205,11 @@ class GeofenceService {
       final isWithinGeofence = distance <= geofenceRadius;
 
       // Check WiFi if required
-      if (requiredBssid != null && requiredBssid.isNotEmpty) {
+      if (requiredBssids != null && requiredBssids.isNotEmpty) {
         try {
           final info = NetworkInfo();
-          final wifiBSSID = await info.getWifiBSSID();
-          return isWithinGeofence && wifiBSSID == requiredBssid;
+          final wifiBSSID = (await info.getWifiBSSID())?.toUpperCase();
+          return isWithinGeofence && wifiBSSID != null && requiredBssids.contains(wifiBSSID);
         } catch (e) {
           print('[GeofenceService] WiFi check failed: $e');
           return false;

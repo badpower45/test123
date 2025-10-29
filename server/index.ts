@@ -9,7 +9,7 @@ import {
   employees, attendance, attendanceRequests, leaveRequests, advances,
   deductions, absenceNotifications, pulses, users, roles, permissions,
   rolePermissions, userRoles, branches, branchBssids, branchManagers, breaks,
-  deviceSessions, notifications, salaryCalculations
+  deviceSessions, notifications, salaryCalculations, geofenceViolations
 } from '../shared/schema.js';
 import { eq, and, gte, lte, lt, desc, sql, between, inArray, isNull, or } from 'drizzle-orm';
 import { requirePermission, getUserPermissions, checkUserPermission } from './auth.js';
@@ -466,7 +466,7 @@ app.post('/api/auth/login', async (req, res) => {
 // Check In
 app.post('/api/attendance/check-in', async (req, res) => {
   try {
-    const { employee_id, latitude, longitude } = req.body;
+    const { employee_id, latitude, longitude, wifi_bssid } = req.body;
 
     if (!employee_id) {
       return res.status(400).json({ error: 'Employee ID is required' });
@@ -482,6 +482,34 @@ app.post('/api/attendance/check-in', async (req, res) => {
     if (!employee) {
       return res.status(404).json({ error: 'Employee not found' });
     }
+
+    // --- START WIFI BSSID VERIFICATION ---
+    if (employee.branchId) {
+      const bssids = await db
+        .select()
+        .from(branchBssids)
+        .where(eq(branchBssids.branchId, employee.branchId));
+
+      // If there are BSSIDs registered for the branch
+      if (bssids.length > 0) {
+        const allowedBssids = bssids.map(b => b.bssidAddress.toUpperCase());
+        const currentBssid = wifi_bssid ? String(wifi_bssid).toUpperCase() : null;
+
+        if (!currentBssid || !allowedBssids.includes(currentBssid)) {
+          console.log(`[Check-In] ❌ REJECTED - Invalid BSSID (${currentBssid}) for branch ${employee.branchId}. Allowed: [${allowedBssids.join(', ')}]`);
+          return res.status(403).json({
+            error: 'أنت غير متصل بشبكة الواي فاي المعتمدة للفرع.',
+            message: `الشبكة الحالية: ${currentBssid || 'غير معروف'}. يرجى الاتصال بالشبكة الصحيحة.`,
+            code: 'INVALID_WIFI_BSSID',
+          });
+        }
+        console.log(`[Check-In] ✅ APPROVED - Valid BSSID (${currentBssid})`);
+      } else {
+        // No BSSIDs registered, allow through
+        console.log(`[Check-In] WiFi check skipped: No BSSIDs registered for branch ${employee.branchId}`);
+      }
+    }
+    // --- END WIFI BSSID VERIFICATION ---
 
     // --- START DEBUG LOG ---
     console.log(`[Check-In Debug] Employee: ${employee_id}, Shift Start: ${employee.shiftStartTime}, Shift End: ${employee.shiftEndTime}`);
@@ -684,7 +712,7 @@ app.post('/api/attendance/check-in', async (req, res) => {
 // Check Out
 app.post('/api/attendance/check-out', async (req, res) => {
   try {
-    const { employee_id, latitude, longitude } = req.body;
+    const { employee_id, latitude, longitude, wifi_bssid } = req.body;
 
     if (!employee_id) {
       return res.status(400).json({ error: 'Employee ID is required' });
@@ -713,6 +741,34 @@ app.post('/api/attendance/check-out', async (req, res) => {
       .from(employees)
       .where(eq(employees.id, employee_id))
       .limit(1);
+
+    // --- START WIFI BSSID VERIFICATION ---
+    if (employee && employee.branchId) {
+      const bssids = await db
+        .select()
+        .from(branchBssids)
+        .where(eq(branchBssids.branchId, employee.branchId));
+
+      // If there are BSSIDs registered for the branch
+      if (bssids.length > 0) {
+        const allowedBssids = bssids.map(b => b.bssidAddress.toUpperCase());
+        const currentBssid = wifi_bssid ? String(wifi_bssid).toUpperCase() : null;
+
+        if (!currentBssid || !allowedBssids.includes(currentBssid)) {
+          console.log(`[Check-Out] ❌ REJECTED - Invalid BSSID (${currentBssid}) for branch ${employee.branchId}. Allowed: [${allowedBssids.join(', ')}]`);
+          return res.status(403).json({
+            error: 'أنت غير متصل بشبكة الواي فاي المعتمدة للفرع.',
+            message: `الشبكة الحالية: ${currentBssid || 'غير معروف'}. يرجى الاتصال بالشبكة الصحيحة.`,
+            code: 'INVALID_WIFI_BSSID',
+          });
+        }
+        console.log(`[Check-Out] ✅ APPROVED - Valid BSSID (${currentBssid})`);
+      } else {
+        // No BSSIDs registered, allow through
+        console.log(`[Check-Out] WiFi check skipped: No BSSIDs registered for branch ${employee.branchId}`);
+      }
+    }
+    // --- END WIFI BSSID VERIFICATION ---
 
     if (employee && employee.branchId && latitude && longitude) {
       const [branch] = await db
@@ -1478,21 +1534,10 @@ app.post('/api/advances/:advanceId/review', async (req, res) => {
       .returning();
     const updated = extractFirstRow(updateResult);
 
-    // If approved, deduct the advance amount from salary by creating a deduction record
-    if (action === 'approve' && updated) {
-      await db.insert(deductions).values({
-        employeeId: (updated as any).employeeId,
-        amount: String((updated as any).amount),
-        reason: 'سلفة معتمدة من المدير',
-        deductionDate: new Date().toISOString().split('T')[0],
-        deductionType: 'advance',
-        appliedBy: reviewer_id,
-      });
-    }
 
     res.json({
       success: true,
-      message: action === 'approve' ? 'تم الموافقة على السلفة وخصمها من الراتب' : 'تم رفض السلفة',
+      message: action === 'approve' ? 'تم الموافقة على السلفة وسيتم خصمها في الراتب القادم' : 'تم رفض السلفة',
       advance: updated,
     });
   } catch (error) {
@@ -3831,6 +3876,41 @@ app.get('/api/branches', async (req, res) => {
   }
 });
 
+// Get single branch with BSSIDs
+app.get('/api/branches/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const [branch] = await db
+      .select()
+      .from(branches)
+      .where(eq(branches.id, id))
+      .limit(1);
+
+    if (!branch) {
+      return res.status(404).json({ error: 'Branch not found' });
+    }
+
+    // Get associated BSSIDs
+    const bssids = await db
+      .select({ bssidAddress: branchBssids.bssidAddress })
+      .from(branchBssids)
+      .where(eq(branchBssids.branchId, id));
+
+    // Convert to uppercase
+    const bssidList = bssids.map(b => b.bssidAddress.toUpperCase());
+
+    res.json({
+      success: true,
+      branch: normalizeNumericFields(branch, ['latitude', 'longitude', 'geofenceRadius']),
+      allowedBssids: bssidList,
+    });
+  } catch (error) {
+    console.error('Get single branch error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Assign manager to branch
 app.post('/api/branches/:branchId/assign-manager', async (req, res) => {
   try {
@@ -4310,64 +4390,77 @@ app.post('/api/breaks/:breakId/end', async (req, res) => {
   }
 });
 
-// ============ Geofence Violations ============
-
-// Report a geofence violation
+// ============ Geofence Violations (النسخة المحدثة) ============
 app.post('/api/alerts/geofence-violation', async (req, res) => {
   try {
-    const { employeeId, timestamp, latitude, longitude } = req.body;
+    const { employeeId, timestamp, latitude, longitude, action } = req.body;
+    // (الـ 'action' يأتي من المكتبة الجديدة: "ENTER" أو "EXIT")
 
-    if (!employeeId || !timestamp) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    if (!employeeId || !timestamp || !action) {
+      return res.status(400).json({ error: 'Missing required fields (employeeId, timestamp, action)' });
     }
 
-    console.log(`[Geofence] Violation reported for employee ${employeeId} at ${timestamp}`);
-
-    // Get employee info including manager
-    const employeeResult = await db
+    const [employee] = await db
       .select()
       .from(employees)
       .where(eq(employees.id, employeeId))
       .limit(1);
-    
-    const employee: any = extractFirstRow(employeeResult);
 
     if (!employee) {
       return res.status(404).json({ error: 'Employee not found' });
     }
 
-    // Get branch info to find manager
-    if (employee.branchId) {
-      const branchResult = await db
-        .select()
-        .from(branches)
-        .where(eq(branches.id, employee.branchId))
-        .limit(1);
-      
-      const branch: any = extractFirstRow(branchResult);
+    const eventTime = new Date(timestamp);
 
-      if (branch) {
-        console.log(`[Geofence] Employee ${employee.fullName} from branch ${branch.name} violated geofence`);
-        
-        // TODO: Send notification to branch manager
-        // You can implement push notifications or store alerts in a table
-        // For now, just log it
-        console.log(`[Geofence] Alert should be sent to branch ${branch.name} manager`);
+    if (action === 'EXIT') {
+      // الموظف خرج - سجل مخالفة جديدة بوقت خروج
+      await db.insert(geofenceViolations).values({
+        employeeId: employeeId,
+        branchId: employee.branchId,
+        exitTime: eventTime,
+        latitude: latitude,
+        longitude: longitude,
+      });
+      console.log(`[Geofence] VIOLATION (EXIT) logged for ${employeeId}`);
+
+      // (يمكن إرسال تنبيه للمدير هنا)
+
+    } else if (action === 'ENTER') {
+      // الموظف عاد - ابحث عن آخر مخالفة (EXIT) لنفس الموظف لم يُسجل لها دخول
+      const [lastViolation] = await db
+        .select()
+        .from(geofenceViolations)
+        .where(and(
+          eq(geofenceViolations.employeeId, employeeId),
+          isNull(geofenceViolations.enterTime) // لم يسجل دخول
+        ))
+        .orderBy(desc(geofenceViolations.exitTime))
+        .limit(1);
+
+      if (lastViolation) {
+        // وجدنا مخالفة مفتوحة، قم بتحديثها
+        const enterTime = eventTime;
+        const exitTime = new Date(lastViolation.exitTime);
+        const durationSeconds = Math.round((enterTime.getTime() - exitTime.getTime()) / 1000);
+
+        await db
+          .update(geofenceViolations)
+          .set({
+            enterTime: enterTime,
+            durationSeconds: durationSeconds,
+          })
+          .where(eq(geofenceViolations.id, lastViolation.id));
+
+        console.log(`[Geofence] VIOLATION (ENTER) logged for ${employeeId}. Duration: ${durationSeconds}s`);
+      } else {
+        // الموظف دخل النطاق (ربما كان التطبيق مغلقاً عند الخروج) - تجاهل
+        console.log(`[Geofence] (ENTER) event for ${employeeId} without matching EXIT, ignoring.`);
       }
     }
 
-    // Store the violation (you can create an alerts table if needed)
-    // For now, just acknowledge receipt
     res.json({
       success: true,
-      message: 'تم تسجيل خروج الموظف من المنطقة',
-      employee: {
-        id: employee.id,
-        name: employee.fullName,
-        branch: employee.branch,
-      },
-      timestamp,
-      location: { latitude, longitude },
+      message: `Geofence action ${action} logged.`,
     });
   } catch (error) {
     console.error('Geofence violation error:', error);

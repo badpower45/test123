@@ -18,7 +18,7 @@ import 'screens/home_screen.dart';
 import 'screens/employee/employee_main_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/splash_screen.dart';
-import 'services/background_pulse_service.dart';
+import 'services/new_background_service.dart';
 import 'services/pulse_backend_client.dart';
 import 'services/pulse_sync_manager.dart';
 import 'theme/app_colors.dart';
@@ -45,8 +45,7 @@ Future<void> main() async {
       await Permission.notification.request();
     }
   }
-  await BackgroundPulseService.initialize();
-  await BackgroundPulseService.stop();
+  // Initialize the new background service when needed
   runApp(const OldiesApp());
 }
 

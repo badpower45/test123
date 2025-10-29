@@ -164,6 +164,24 @@ export const absenceNotifications = pgTable('absence_notifications', {
   dateIdx: index('idx_absence_notifications_date').on(table.absenceDate),
 }));
 
+// =============================================================================
+// GEOFENCE VIOLATIONS - مخالفات النطاق الجغرافي
+// =============================================================================
+export const geofenceViolations = pgTable('geofence_violations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  employeeId: text('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
+  branchId: uuid('branch_id').references(() => branches.id, { onDelete: 'set null' }),
+  exitTime: timestamp('exit_time', { withTimezone: true }).notNull(),
+  enterTime: timestamp('enter_time', { withTimezone: true }),
+  durationSeconds: integer('duration_seconds'),
+  latitude: doublePrecision('latitude'),
+  longitude: doublePrecision('longitude'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  employeeIdIdx: index('idx_geofence_violations_employee_id').on(table.employeeId),
+  exitTimeIdx: index('idx_geofence_violations_exit_time').on(table.exitTime),
+}));
+
 // Pulses table - location tracking (updated for multi-branch)
 export const pulses = pgTable('pulses', {
   id: uuid('id').primaryKey().defaultRandom(),

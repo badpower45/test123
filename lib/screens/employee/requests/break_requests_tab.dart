@@ -34,6 +34,8 @@ class _BreakRequestsTabState extends State<BreakRequestsTab> {
   Timer? _ticker;
   ShiftStatus? _currentShiftStatus;
   bool _submittingDelete = false;
+  bool _isShiftActive = false;
+  bool _isLoadingStatus = true;
 
   @override
   void initState() {
@@ -41,6 +43,7 @@ class _BreakRequestsTabState extends State<BreakRequestsTab> {
     _currentShiftStatus = widget.shiftStatus;
     _startTicker();
     _loadBreaks();
+    _checkShiftStatus();
   }
 
   @override
@@ -112,6 +115,30 @@ class _BreakRequestsTabState extends State<BreakRequestsTab> {
     }
     if (widget.onShiftStatusChanged != null) {
       await widget.onShiftStatusChanged!.call();
+    }
+  }
+
+  Future<void> _checkShiftStatus() async {
+    if (!mounted) return;
+    setState(() {
+      _isLoadingStatus = true;
+    });
+    try {
+      final isActive = await RequestsApiService.checkActiveShift(widget.employeeId);
+      if (mounted) {
+        setState(() {
+          _isShiftActive = isActive;
+          _isLoadingStatus = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isShiftActive = false;
+          _isLoadingStatus = false;
+        });
+      }
+      print('Failed to check shift status: $e');
     }
   }
 
@@ -271,9 +298,15 @@ class _BreakRequestsTabState extends State<BreakRequestsTab> {
         physics: const AlwaysScrollableScrollPhysics(),
         children: [
           ElevatedButton.icon(
-            onPressed: hasActiveShift ? _openBreakRequestSheet : null,
+            onPressed: (_isShiftActive && !_isLoadingStatus) ? _openBreakRequestSheet : null,
             icon: const Icon(Icons.add),
-            label: const Text('طلب استراحة'),
+            label: _isLoadingStatus
+                ? const SizedBox(
+                    height: 18,
+                    width: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text('طلب استراحة'),
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primaryOrange,
               foregroundColor: Colors.white,

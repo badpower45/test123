@@ -48,9 +48,7 @@
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>تستخدم أولديزز وركرز موقعك للتأكد من وجودك داخل نطاق العمل قبل تسجيل الحضور.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>تواصل أولديزز وركرز متابعة موقعك في الخلفية لتسجيل نبضات الحضور بشكل مستمر.</string>
-	<key>NSLocationAlwaysUsageDescription</key>
-	<string>تحتاج أولديزز وركرز إلى صلاحية الموقع في الخلفية للحفاظ على حضورك محدثاً حتى عند إغلاق التطبيق.</string>
+	<string>يحتاج التطبيق إلى الوصول لموقعك في الخلفية لتتبع الحضور وضمان وجودك في نطاق العمل.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>

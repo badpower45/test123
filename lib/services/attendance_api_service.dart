@@ -25,6 +25,7 @@ class AttendanceApiService {
     required String employeeId,
     required double latitude,
     required double longitude,
+    String? wifiBssid,
   }) async {
     late http.Response response;
     late Map<String, dynamic> body;
@@ -37,6 +38,7 @@ class AttendanceApiService {
           'employee_id': employeeId,
           'latitude': latitude,
           'longitude': longitude,
+          if (wifiBssid != null) 'wifi_bssid': wifiBssid,
         }),
       );
       body = _decodeBody(response.body);
@@ -58,6 +60,7 @@ class AttendanceApiService {
     required String employeeId,
     required double latitude,
     required double longitude,
+    String? wifiBssid,
   }) async {
     late http.Response response;
     late Map<String, dynamic> body;
@@ -70,6 +73,7 @@ class AttendanceApiService {
           'employee_id': employeeId,
           'latitude': latitude,
           'longitude': longitude,
+          if (wifiBssid != null) 'wifi_bssid': wifiBssid,
         }),
       );
       body = _decodeBody(response.body);
