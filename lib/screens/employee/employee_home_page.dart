@@ -1,13 +1,14 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:network_info_plus/network_info_plus.dart';
+import 'package:geolocator/geolocator.dart';
 
 import '../../constants/restaurant_config.dart';
 import '../../models/attendance_request.dart';
 import '../../services/attendance_api_service.dart';
 import '../../services/branch_api_service.dart';
 import '../../services/location_service.dart';
+import '../../services/wifi_service.dart';
 import '../../services/requests_api_service.dart';
 import '../../services/sync_service.dart';
 import '../../services/notification_service.dart';
@@ -15,8 +16,6 @@ import '../../services/auth_service.dart';
 import '../../services/geofence_service.dart';
 import '../../database/offline_database.dart';
 import '../../theme/app_colors.dart';
-import 'my_attendance_table_screen.dart';
-import 'package:geolocator/geolocator.dart';
 
 class EmployeeHomePage extends StatefulWidget {
   final String employeeId;
@@ -127,10 +126,23 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
     setState(() => _isLoading = true);
     
     try {
+      print('🚀 Starting check-in process...');
+      
+      // استخدام الـ services المحسّنة
       final locationService = LocationService();
-      final position = await locationService.tryGetPosition();
-      final networkInfo = NetworkInfo();
-      final wifiBSSID = await networkInfo.getWifiBSSID();
+      final wifiService = WiFiService.instance;
+      
+      // الحصول على الموقع والـ WiFi بالتوازي (أسرع)
+      final results = await Future.wait([
+        locationService.tryGetPosition(),
+        wifiService.getWifiBSSID(),
+      ]);
+      
+      final position = results[0] as Position?;
+      final wifiBSSID = results[1] as String?;
+
+      print('📍 Position: ${position?.latitude}, ${position?.longitude} (accuracy: ${position?.accuracy}m)');
+      print('📶 WiFi BSSID: $wifiBSSID');
 
       // Validate location using branch data
       if (RestaurantConfig.enforceLocation && _branchData != null) {
@@ -138,8 +150,8 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           throw Exception('تعذر تحديد موقعك، يرجى تفعيل خدمة تحديد الموقع والمحاولة مرة أخرى.');
         }
         
-        // Check accuracy - warn if too poor
-        if (position.accuracy > 100) {
+        // تخفيف شرط الدقة - قبول حتى 150 متر
+        if (position.accuracy > 150) {
           throw Exception('دقة الموقع ضعيفة جداً (${position.accuracy.toStringAsFixed(0)}م). يرجى الانتقال إلى مكان مفتوح وإعادة المحاولة.');
         }
         
@@ -162,10 +174,13 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           print('  Accuracy: ${position.accuracy.toStringAsFixed(1)}m');
           print('  Distance: ${distance.toStringAsFixed(1)}m');
           print('  Allowed radius: ${branchRadius}m');
-          print('  Within range: ${distance <= branchRadius}');
           
-          // Add accuracy buffer - if accuracy is poor, we need extra margin
-          final effectiveRadius = branchRadius + (position.accuracy > 30 ? position.accuracy * 0.5 : 0);
+          // إضافة هامش أكبر للدقة - أكثر تسامحاً
+          final accuracyMargin = position.accuracy > 50 ? position.accuracy * 0.8 : position.accuracy * 0.3;
+          final effectiveRadius = branchRadius + accuracyMargin;
+          
+          print('  Effective radius (with margin): ${effectiveRadius.toStringAsFixed(1)}m');
+          print('  Within range: ${distance <= effectiveRadius}');
           
           if (distance > effectiveRadius) {
             throw Exception(
@@ -277,17 +292,6 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           );
         }
       }
-    } catch (e) {
-      setState(() => _isLoading = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('خطأ: ${e.toString()}'),
-            backgroundColor: AppColors.error,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
     }
   }
 
@@ -295,10 +299,23 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
     setState(() => _isLoading = true);
 
     try {
+      // استخدام الخدمات المحسنة مع التنفيذ المتوازي
       final locationService = LocationService();
-      final position = await locationService.tryGetPosition();
-      final networkInfo = NetworkInfo();
-      final wifiBSSID = await networkInfo.getWifiBSSID();
+      final wifiService = WiFiService.instance;
+      
+      // تنفيذ متوازي للحصول على الموقع والـ WiFi معاً
+      final results = await Future.wait([
+        locationService.tryGetPosition(),
+        wifiService.getWifiBSSID(),
+      ]);
+      
+      final position = results[0] as Position?;
+      final wifiBSSID = results[1] as String?;
+      
+      print('🚪 Check-out attempt:');
+      print('  Position: ${position != null ? "(${position.latitude}, ${position.longitude})" : "null"}');
+      print('  Accuracy: ${position?.accuracy.toStringAsFixed(1) ?? "N/A"}m');
+      print('  WiFi BSSID: ${wifiBSSID ?? "null"}');
 
       // Validate location using branch data
       if (RestaurantConfig.enforceLocation && _branchData != null) {
@@ -306,8 +323,8 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           throw Exception('تعذر تحديد موقعك، يرجى تفعيل خدمة تحديد الموقع والمحاولة مرة أخرى.');
         }
 
-        // Check accuracy - warn if too poor
-        if (position.accuracy > 100) {
+        // Check accuracy - أكثر تسامحاً مع الدقة الضعيفة
+        if (position.accuracy > 150) {
           throw Exception('دقة الموقع ضعيفة جداً (${position.accuracy.toStringAsFixed(0)}م). يرجى الانتقال إلى مكان مفتوح وإعادة المحاولة.');
         }
 
@@ -331,8 +348,12 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           print('  Distance: ${distance.toStringAsFixed(1)}m');
           print('  Allowed radius: ${branchRadius}m');
 
-          // Add accuracy buffer
-          final effectiveRadius = branchRadius + (position.accuracy > 30 ? position.accuracy * 0.5 : 0);
+          // إضافة هامش أكبر للدقة - أكثر تسامحاً
+          final accuracyMargin = position.accuracy > 50 ? position.accuracy * 0.8 : position.accuracy * 0.3;
+          final effectiveRadius = branchRadius + accuracyMargin;
+          
+          print('  Effective radius (with margin): ${effectiveRadius.toStringAsFixed(1)}m');
+          print('  Within range: ${distance <= effectiveRadius}');
 
           if (distance > effectiveRadius) {
             throw Exception(

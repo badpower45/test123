@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'package:geolocator/geolocator.dart';
-import 'package:network_info_plus/network_info_plus.dart';
 import '../database/offline_database.dart';
 import 'notification_service.dart';
+import 'wifi_service.dart';
 
 class GeofenceService {
   static final GeofenceService instance = GeofenceService._init();
@@ -127,9 +127,10 @@ class GeofenceService {
       bool isCorrectWifi = true;
       if (_requiredBssids.isNotEmpty) {
         try {
-          final info = NetworkInfo();
-          final wifiBSSID = (await info.getWifiBSSID())?.toUpperCase();
-          isCorrectWifi = wifiBSSID != null && _requiredBssids.contains(wifiBSSID);
+          final wifiService = WiFiService.instance;
+          final wifiBSSID = await wifiService.getWifiBSSID();
+          isCorrectWifi = wifiBSSID != null && _requiredBssids.contains(wifiBSSID.toUpperCase());
+          print('[GeofenceService] WiFi check: BSSID=$wifiBSSID, isCorrect=$isCorrectWifi');
         } catch (e) {
           print('[GeofenceService] Failed to check WiFi: $e');
           isCorrectWifi = false;
@@ -207,9 +208,9 @@ class GeofenceService {
       // Check WiFi if required
       if (requiredBssids != null && requiredBssids.isNotEmpty) {
         try {
-          final info = NetworkInfo();
-          final wifiBSSID = (await info.getWifiBSSID())?.toUpperCase();
-          return isWithinGeofence && wifiBSSID != null && requiredBssids.contains(wifiBSSID);
+          final wifiService = WiFiService.instance;
+          final wifiBSSID = await wifiService.getWifiBSSID();
+          return isWithinGeofence && wifiBSSID != null && requiredBssids.contains(wifiBSSID.toUpperCase());
         } catch (e) {
           print('[GeofenceService] WiFi check failed: $e');
           return false;

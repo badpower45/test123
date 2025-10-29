@@ -1,6 +1,11 @@
 import 'package:geolocator/geolocator.dart';
 
 class LocationService {
+  // Cache للموقع الأخير لتسريع الاستجابة
+  static Position? _lastKnownPosition;
+  static DateTime? _lastPositionTime;
+  static const Duration _cacheValidDuration = Duration(minutes: 2);
+
   Future<bool> _ensureServiceEnabled() async {
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
@@ -22,68 +27,71 @@ class LocationService {
     return true;
   }
 
+  /// Get current position with smart caching and fast response
   Future<Position?> _getCurrentPosition() async {
     final hasService = await _ensureServiceEnabled();
     if (!hasService) {
-      print('[LocationService] Location service not enabled');
+      print('[LocationService] ❌ Location service not enabled');
       return null;
     }
 
     final hasPermission = await _ensurePermissionGranted();
     if (!hasPermission) {
-      print('[LocationService] Location permission not granted');
+      print('[LocationService] ❌ Location permission not granted');
       return null;
     }
 
-    // --- بداية التعديلات ---
-    Position? position;
-    int attempts = 0;
-    // قلّلنا عدد المحاولات لـ 2
-    const maxAttempts = 2;
-
-    while (attempts < maxAttempts) {
-      try {
-        position = await Geolocator.getCurrentPosition(
-          // قلّلنا الدقة المطلوبة
-          desiredAccuracy: LocationAccuracy.high,
-          forceAndroidLocationManager: true,
-          // قلّلنا مهلة الانتظار لكل محاولة
-          timeLimit: const Duration(seconds: 10),
-        ).timeout(const Duration(seconds: 12)); // مهلة إجمالية للمحاولة
-
-        print('[LocationService] Attempt ${attempts + 1}: accuracy=${position.accuracy.toStringAsFixed(1)}m');
-
-        // هنقبل أي دقة أقل من 50 متر (بدلاً من 30)
-        if (position.accuracy <= 50) {
-          print('[LocationService] Good enough accuracy achieved: ${position.accuracy.toStringAsFixed(1)}m');
-          return position; // ارجع بالنتيجة فوراً
-        }
-
-        // لو الدقة وحشة، حاول مرة كمان لو لسه فيه محاولات
-        attempts++;
-        if (attempts < maxAttempts) {
-          await Future.delayed(const Duration(seconds: 1)); // انتظار ثانية قبل المحاولة التالية
-        }
-
-      } catch (e) {
-        print('[LocationService] Attempt ${attempts + 1} failed: $e');
-        attempts++;
-
-        if (attempts < maxAttempts) {
-          await Future.delayed(const Duration(seconds: 1));
-        }
+    // استخدم الـ cache إذا كان حديث (أقل من دقيقتين)
+    if (_lastKnownPosition != null && _lastPositionTime != null) {
+      final age = DateTime.now().difference(_lastPositionTime!);
+      if (age < _cacheValidDuration) {
+        print('[LocationService] 📍 Using cached position (${age.inSeconds}s old)');
+        return _lastKnownPosition;
       }
     }
 
-    // لو فشلت كل المحاولات أو الدقة لسه وحشة بعد المحاولتين، رجع آخر نتيجة (أو null)
-    if (position != null) {
-       print('[LocationService] Using best available position after $attempts attempts: accuracy=${position.accuracy.toStringAsFixed(1)}m');
-    } else {
-       print('[LocationService] Failed to get location after $attempts attempts');
-    }
-    // --- نهاية التعديلات ---
+    try {
+      // محاولة واحدة سريعة - قبول أي دقة معقولة
+      print('[LocationService] 🔍 Getting fresh location...');
+      
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.medium, // متوسط - أسرع من best
+        forceAndroidLocationManager: false, // استخدم Google Play Services (أسرع)
+        timeLimit: const Duration(seconds: 8),
+      ).timeout(const Duration(seconds: 10));
 
-    return position; // رجع أفضل نتيجة تم الحصول عليها (حتى لو مش مثالية)
+      print('[LocationService] ✅ Got position: accuracy=${position.accuracy.toStringAsFixed(1)}m');
+      
+      // حفظ في الـ cache
+      _lastKnownPosition = position;
+      _lastPositionTime = DateTime.now();
+      
+      return position;
+      
+    } catch (e) {
+      print('[LocationService] ⚠️ Failed to get fresh location: $e');
+      
+      // Fallback: استخدم آخر موقع معروف من النظام
+      try {
+        final lastKnown = await Geolocator.getLastKnownPosition();
+        if (lastKnown != null) {
+          print('[LocationService] 📍 Using last known position from system');
+          _lastKnownPosition = lastKnown;
+          _lastPositionTime = DateTime.now();
+          return lastKnown;
+        }
+      } catch (e2) {
+        print('[LocationService] ❌ Failed to get last known position: $e2');
+      }
+      
+      // Fallback نهائي: استخدم الـ cache حتى لو قديم
+      if (_lastKnownPosition != null) {
+        print('[LocationService] ⚠️ Using old cached position as last resort');
+        return _lastKnownPosition;
+      }
+      
+      return null;
+    }
   }
 
   Future<bool> isWithinRestaurantArea({
@@ -103,10 +111,20 @@ class LocationService {
       position.longitude,
     );
     
-    print('[LocationService] Distance check: ${distance.toStringAsFixed(1)}m (radius: ${radiusInMeters}m)');
+    print('[LocationService] 📏 Distance: ${distance.toStringAsFixed(1)}m (allowed: ${radiusInMeters}m, accuracy: ${position.accuracy.toStringAsFixed(1)}m)');
     
-    return distance <= radiusInMeters;
+    // إضافة هامش للدقة - إذا المسافة قريبة من الحد وفي margin للخطأ
+    final effectiveRadius = radiusInMeters + (position.accuracy * 0.3);
+    
+    return distance <= effectiveRadius;
   }
 
   Future<Position?> tryGetPosition() => _getCurrentPosition();
+  
+  /// Clear cache to force fresh location
+  static void clearCache() {
+    _lastKnownPosition = null;
+    _lastPositionTime = null;
+    print('[LocationService] 🗑️ Cache cleared');
+  }
 }

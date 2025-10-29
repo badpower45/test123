@@ -4,7 +4,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:network_info_plus/network_info_plus.dart';
 import 'package:http/http.dart' as http;
 
 import '../../constants/api_endpoints.dart';
@@ -12,6 +11,7 @@ import '../../services/branch_manager_api_service.dart';
 import '../../services/owner_api_service.dart';
 import '../../services/branch_api_service.dart';
 import '../../services/auth_service.dart';
+import '../../services/wifi_service.dart';
 import '../../theme/app_colors.dart';
 import '../login_screen.dart';
 import 'employee_attendance_table_screen.dart';
@@ -1719,8 +1719,8 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
 
   Future<void> _getCurrentWifiBssid() async {
     try {
-      final networkInfo = NetworkInfo();
-      final wifiBSSID = await networkInfo.getWifiBSSID();
+      final wifiService = WiFiService.instance;
+      final wifiBSSID = await wifiService.getWifiBSSID();
       
       if (wifiBSSID != null && wifiBSSID.isNotEmpty) {
         setState(() {

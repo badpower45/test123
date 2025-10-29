@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:network_info_plus/network_info_plus.dart';
 
 import '../models/pulse.dart';
 import '../services/location_service.dart';
+import '../services/wifi_service.dart';
 import 'pulse_backend_client.dart';
 import 'pulse_history_repository.dart';
 import 'pulse_sync_manager.dart';
@@ -136,8 +136,8 @@ class BackgroundPulseService {
 
       String? wifiBssid;
       try {
-        final networkInfo = NetworkInfo();
-        wifiBssid = await networkInfo.getWifiBSSID();
+        final wifiService = WiFiService.instance;
+        wifiBssid = await wifiService.getWifiBSSID();
       } catch (_) {
         wifiBssid = null;
       }
