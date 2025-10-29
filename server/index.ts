@@ -3933,47 +3933,6 @@ app.put('/api/branches/:id', async (req, res) => {
   }
 });
 
-// Delete branch
-app.delete('/api/branches/:id', async (req, res) => {
-  try {
-    const branchId = req.params.id;
-
-    // Check if branch exists
-    const [existingBranch] = await db
-      .select({ id: branches.id, name: branches.name })
-      .from(branches)
-      .where(eq(branches.id, branchId))
-      .limit(1);
-
-    if (!existingBranch) {
-      return res.status(404).json({ error: 'الفرع غير موجود' });
-    }
-
-    // Delete related BSSIDs
-    await db.delete(branchBssids).where(eq(branchBssids.branchId, branchId));
-
-    // Note: We don't delete employees, just unlink them from the branch
-    // Set branchId to null for all employees in this branch
-    await db
-      .update(employees)
-      .set({ branchId: null, branch: null })
-      .where(eq(employees.branchId, branchId));
-
-    // Finally, delete the branch
-    await db.delete(branches).where(eq(branches.id, branchId));
-
-    console.log(`[Branch Deleted] ID: ${branchId}, Name: ${existingBranch.name}`);
-
-    res.json({
-      success: true,
-      message: 'تم حذف الفرع بنجاح',
-      branchId,
-    });
-  } catch (error) {
-    console.error('Delete branch error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
 
 // Get employees by branch for managers
 app.get('/api/branches/:branchId/employees', async (req, res) => {

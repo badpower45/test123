@@ -639,32 +639,6 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
 
               const SizedBox(height: 16),
 
-              // Secondary Action - Attendance Request
-              OutlinedButton(
-                onPressed: _showAttendanceRequestDialog,
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppColors.primaryOrange,
-                  side: const BorderSide(color: AppColors.primaryOrange),
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                ),
-                child: const Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.event_note, size: 20),
-                    SizedBox(width: 8),
-                    Text(
-                      'طلب تسجيل حضور',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
 
             ],
           ),

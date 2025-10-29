@@ -18,6 +18,7 @@ const String attendanceRequestReviewEndpoint = '$apiBaseUrl/attendance/requests/
 
 // Attendance reports
 const String attendanceReportEndpoint = '$apiBaseUrl/reports/attendance/:employeeId';
+const String comprehensiveReportEndpoint = '$apiBaseUrl/reports/comprehensive/:employeeId';
 
 // Pulses
 const String pulseEndpoint = '$apiBaseUrl/pulses';

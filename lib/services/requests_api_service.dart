@@ -286,6 +286,29 @@ class RequestsApiService {
     throw Exception(body['error'] ?? 'تعذر تحميل طلبات الحضور (${response.statusCode})');
   }
 
+  static Future<Map<String, dynamic>> getComprehensiveReport({
+    required String employeeId,
+    required String startDate,
+    required String endDate,
+  }) async {
+    final endpoint = comprehensiveReportEndpoint.replaceAll(':employeeId', employeeId);
+    final uri = Uri.parse(endpoint).replace(
+      queryParameters: {
+        'start_date': startDate,
+        'end_date': endDate,
+      },
+    );
+
+    final response = await http.get(uri);
+    final body = _decodeBody(response.body);
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return Map<String, dynamic>.from(body);
+    }
+
+    throw Exception(body['error'] ?? 'تعذر تحميل التقرير الشامل (${response.statusCode})');
+  }
+
   static Map<String, dynamic> _decodeBody(String rawBody) {
     if (rawBody.isEmpty) {
       return <String, dynamic>{};
