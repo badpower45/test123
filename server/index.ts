@@ -3,6 +3,7 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import bcrypt from 'bcrypt';
+import cron from 'node-cron';
 import { db } from './db.js';
 import {
   employees, attendance, attendanceRequests, leaveRequests, advances,
@@ -484,20 +485,23 @@ app.post('/api/attendance/check-in', async (req, res) => {
 
     // --- START DEBUG LOG ---
     console.log(`[Check-In Debug] Employee: ${employee_id}, Shift Start: ${employee.shiftStartTime}, Shift End: ${employee.shiftEndTime}`);
+    
+    // Get Egypt/Cairo time
+    const cairoTime = new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' });
+    const cairoDate = new Date(cairoTime);
     console.log(`[Check-In Debug] Server Time (UTC): ${new Date().toISOString()}`);
-    console.log(`[Check-In Debug] Server Time (Local - Assumed Cairo): ${new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' })}`);
-    const now = new Date();
-    const currentHour = now.getHours(); // Uses server's local time
-    const currentMinute = now.getMinutes();
-    console.log(`[Check-In Debug] Current Time (Server Local HH:MM): ${currentHour}:${currentMinute}`);
+    console.log(`[Check-In Debug] Cairo Time: ${cairoTime}`);
+    console.log(`[Check-In Debug] Cairo Time (Date Object): ${cairoDate.toISOString()}`);
     // --- END DEBUG LOG ---
 
-    // Validate shift time if shift is defined
+    // Validate shift time using Cairo timezone
     if (employee.shiftStartTime && employee.shiftEndTime) {
-      const now = new Date();
-      const currentHour = now.getHours();
-      const currentMinute = now.getMinutes();
+      // Use Cairo time for validation
+      const currentHour = cairoDate.getHours();
+      const currentMinute = cairoDate.getMinutes();
       const currentTime = currentHour * 60 + currentMinute; // Convert to minutes since midnight
+
+      console.log(`[Check-In Debug] Cairo Current Time: ${currentHour}:${currentMinute.toString().padStart(2, '0')} (${currentTime} minutes)`);
 
       // Parse shift times (format: "HH:mm")
       const [startHour, startMinute] = employee.shiftStartTime.split(':').map(Number);
@@ -505,27 +509,41 @@ app.post('/api/attendance/check-in', async (req, res) => {
       const shiftStart = startHour * 60 + startMinute;
       const shiftEnd = endHour * 60 + endMinute;
 
-      // Allow 30 minutes before shift start and during shift
-      const allowedStart = shiftStart - 30;
-      
-      // Check if current time is within allowed window
+      console.log(`[Check-In Debug] Shift Window: ${employee.shiftStartTime} (${shiftStart} min) to ${employee.shiftEndTime} (${shiftEnd} min)`);
+
+      // Check if current time is within shift window
       let isWithinShift = false;
       if (shiftEnd > shiftStart) {
         // Normal shift (e.g., 9:00 - 17:00)
-        isWithinShift = currentTime >= allowedStart && currentTime <= shiftEnd;
+        isWithinShift = currentTime >= shiftStart && currentTime <= shiftEnd;
+        console.log(`[Check-In Debug] Normal shift check: ${currentTime} >= ${shiftStart} && ${currentTime} <= ${shiftEnd} = ${isWithinShift}`);
       } else {
         // Night shift crossing midnight (e.g., 21:00 - 05:00)
-        isWithinShift = currentTime >= allowedStart || currentTime <= shiftEnd;
+        isWithinShift = currentTime >= shiftStart || currentTime <= shiftEnd;
+        console.log(`[Check-In Debug] Night shift check: ${currentTime} >= ${shiftStart} || ${currentTime} <= ${shiftEnd} = ${isWithinShift}`);
       }
 
       if (!isWithinShift) {
-        return res.status(403).json({ 
-          error: 'لا يمكن تسجيل الحضور خارج وقت الشيفت المحدد',
+        const formatTime = (minutes: number) => {
+          const h = Math.floor(minutes / 60);
+          const m = minutes % 60;
+          return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+        };
+        
+        console.log(`[Check-In Debug] ❌ REJECTED - Outside shift time`);
+        
+        return res.status(400).json({ 
+          error: 'لا يمكنك تسجيل الحضور خارج وقت الشيفت المحدد',
+          message: `وقت الشيفت الخاص بك من ${employee.shiftStartTime} إلى ${employee.shiftEndTime}. الوقت الحالي: ${formatTime(currentTime)}`,
           shiftStartTime: employee.shiftStartTime,
           shiftEndTime: employee.shiftEndTime,
-          shiftType: employee.shiftType,
+          currentTime: formatTime(currentTime),
+          cairoTime: cairoTime,
+          code: 'OUTSIDE_SHIFT_TIME',
         });
       }
+      
+      console.log(`[Check-In Debug] ✅ APPROVED - Within shift time`);
     }
 
     const today = new Date().toISOString().split('T')[0];
@@ -644,10 +662,18 @@ app.post('/api/attendance/check-in', async (req, res) => {
       );
     }
 
-    res.json({
+    res.status(201).json({
       success: true,
       message: 'تم تسجيل الحضور بنجاح',
-      attendance: result,
+      attendance: {
+        id: (result as any)?.id,
+        employeeId: employee_id,
+        date: today,
+        checkInTime: (result as any)?.checkInTime,
+        checkOutTime: null,
+        workHours: '0.00',
+        status: 'active',
+      },
     });
   } catch (error) {
     console.error('Check-in error:', error);
@@ -3001,6 +3027,26 @@ app.get('/api/owner/payroll/summary', async (req, res) => {
       pulsesMap.set(row.employeeId, Number(row.totalValidPulses) || 0);
     }
 
+    // Get advances for all employees in date range
+    const advancesResult = await db
+      .select({
+        employeeId: advances.employeeId,
+        amount: advances.amount,
+      })
+      .from(advances)
+      .where(and(
+        eq(advances.status, 'approved'),
+        gte(advances.requestDate, new Date(startDate)),
+        lte(advances.requestDate, new Date(endDate))
+      ));
+
+    const advancesMap = new Map<string, number>();
+    for (const adv of advancesResult) {
+      const amount = parseFloat(adv.amount || '0');
+      const existing = advancesMap.get(adv.employeeId) || 0;
+      advancesMap.set(adv.employeeId, existing + amount);
+    }
+
     const normalizedEmployees = employeeRows.map(row =>
       normalizeNumericFields(row, ['monthlySalary', 'hourlyRate'])
     );
@@ -3017,16 +3063,21 @@ app.get('/api/owner/payroll/summary', async (req, res) => {
       totalValidPulses: number;
       hourlyPay: number;
       pulsePay: number;
+      totalAdvances: number;
       totalComputedPay: number;
+      netSalary: number;
       active: boolean;
     }>;
 
     let totalHourlyPay = 0;
     let totalPulsePay = 0;
+    let totalAdvancesSum = 0;
 
     for (const employee of normalizedEmployees) {
       const attendanceInfo = attendanceMap.get(employee.id) || { totalWorkHours: 0, attendanceDays: 0 };
       const pulsesCount = pulsesMap.get(employee.id) || 0;
+      const employeeAdvances = advancesMap.get(employee.id) || 0;
+      
       const hourlyRateValue = typeof employee.hourlyRate === 'number' && !isNaN(employee.hourlyRate)
         ? employee.hourlyRate
         : null;
@@ -3039,9 +3090,11 @@ app.get('/api/owner/payroll/summary', async (req, res) => {
       const pulseValue = effectiveHourlyRate > 0 ? (effectiveHourlyRate / 3600) * 30 : 0;
       const pulsePay = Math.round(pulsesCount * pulseValue * 100) / 100;
       const totalComputedPay = Math.round((hourlyPay + pulsePay) * 100) / 100;
+      const netSalary = Math.round((totalComputedPay - employeeAdvances) * 100) / 100;
 
       totalHourlyPay += hourlyPay;
       totalPulsePay += pulsePay;
+      totalAdvancesSum += employeeAdvances;
 
       payrollDetails.push({
         id: employee.id,
@@ -3055,7 +3108,9 @@ app.get('/api/owner/payroll/summary', async (req, res) => {
         totalValidPulses: pulsesCount,
         hourlyPay,
         pulsePay,
+        totalAdvances: Math.round(employeeAdvances * 100) / 100,
         totalComputedPay,
+        netSalary,
         active: employee.active,
       });
     }
@@ -3075,7 +3130,9 @@ app.get('/api/owner/payroll/summary', async (req, res) => {
         employeesCount: payrollDetails.length,
         totalHourlyPay: Math.round(totalHourlyPay * 100) / 100,
         totalPulsePay: Math.round(totalPulsePay * 100) / 100,
+        totalAdvances: Math.round(totalAdvancesSum * 100) / 100,
         totalComputedPay: Math.round((totalHourlyPay + totalPulsePay) * 100) / 100,
+        totalNetSalary: Math.round((totalHourlyPay + totalPulsePay - totalAdvancesSum) * 100) / 100,
       },
     });
   } catch (error) {
@@ -5039,6 +5096,113 @@ app.get('/api/attendance/presence', async (req, res) => {
   } catch (error) {
     console.error('Get presence status error:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// =============================================================================
+// CRON JOB - Check for late employees (2 hours after shift start)
+// =============================================================================
+
+// Run every 30 minutes
+cron.schedule('*/30 * * * *', async () => {
+  try {
+    console.log('[CRON] Checking for late employees...');
+    
+    // Get Egypt/Cairo time
+    const cairoTimeString = new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' });
+    const cairoDate = new Date(cairoTimeString);
+    const today = cairoDate.toISOString().split('T')[0];
+    const currentHour = cairoDate.getHours();
+    const currentMinute = cairoDate.getMinutes();
+    const currentTime = currentHour * 60 + currentMinute;
+    
+    console.log(`[CRON] Cairo Time: ${cairoTimeString}, Current Time: ${currentHour}:${currentMinute.toString().padStart(2, '0')}`);
+
+    // Get all active employees with shift times
+    const allEmployees = await db
+      .select()
+      .from(employees)
+      .where(and(
+        eq(employees.active, true),
+        sql`${employees.shiftStartTime} IS NOT NULL`
+      ));
+
+    for (const employee of allEmployees) {
+      if (!employee.shiftStartTime) continue;
+
+      // Parse shift start time
+      const [startHour, startMinute] = employee.shiftStartTime.split(':').map(Number);
+      const shiftStart = startHour * 60 + startMinute;
+      const twoHoursAfterStart = shiftStart + 120; // 2 hours = 120 minutes
+
+      // Check if it's been 2+ hours since shift start
+      if (currentTime < twoHoursAfterStart) continue;
+
+      // Check if employee has checked in today
+      const [todayAttendance] = await db
+        .select()
+        .from(attendance)
+        .where(and(
+          eq(attendance.employeeId, employee.id),
+          eq(attendance.date, today)
+        ))
+        .limit(1);
+
+      if (todayAttendance) continue; // Employee already checked in
+
+      // Check if we already sent notification today
+      const todayStart = new Date(cairoTimeString);
+      todayStart.setHours(0, 0, 0, 0);
+      
+      const [existingNotification] = await db
+        .select()
+        .from(notifications)
+        .where(and(
+          eq(notifications.type, 'ABSENCE_ALERT'),
+          eq(notifications.relatedId, employee.id),
+          gte(notifications.createdAt, todayStart)
+        ))
+        .limit(1);
+
+      if (existingNotification) continue; // Already notified
+
+      // Find manager for this employee's branch
+      let managerId = null;
+      if (employee.branchId) {
+        const [branchManager] = await db
+          .select()
+          .from(branchManagers)
+          .where(eq(branchManagers.branchId, employee.branchId))
+          .limit(1);
+        
+        if (branchManager) {
+          managerId = branchManager.employeeId;
+        }
+      }
+
+      // If no branch manager, send to owner
+      if (!managerId) {
+        managerId = await getOwnerId();
+      }
+
+      if (managerId) {
+        // Send notification to manager
+        await sendNotification(
+          managerId,
+          'ABSENCE_ALERT',
+          'تأخير موظف',
+          `تنبيه: الموظف ${employee.fullName} تأخر لمدة ساعتين عن شيفت اليوم (${employee.shiftStartTime}). هل ترغب بتطبيق خصم؟`,
+          employee.id,
+          employee.id
+        );
+
+        console.log(`[CRON] Sent late notification for employee ${employee.fullName} to manager ${managerId}`);
+      }
+    }
+
+    console.log('[CRON] Late employee check completed');
+  } catch (error) {
+    console.error('[CRON] Error checking late employees:', error);
   }
 });
 

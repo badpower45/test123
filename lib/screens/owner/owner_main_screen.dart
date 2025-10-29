@@ -628,6 +628,13 @@ class _OwnerBranchesTabState extends State<_OwnerBranchesTab> {
     await _branchesFuture;
   }
 
+  String _formatCurrency(dynamic value) {
+    if (value == null) return '—';
+    final parsed = value is num ? value.toDouble() : double.tryParse(value.toString());
+    if (parsed == null) return value.toString();
+    return parsed.toStringAsFixed(parsed.truncateToDouble() == parsed ? 0 : 2);
+  }
+
   @override
   Widget build(BuildContext context) {
     return RefreshIndicator(
@@ -671,11 +678,86 @@ class _OwnerBranchesTabState extends State<_OwnerBranchesTab> {
                 )
               else
                 ...branches.map((branch) => _BranchCard(branch: branch, onRefresh: _refresh, ownerId: widget.ownerId)),
-              const SizedBox(height: 24),
             ],
           );
         },
       ),
+    );
+  }
+
+  // Employee table with blue color scheme
+  Widget _buildEmployeeTable(List<Map<String, dynamic>> employees) {
+    if (employees.isEmpty) return const SizedBox();
+
+    return Column(
+      children: [
+        const SizedBox(height: 24),
+        const Text(
+          'جدول الموظفين',
+          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.primaryOrange),
+        ),
+        const SizedBox(height: 16),
+        Card(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: DataTable(
+              headingRowColor: MaterialStateProperty.all(
+                AppColors.primaryOrange.withOpacity(0.1),
+              ),
+              dataRowColor: MaterialStateProperty.all(Colors.white),
+              columns: const [
+                DataColumn(
+                  label: Text('الاسم', style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.primaryOrange)),
+                ),
+                DataColumn(
+                  label: Text('الدور', style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.primaryOrange)),
+                ),
+                DataColumn(
+                  label: Text('الفرع', style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.primaryOrange)),
+                ),
+                DataColumn(
+                  label: Text('سعر الساعة', style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.primaryOrange)),
+                ),
+                DataColumn(
+                  label: Text('الحالة', style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.primaryOrange)),
+                ),
+              ],
+              rows: employees.map((employee) {
+                final name = employee['fullName']?.toString() ?? 'غير معروف';
+                final role = employee['role']?.toString() ?? '-';
+                final branchName = employee['branch']?.toString() ?? 'غير محدد';
+                final hourlyRate = _formatCurrency(employee['hourlyRate']);
+                final isActive = employee['active'] == true;
+                return DataRow(
+                  cells: [
+                    DataCell(Text(name, style: const TextStyle(color: AppColors.textPrimary))),
+                    DataCell(Text(role, style: const TextStyle(color: AppColors.textPrimary))),
+                    DataCell(Text(branchName, style: const TextStyle(color: AppColors.textPrimary))),
+                    DataCell(Text(hourlyRate, style: const TextStyle(color: AppColors.primaryOrange, fontWeight: FontWeight.bold))),
+                    DataCell(
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: isActive ? AppColors.success.withOpacity(0.1) : AppColors.error.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          isActive ? 'نشط' : 'غير نشط',
+                          style: TextStyle(
+                            color: isActive ? AppColors.success : AppColors.error,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              }).toList(),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1015,43 +1097,68 @@ class _OwnerPayrollTabState extends State<_OwnerPayrollTab> {
                   padding: const EdgeInsets.all(16),
                   children: [
                     Card(
-                      child: DataTable(
-                        headingRowColor: MaterialStateProperty.all(
-                          AppColors.primaryOrange.withOpacity(0.1),
-                        ),
-                        columns: const [
-                          DataColumn(label: Text('اسم الموظف', style: TextStyle(fontWeight: FontWeight.bold))),
-                          DataColumn(label: Text('الدور', style: TextStyle(fontWeight: FontWeight.bold))),
-                          DataColumn(label: Text('المبلغ الكلي', style: TextStyle(fontWeight: FontWeight.bold))),
-                        ],
-                        rows: employees.map((employee) {
-                          final name = employee['name']?.toString() ?? 'غير معروف';
-                          final role = employee['role']?.toString() ?? '-';
-                          final total = (employee['totalComputedPay'] as num?)?.toDouble() ?? 0;
-                          
-                          return DataRow(
-                            cells: [
-                              DataCell(
-                                Text(name),
-                                onTap: () => _showEmployeeDetails(employee),
-                              ),
-                              DataCell(
-                                Text(role),
-                                onTap: () => _showEmployeeDetails(employee),
-                              ),
-                              DataCell(
-                                Text(
-                                  '${total.toStringAsFixed(2)} جنيه',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.green,
-                                  ),
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: DataTable(
+                          headingRowColor: MaterialStateProperty.all(
+                            AppColors.primaryOrange.withOpacity(0.1),
+                          ),
+                          columns: const [
+                            DataColumn(label: Text('اسم الموظف', style: TextStyle(fontWeight: FontWeight.bold))),
+                            DataColumn(label: Text('الدور', style: TextStyle(fontWeight: FontWeight.bold))),
+                            DataColumn(label: Text('الإجمالي', style: TextStyle(fontWeight: FontWeight.bold))),
+                            DataColumn(label: Text('السُلف', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red))),
+                            DataColumn(label: Text('الصافي', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green))),
+                          ],
+                          rows: employees.map((employee) {
+                            final name = employee['name']?.toString() ?? 'غير معروف';
+                            final role = employee['role']?.toString() ?? '-';
+                            final total = (employee['totalComputedPay'] as num?)?.toDouble() ?? 0;
+                            final advances = (employee['totalAdvances'] as num?)?.toDouble() ?? 0;
+                            final netSalary = (employee['netSalary'] as num?)?.toDouble() ?? 0;
+                            
+                            return DataRow(
+                              cells: [
+                                DataCell(
+                                  Text(name),
+                                  onTap: () => _showEmployeeDetails(employee),
                                 ),
-                                onTap: () => _showEmployeeDetails(employee),
-                              ),
-                            ],
-                          );
-                        }).toList(),
+                                DataCell(
+                                  Text(role),
+                                  onTap: () => _showEmployeeDetails(employee),
+                                ),
+                                DataCell(
+                                  Text(
+                                    '${total.toStringAsFixed(2)} ج',
+                                    style: const TextStyle(fontWeight: FontWeight.w500),
+                                  ),
+                                  onTap: () => _showEmployeeDetails(employee),
+                                ),
+                                DataCell(
+                                  Text(
+                                    '${advances.toStringAsFixed(2)} ج',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.red,
+                                    ),
+                                  ),
+                                  onTap: () => _showEmployeeDetails(employee),
+                                ),
+                                DataCell(
+                                  Text(
+                                    '${netSalary.toStringAsFixed(2)} ج',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.green,
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                                  onTap: () => _showEmployeeDetails(employee),
+                                ),
+                              ],
+                            );
+                          }).toList(),
+                        ),
                       ),
                     ),
                   ],
@@ -1980,9 +2087,21 @@ class _BranchCardState extends State<_BranchCard> {
               },
             ),
             const SizedBox(height: 8),
-            ElevatedButton(
-              onPressed: () => _showAssignManagerDialog(context),
-              child: const Text('تعيين مدير'),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => _showAssignManagerDialog(context),
+                    child: const Text('تعيين مدير'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  onPressed: () => _showDeleteBranchDialog(context),
+                  icon: const Icon(Icons.delete, color: Colors.red),
+                  tooltip: 'حذف الفرع',
+                ),
+              ],
             ),
           ],
         ),
@@ -2037,6 +2156,46 @@ class _BranchCardState extends State<_BranchCard> {
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('إلغاء')),
+        ],
+      ),
+    );
+  }
+
+  void _showDeleteBranchDialog(BuildContext context) {
+    final branchName = widget.branch['name'] ?? 'الفرع';
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('تأكيد حذف الفرع'),
+        content: Text('هل أنت متأكد من حذف فرع "$branchName"؟\n\nسيتم إزالة الفرع ولن يتمكن الموظفون المعينون به من تسجيل الحضور حتى يعاد تعيينهم لفرع آخر.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('إلغاء'),
+          ),
+          TextButton(
+            onPressed: () async {
+              try {
+                await BranchApiService.deleteBranch(branchId: widget.branch['id']);
+                Navigator.pop(context);
+                widget.onRefresh();
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('تم حذف الفرع بنجاح')),
+                );
+              } catch (error) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('خطأ في حذف الفرع: $error'),
+                    backgroundColor: AppColors.error,
+                  ),
+                );
+              }
+            },
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('حذف'),
+          ),
         ],
       ),
     );

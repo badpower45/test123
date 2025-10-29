@@ -75,10 +75,41 @@ class GeofenceService {
     if (!_isMonitoring || _currentEmployeeId == null) return;
 
     try {
-      // Get current position
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      ).timeout(const Duration(seconds: 30));
+      // Get current position with BEST accuracy and multiple attempts
+      Position? position;
+      int attempts = 0;
+      const maxAttempts = 3;
+      
+      while (attempts < maxAttempts && position == null) {
+        try {
+          position = await Geolocator.getCurrentPosition(
+            desiredAccuracy: LocationAccuracy.best,
+            forceAndroidLocationManager: true,
+            timeLimit: const Duration(seconds: 15),
+          ).timeout(const Duration(seconds: 20));
+          
+          // Verify accuracy is good enough (less than 50 meters)
+          if (position.accuracy > 50) {
+            print('[GeofenceService] Poor accuracy (${position.accuracy}m), retrying...');
+            position = null;
+            attempts++;
+            await Future.delayed(const Duration(seconds: 2));
+          } else {
+            break;
+          }
+        } catch (e) {
+          attempts++;
+          print('[GeofenceService] Attempt $attempts failed: $e');
+          if (attempts < maxAttempts) {
+            await Future.delayed(const Duration(seconds: 2));
+          }
+        }
+      }
+      
+      if (position == null) {
+        print('[GeofenceService] Failed to get accurate location after $maxAttempts attempts');
+        return;
+      }
 
       // Check if within geofence
       final distance = Geolocator.distanceBetween(
@@ -87,6 +118,8 @@ class GeofenceService {
         position.latitude,
         position.longitude,
       );
+
+      print('[GeofenceService] Location check: distance=${distance.toStringAsFixed(1)}m, accuracy=${position.accuracy.toStringAsFixed(1)}m, radius=${_geofenceRadius}m');
 
       final isWithinGeofence = distance <= _geofenceRadius!;
 

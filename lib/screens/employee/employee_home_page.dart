@@ -133,6 +133,11 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           throw Exception('تعذر تحديد موقعك، يرجى تفعيل خدمة تحديد الموقع والمحاولة مرة أخرى.');
         }
         
+        // Check accuracy - warn if too poor
+        if (position.accuracy > 100) {
+          throw Exception('دقة الموقع ضعيفة جداً (${position.accuracy.toStringAsFixed(0)}م). يرجى الانتقال إلى مكان مفتوح وإعادة المحاولة.');
+        }
+        
         // Use branch coordinates if available
         final branchLat = _branchData!['latitude'] as double?;
         final branchLng = _branchData!['longitude'] as double?;
@@ -146,10 +151,24 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
             position.longitude,
           );
           
-          print('Geofence check: branch=($branchLat, $branchLng), current=(${position.latitude}, ${position.longitude}), distance=${distance.toStringAsFixed(2)}m, radius=${branchRadius}m');
+          print('📍 Geofence check:');
+          print('  Branch: ($branchLat, $branchLng)');
+          print('  Current: (${position.latitude}, ${position.longitude})');
+          print('  Accuracy: ${position.accuracy.toStringAsFixed(1)}m');
+          print('  Distance: ${distance.toStringAsFixed(1)}m');
+          print('  Allowed radius: ${branchRadius}m');
+          print('  Within range: ${distance <= branchRadius}');
           
-          if (distance > branchRadius) {
-            throw Exception('أنت خارج نطاق الموقع المسموح للمطعم (${distance.toStringAsFixed(0)}م من ${branchRadius}م).');
+          // Add accuracy buffer - if accuracy is poor, we need extra margin
+          final effectiveRadius = branchRadius + (position.accuracy > 30 ? position.accuracy * 0.5 : 0);
+          
+          if (distance > effectiveRadius) {
+            throw Exception(
+              'أنت خارج نطاق الموقع المسموح للمطعم.\n'
+              'المسافة: ${distance.toStringAsFixed(0)}م من ${branchRadius}م\n'
+              'دقة GPS: ${position.accuracy.toStringAsFixed(0)}م\n'
+              'يرجى الاقتراب من المطعم وإعادة المحاولة.'
+            );
           }
         }
       }
@@ -218,6 +237,47 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
       
       _startTimer();
       
+    } on Exception catch (e) {
+      setState(() => _isLoading = false);
+      
+      // Parse error message
+      String errorMessage = e.toString().replaceAll('Exception: ', '');
+      
+      // Check if it's a shift time error
+      if (errorMessage.contains('وقت الشيفت')) {
+        // Show detailed shift time error
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('خارج وقت الشيفت', textAlign: TextAlign.right),
+              content: Text(
+                errorMessage,
+                textAlign: TextAlign.right,
+                style: const TextStyle(fontSize: 16),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('حسناً'),
+                ),
+              ],
+            ),
+          );
+        }
+      } else {
+        // Show regular error
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(errorMessage),
+              backgroundColor: AppColors.error,
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        }
+      }
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
@@ -244,6 +304,11 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           throw Exception('تعذر تحديد موقعك، يرجى تفعيل خدمة تحديد الموقع والمحاولة مرة أخرى.');
         }
         
+        // Check accuracy - warn if too poor
+        if (position.accuracy > 100) {
+          throw Exception('دقة الموقع ضعيفة جداً (${position.accuracy.toStringAsFixed(0)}م). يرجى الانتقال إلى مكان مفتوح وإعادة المحاولة.');
+        }
+        
         // Use branch coordinates if available
         final branchLat = _branchData!['latitude'] as double?;
         final branchLng = _branchData!['longitude'] as double?;
@@ -257,10 +322,23 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
             position.longitude,
           );
           
-          print('Geofence check (checkout): distance=${distance.toStringAsFixed(2)}m, radius=${branchRadius}m');
+          print('📍 Geofence check (checkout):');
+          print('  Branch: ($branchLat, $branchLng)');
+          print('  Current: (${position.latitude}, ${position.longitude})');
+          print('  Accuracy: ${position.accuracy.toStringAsFixed(1)}m');
+          print('  Distance: ${distance.toStringAsFixed(1)}m');
+          print('  Allowed radius: ${branchRadius}m');
           
-          if (distance > branchRadius) {
-            throw Exception('أنت خارج نطاق الموقع المسموح للمطعم (${distance.toStringAsFixed(0)}م من ${branchRadius}م).');
+          // Add accuracy buffer
+          final effectiveRadius = branchRadius + (position.accuracy > 30 ? position.accuracy * 0.5 : 0);
+          
+          if (distance > effectiveRadius) {
+            throw Exception(
+              'أنت خارج نطاق الموقع المسموح للمطعم.\n'
+              'المسافة: ${distance.toStringAsFixed(0)}م من ${branchRadius}م\n'
+              'دقة GPS: ${position.accuracy.toStringAsFixed(0)}م\n'
+              'يرجى الاقتراب من المطعم وإعادة المحاولة.'
+            );
           }
         }
       }
