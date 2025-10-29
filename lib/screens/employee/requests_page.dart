@@ -4,6 +4,7 @@ import '../../models/shift_status.dart';
 import '../../services/requests_api_service.dart';
 import '../../theme/app_colors.dart';
 import 'requests/advance_requests_tab.dart';
+import 'requests/attendance_requests_tab.dart';
 import 'requests/break_requests_tab.dart';
 import 'requests/leave_requests_tab.dart';
 
@@ -31,12 +32,12 @@ class _RequestsPageState extends State<RequestsPage> with SingleTickerProviderSt
 
 	@override
 	void initState() {
-		super.initState();
-		final tabCount = widget.hideBreakTab ? 2 : 3;
-		_tabController = TabController(length: tabCount, vsync: this);
-		if (!widget.hideBreakTab) {
-			_loadShiftStatus(showLoadingIndicator: true);
-		}
+	  super.initState();
+	  final tabCount = widget.hideBreakTab ? 3 : 4;
+	  _tabController = TabController(length: tabCount, vsync: this);
+	  if (!widget.hideBreakTab) {
+	    _loadShiftStatus(showLoadingIndicator: true);
+	  }
 	}
 
 	@override
@@ -71,23 +72,25 @@ class _RequestsPageState extends State<RequestsPage> with SingleTickerProviderSt
 
 	@override
 	Widget build(BuildContext context) {
-		final tabs = <Tab>[
-			const Tab(icon: Icon(Icons.event_available), text: 'الإجازات'),
-			const Tab(icon: Icon(Icons.payments), text: 'السلف'),
-			if (!widget.hideBreakTab) const Tab(icon: Icon(Icons.free_breakfast), text: 'الاستراحات'),
-		];
+	  final tabs = <Tab>[
+	    const Tab(icon: Icon(Icons.event_available), text: 'الإجازات'),
+	    const Tab(icon: Icon(Icons.payments), text: 'السلف'),
+	    const Tab(icon: Icon(Icons.edit_calendar), text: 'الحضور'),
+	    if (!widget.hideBreakTab) const Tab(icon: Icon(Icons.free_breakfast), text: 'الاستراحات'),
+	  ];
 
-		final views = <Widget>[
-			LeaveRequestsTab(employeeId: widget.employeeId),
-			AdvanceRequestsTab(employeeId: widget.employeeId),
-			if (!widget.hideBreakTab)
-				BreakRequestsTab(
-					employeeId: widget.employeeId,
-					shiftStatus: _shiftStatus,
-					isShiftStatusLoading: _shiftStatusLoading,
-					onShiftStatusChanged: () => _loadShiftStatus(showLoadingIndicator: false),
-				),
-		];
+	  final views = <Widget>[
+	    LeaveRequestsTab(employeeId: widget.employeeId),
+	    AdvanceRequestsTab(employeeId: widget.employeeId),
+	    AttendanceRequestsTab(employeeId: widget.employeeId),
+	    if (!widget.hideBreakTab)
+	      BreakRequestsTab(
+	        employeeId: widget.employeeId,
+	        shiftStatus: _shiftStatus,
+	        isShiftStatusLoading: _shiftStatusLoading,
+	        onShiftStatusChanged: () => _loadShiftStatus(showLoadingIndicator: false),
+	      ),
+	  ];
 
 		return Scaffold(
 			backgroundColor: AppColors.background,

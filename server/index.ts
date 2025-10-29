@@ -3190,6 +3190,224 @@ app.get('/api/owner/employees', async (req, res) => {
   }
 });
 
+// =============================================================================
+// OWNER ATTENDANCE REQUESTS API - طلبات الحضور للمالك
+// =============================================================================
+
+/**
+ * GET /api/owner/pending-attendance-requests
+ * جلب طلبات الحضور المعلقة من المديرين للأونر
+ */
+app.get('/api/owner/pending-attendance-requests', async (req, res) => {
+  try {
+    const ownerId = req.query.owner_id as string | undefined;
+
+    if (!ownerId) {
+      return res.status(400).json({ error: 'owner_id is required' });
+    }
+
+    const ownerRecord = await getOwnerRecord(ownerId);
+    if (!ownerRecord) {
+      return res.status(403).json({ error: 'لا توجد صلاحيات للوصول إلى طلبات الحضور' });
+    }
+
+    // جلب طلبات الحضور المعلقة من المديرين فقط
+    const managerRoles = ['manager', 'hr', 'monitor', 'admin', 'owner'];
+
+    const detailedRequests = await db.select({
+      // --- من attendanceRequests ---
+      requestId: attendanceRequests.id,
+      requestType: attendanceRequests.requestType,
+      requestedTime: attendanceRequests.requestedTime,
+      reason: attendanceRequests.reason,
+      status: attendanceRequests.status,
+      createdAt: attendanceRequests.createdAt,
+
+      // --- من employees ---
+      employeeId: employees.id,
+      employeeName: employees.fullName,
+      employeeRole: employees.role,
+
+      // --- من branches ---
+      branchName: branches.name,
+
+    })
+    .from(attendanceRequests)
+    .leftJoin(employees, eq(attendanceRequests.employeeId, employees.id))
+    .leftJoin(branches, eq(employees.branchId, branches.id))
+    .where(
+       and(
+         // 1. الطلبات المعلقة فقط
+         eq(attendanceRequests.status, 'pending'),
+
+         // 2. من المديرين فقط
+         inArray(employees.role, managerRoles)
+       )
+    )
+    .orderBy(desc(attendanceRequests.createdAt));
+
+    // Normalize numeric fields if needed
+    const normalizedRequests = detailedRequests.map(request => ({
+      ...request,
+      status: String(request.status),
+      requestType: String(request.requestType),
+    }));
+
+    res.json({
+      success: true,
+      requests: normalizedRequests,
+    });
+  } catch (error) {
+    console.error('Get owner pending attendance requests error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * POST /api/owner/attendance-requests/:id/approve
+ * موافقة الأونر على طلب الحضور وتعديل سجل الحضور
+ */
+app.post('/api/owner/attendance-requests/:id/approve', async (req, res) => {
+  try {
+    const requestId = req.params.id;
+    const { action, owner_user_id } = req.body;
+
+    if (!action || !['approve', 'reject'].includes(action)) {
+      return res.status(400).json({ error: 'Action must be approve or reject' });
+    }
+
+    if (!owner_user_id) {
+      return res.status(400).json({ error: 'owner_user_id is required' });
+    }
+
+    // Verify owner permissions
+    const ownerRecord = await getOwnerRecord(owner_user_id);
+    if (!ownerRecord) {
+      return res.status(403).json({ error: 'لا توجد صلاحيات للموافقة على طلبات الحضور' });
+    }
+
+    const result = await db.transaction(async (tx) => {
+      // 1. تحديث حالة الطلب نفسه
+      const updatedRequests = await tx
+        .update(attendanceRequests)
+        .set({
+          status: action === 'approve' ? 'approved' : 'rejected',
+          reviewedBy: owner_user_id,
+          reviewedAt: new Date(),
+        })
+        .where(and(
+          eq(attendanceRequests.id, requestId),
+          eq(attendanceRequests.status, 'pending')
+        ))
+        .returning();
+
+      if (updatedRequests.length === 0) {
+        throw new Error('لم يتم العثور على الطلب أو تمت مراجعته.');
+      }
+
+      const req = updatedRequests[0];
+
+      // If approved, update attendance record
+      if (action === 'approve') {
+        const requestedDateTime = new Date(req.requestedTime);
+        const requestDate = requestedDateTime.toISOString().split('T')[0];
+
+        // 2. جلب سجل الحضور الأصلي لهذا اليوم
+        const attendanceRecord = await tx
+          .select()
+          .from(attendance)
+          .where(and(
+            eq(attendance.employeeId, req.employeeId),
+            eq(attendance.date, requestDate)
+          ))
+          .limit(1);
+
+        if (attendanceRecord.length === 0) {
+          // إنشاء سجل حضور جديد إذا لم يكن موجوداً
+          const newAttendanceData: any = {
+            employeeId: req.employeeId,
+            date: requestDate,
+            status: 'active',
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          };
+
+          // تحديد الحقل الذي سيتم تعديله
+          if (req.requestType === 'check_in') {
+            newAttendanceData.checkInTime = requestedDateTime;
+            newAttendanceData.modifiedCheckInTime = requestedDateTime;
+            newAttendanceData.modifiedBy = owner_user_id;
+            newAttendanceData.modifiedAt = new Date();
+            newAttendanceData.modificationReason = `[طلب مُعتمد] ${req.reason}`;
+          } else if (req.requestType === 'check_out') {
+            // للـ check-out، نفترض أنه كان قد سجل حضوراً يدوياً
+            newAttendanceData.checkOutTime = requestedDateTime;
+            newAttendanceData.modifiedBy = owner_user_id;
+            newAttendanceData.modifiedAt = new Date();
+            newAttendanceData.modificationReason = `[طلب مُعتمد] ${req.reason}`;
+          }
+
+          await tx.insert(attendance).values(newAttendanceData);
+        } else {
+          // تحديث السجل الموجود
+          const existingRecord = attendanceRecord[0];
+          let updatedCheckIn = existingRecord.checkInTime;
+          let updatedCheckOut = existingRecord.checkOutTime;
+
+          const updateData: any = {
+            updatedAt: new Date(),
+          };
+
+          // 3. تحديد الحقل الذي سيتم تعديله
+          if (req.requestType === 'check_in') {
+            updatedCheckIn = requestedDateTime;
+            updateData.checkInTime = requestedDateTime;
+            updateData.modifiedCheckInTime = requestedDateTime;
+            updateData.modifiedBy = owner_user_id;
+            updateData.modifiedAt = new Date();
+            updateData.modificationReason = `[طلب مُعتمد] ${req.reason}`;
+          } else if (req.requestType === 'check_out') {
+            updatedCheckOut = requestedDateTime;
+            updateData.checkOutTime = requestedDateTime;
+            updateData.modifiedBy = owner_user_id;
+            updateData.modifiedAt = new Date();
+            updateData.modificationReason = `[طلب مُعتمد] ${req.reason}`;
+          }
+
+          // 4. إعادة حساب ساعات العمل
+          if (updatedCheckIn && updatedCheckOut) {
+            const checkInTime = new Date(updatedCheckIn);
+            const checkOutTime = new Date(updatedCheckOut);
+            const workHours = (checkOutTime.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
+            updateData.workHours = workHours.toFixed(2);
+            updateData.status = 'completed';
+          }
+
+          await tx.update(attendance)
+            .set(updateData)
+            .where(eq(attendance.id, existingRecord.id));
+        }
+      }
+
+      return req;
+    });
+
+    res.json({
+      success: true,
+      message: action === 'approve' ? 'تمت الموافقة وتعديل الحضور.' : 'تم رفض الطلب.',
+      request: result
+    });
+
+  } catch (error: any) {
+    console.error('Owner approve attendance request error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      message: error.message
+    });
+  }
+});
+
 // تحديث سعر الساعة لموظف بواسطة المالك
 app.put('/api/owner/employees/:employeeId/hourly-rate', async (req, res) => {
   try {

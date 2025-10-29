@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../constants/api_endpoints.dart';
+import '../models/detailed_attendance_request.dart';
 import '../models/detailed_leave_request.dart';
 
 class OwnerApiService {
@@ -262,4 +263,62 @@ class OwnerApiService {
     }
     throw Exception('فشل رفض طلب الإجازة: ${response.statusCode}');
   }
+
+  // Attendance request management for owner
+static Future<List<DetailedAttendanceRequest>> getPendingAttendanceRequests(
+  String ownerId,
+) async {
+  final uri = Uri.parse(ownerPendingAttendanceRequestsEndpoint).replace(
+    queryParameters: {'owner_id': ownerId},
+  );
+  final response = await http.get(uri, headers: _jsonHeaders);
+  if (response.statusCode == 200) {
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    final requests = data['requests'] as List<dynamic>;
+    return requests.map((json) => DetailedAttendanceRequest.fromJson(json)).toList();
+  }
+  throw Exception('فشل تحميل طلبات الحضور: ${response.statusCode}');
+}
+
+static Future<Map<String, dynamic>> approveAttendanceRequest({
+  required String requestId,
+  required String ownerUserId,
+}) async {
+  final endpoint = ownerAttendanceRequestApprovalEndpoint.replaceAll(':id', requestId);
+  final uri = Uri.parse(endpoint);
+  final response = await http.post(
+    uri,
+    headers: _jsonHeaders,
+    body: jsonEncode({
+      'action': 'approve',
+      'owner_user_id': ownerUserId,
+    }),
+  );
+  if (response.statusCode == 200) {
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+  throw Exception('فشل الموافقة على طلب الحضور: ${response.statusCode}');
+}
+
+static Future<Map<String, dynamic>> rejectAttendanceRequest({
+  required String requestId,
+  required String ownerUserId,
+  String? reason,
+}) async {
+  final endpoint = ownerAttendanceRequestApprovalEndpoint.replaceAll(':id', requestId);
+  final uri = Uri.parse(endpoint);
+  final response = await http.post(
+    uri,
+    headers: _jsonHeaders,
+    body: jsonEncode({
+      'action': 'reject',
+      'owner_user_id': ownerUserId,
+      'notes': reason,
+    }),
+  );
+  if (response.statusCode == 200) {
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+  throw Exception('فشل رفض طلب الحضور: ${response.statusCode}');
+}
 }

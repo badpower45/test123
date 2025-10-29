@@ -324,4 +324,36 @@ class RequestsApiService {
 
     return <String, dynamic>{'data': decoded};
   }
+  static Future<List<Map<String, dynamic>>> fetchOwnerPendingAttendanceRequests() async {
+    final uri = Uri.parse(ownerPendingAttendanceRequestsEndpoint).replace(
+      queryParameters: {'owner_id': 'OWNER001'}, // TODO: Get from auth
+    );
+    final response = await http.get(uri);
+    final body = _decodeBody(response.body);
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      final list = body['requests'] ?? body;
+      return (list as List).map((item) => Map<String, dynamic>.from(item as Map)).toList();
+    }
+    throw Exception(body['error'] ?? 'تعذر تحميل طلبات الحضور (${response.statusCode})');
+  }
+
+  static Future<void> approveOwnerAttendanceRequest(String requestId) async {
+    final uri = Uri.parse(ownerAttendanceRequestApprovalEndpoint.replaceAll(':id', requestId));
+    final response = await http.post(
+      uri,
+      headers: _jsonHeaders,
+      body: jsonEncode({
+        'action': 'approve',
+        'owner_user_id': 'OWNER001', // TODO: Get from auth
+      }),
+    );
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return;
+    }
+
+    final body = _decodeBody(response.body);
+    throw Exception(body['error'] ?? 'تعذر الموافقة على الطلب (${response.statusCode})');
+  }
 }
