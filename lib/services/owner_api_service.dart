@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../constants/api_endpoints.dart';
+import '../models/detailed_leave_request.dart';
 
 class OwnerApiService {
   OwnerApiService._();
@@ -203,5 +204,62 @@ class OwnerApiService {
     } catch (_) {
       throw Exception('فشل حذف الموظف: ${response.statusCode}');
     }
+  }
+
+  // Leave request management for owner
+  static Future<List<DetailedLeaveRequest>> getPendingLeaveRequests(
+    String ownerId,
+  ) async {
+    final uri = Uri.parse(ownerLeaveRequestsEndpoint).replace(
+      queryParameters: {'owner_id': ownerId},
+    );
+    final response = await http.get(uri, headers: _jsonHeaders);
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final requests = data['requests'] as List<dynamic>;
+      return requests.map((json) => DetailedLeaveRequest.fromJson(json)).toList();
+    }
+    throw Exception('فشل تحميل طلبات الإجازة: ${response.statusCode}');
+  }
+
+  static Future<Map<String, dynamic>> approveLeaveRequest({
+    required String leaveRequestId,
+    required String ownerUserId,
+  }) async {
+    final uri = Uri.parse(ownerLeaveApprovalEndpoint);
+    final response = await http.post(
+      uri,
+      headers: _jsonHeaders,
+      body: jsonEncode({
+        'leave_request_id': leaveRequestId,
+        'owner_user_id': ownerUserId,
+      }),
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    throw Exception('فشل الموافقة على طلب الإجازة: ${response.statusCode}');
+  }
+
+  static Future<Map<String, dynamic>> rejectLeaveRequest({
+    required String leaveRequestId,
+    required String ownerUserId,
+    String? reason,
+  }) async {
+    final uri = Uri.parse(ownerLeaveApprovalEndpoint);
+    final response = await http.post(
+      uri,
+      headers: _jsonHeaders,
+      body: jsonEncode({
+        'leave_request_id': leaveRequestId,
+        'owner_user_id': ownerUserId,
+        'action': 'reject',
+        'notes': reason,
+      }),
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    throw Exception('فشل رفض طلب الإجازة: ${response.statusCode}');
   }
 }

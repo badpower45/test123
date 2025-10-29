@@ -210,6 +210,7 @@ class _EmployeeAttendanceTableScreenState extends State<EmployeeAttendanceTableS
       headingRowColor: MaterialStateProperty.all(Colors.blue.shade100),
       columns: const [
         DataColumn(label: Text('التاريخ', style: TextStyle(fontWeight: FontWeight.bold))),
+        DataColumn(label: Text('الحالة', style: TextStyle(fontWeight: FontWeight.bold))),
         DataColumn(label: Text('حضور', style: TextStyle(fontWeight: FontWeight.bold))),
         DataColumn(label: Text('انصراف', style: TextStyle(fontWeight: FontWeight.bold))),
         DataColumn(label: Text('الساعات', style: TextStyle(fontWeight: FontWeight.bold))),
@@ -221,6 +222,7 @@ class _EmployeeAttendanceTableScreenState extends State<EmployeeAttendanceTableS
         return DataRow(
           cells: [
             DataCell(Text(row['date'] ?? '')),
+            DataCell(_buildStatusWidget(row)), // New status column
             DataCell(Text(row['checkIn'] ?? '--')),
             DataCell(Text(row['checkOut'] ?? '--')),
             DataCell(Text(row['workHours'] ?? '0.00')),
@@ -295,6 +297,48 @@ class _EmployeeAttendanceTableScreenState extends State<EmployeeAttendanceTableS
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildStatusWidget(Map<String, dynamic> row) {
+    // Get status from the response (assuming the API returns status field)
+    // The status might be in the attendance record or we need to infer it from other data
+    String statusText;
+    Color statusColor;
+    IconData statusIcon;
+
+    // Check if this is a leave day (from the API response)
+    final hasLeave = row['hasLeave'] == true;
+    final workHours = double.parse(row['workHours'] ?? '0');
+
+    if (hasLeave) {
+      statusText = 'إجازة';
+      statusColor = const Color(0xFFFF9800); // Orange color
+      statusIcon = Icons.beach_access;
+    } else if (workHours > 0) {
+      statusText = 'حاضر';
+      statusColor = Colors.green;
+      statusIcon = Icons.check_circle;
+    } else if (row['checkIn'] != null && row['checkIn'] != '--') {
+      statusText = 'حاضر';
+      statusColor = Colors.green;
+      statusIcon = Icons.check_circle;
+    } else {
+      statusText = 'غائب';
+      statusColor = Colors.red;
+      statusIcon = Icons.cancel;
+    }
+
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(statusIcon, color: statusColor, size: 20),
+        const SizedBox(height: 2),
+        Text(
+          statusText,
+          style: TextStyle(color: statusColor, fontSize: 12, fontWeight: FontWeight.w500),
+        ),
+      ],
     );
   }
 

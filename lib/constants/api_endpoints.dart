@@ -71,6 +71,8 @@ const String ownerEmployeesOverviewEndpoint = '$apiBaseUrl/owner/employees';
 const String ownerEmployeeHourlyRateEndpoint =
   '$apiBaseUrl/owner/employees/:employeeId/hourly-rate';
 const String ownerPayrollSummaryEndpoint = '$apiBaseUrl/owner/payroll/summary';
+const String ownerLeaveRequestsEndpoint = '$apiBaseUrl/owner/leaves/pending';
+const String ownerLeaveApprovalEndpoint = '$apiBaseUrl/owner/leaves/approve';
 
 // Manager dashboard
 const String managerDashboardEndpoint = '$apiBaseUrl/manager/dashboard';

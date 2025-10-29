@@ -11,6 +11,7 @@ import {
   rolePermissions, userRoles, branches, branchBssids, branchManagers, breaks,
   deviceSessions, notifications, salaryCalculations, geofenceViolations
 } from '../shared/schema.js';
+import { NewAttendance } from '../shared/schema.js';
 import { eq, and, gte, lte, lt, desc, sql, between, inArray, isNull, or } from 'drizzle-orm';
 import { requirePermission, getUserPermissions, checkUserPermission } from './auth.js';
 
