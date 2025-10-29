@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import '../../theme/app_colors.dart';
 import '../../services/employee_repository.dart';
+import '../../services/auth_service.dart';
 import '../../models/employee.dart';
+import '../login_screen.dart';
 
 class ProfilePage extends StatefulWidget {
   final String employeeId;
@@ -199,11 +201,26 @@ class _ProfilePageState extends State<ProfilePage> {
                     SizedBox(
                       width: double.infinity,
                       child: OutlinedButton.icon(
-                        onPressed: () {
-                          Navigator.of(context).pushNamedAndRemoveUntil(
-                            '/login',
-                            (route) => false,
+                        onPressed: () async {
+                          // --- إظهار مؤشر التحميل ---
+                          showDialog(
+                            context: context,
+                            barrierDismissible: false,
+                            builder: (context) => const Center(child: CircularProgressIndicator()),
                           );
+
+                          // استدعاء دالة تسجيل الخروج الجديدة
+                          await AuthService.logout();
+
+                          // التأكد أن الـ widget لا يزال موجوداً
+                          if (mounted) {
+                            // إخفاء مؤشر التحميل والانتقال لشاشة تسجيل الدخول
+                            Navigator.of(context).pop(); // لإخفاء مؤشر التحميل
+                            Navigator.of(context).pushAndRemoveUntil(
+                              MaterialPageRoute(builder: (context) => const LoginScreen()),
+                              (route) => false,
+                            );
+                          }
                         },
                         icon: const Icon(Icons.logout),
                         label: const Text('تسجيل الخروج'),

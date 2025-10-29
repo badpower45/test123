@@ -120,5 +120,20 @@ class AttendanceApiService {
     return jsonDecode(rawBody) as Map<String, dynamic>;
   }
 
+  static Future<void> forceCheckOut() async {
+    final url = Uri.parse('$apiBaseUrl/attendance/force-checkout');
+    final response = await http.post(
+      url,
+      headers: _jsonHeaders,
+    ).timeout(const Duration(seconds: 5));
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      print('Force checkout successful.');
+    } else {
+      print('Failed to force checkout: ${response.body}');
+      throw Exception('Failed to force checkout: ${response.body}');
+    }
+  }
+
   static String _formatDate(DateTime value) => value.toIso8601String().split('T').first;
 }
