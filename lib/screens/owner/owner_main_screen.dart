@@ -15,6 +15,7 @@ import '../../services/wifi_service.dart';
 import '../../theme/app_colors.dart';
 import '../login_screen.dart';
 import 'employee_attendance_table_screen.dart';
+import 'owner_set_branch_bssid_screen.dart';
 
 class OwnerMainScreen extends StatefulWidget {
   const OwnerMainScreen({super.key, required this.ownerId, this.ownerName});
@@ -2120,6 +2121,18 @@ class _BranchCardState extends State<_BranchCard> {
                   ),
                 ),
                 const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () => _navigateToSetBssidScreen(context),
+                    icon: const Icon(Icons.wifi),
+                    label: const Text('ضبط Wi-Fi'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
                 IconButton(
                   onPressed: () => _showDeleteBranchDialog(context),
                   icon: const Icon(Icons.delete, color: Colors.red),
@@ -2181,6 +2194,18 @@ class _BranchCardState extends State<_BranchCard> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('إلغاء')),
         ],
+      ),
+    );
+  }
+
+  void _navigateToSetBssidScreen(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => OwnerSetBranchBssidScreen(
+          branchId: widget.branch['id'],
+          branchName: widget.branch['name'] ?? 'فرع غير معروف',
+        ),
       ),
     );
   }

@@ -76,6 +76,12 @@ const String ownerLeaveApprovalEndpoint = '$apiBaseUrl/owner/leaves/approve';
 
 const String ownerPendingAttendanceRequestsEndpoint = '$apiBaseUrl/owner/pending-attendance-requests';
 const String ownerAttendanceRequestApprovalEndpoint = '$apiBaseUrl/owner/attendance-requests/:id/approve';
+
+// Attendance Control
+const String ownerAttendanceStatusEndpoint = '$apiBaseUrl/owner/attendance/status';
+const String ownerManualCheckInEndpoint = '$apiBaseUrl/owner/attendance/manual-checkin';
+const String ownerManualCheckOutEndpoint = '$apiBaseUrl/owner/attendance/manual-checkout';
+
 // Manager dashboard
 const String managerDashboardEndpoint = '$apiBaseUrl/manager/dashboard';
 

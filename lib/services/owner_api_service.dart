@@ -3,8 +3,11 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../constants/api_endpoints.dart';
+import '../models/attendance_summary.dart';
 import '../models/detailed_attendance_request.dart';
 import '../models/detailed_leave_request.dart';
+import '../models/employee_attendance_status.dart';
+import '../services/auth_service.dart';
 
 class OwnerApiService {
   OwnerApiService._();
@@ -320,5 +323,69 @@ static Future<Map<String, dynamic>> rejectAttendanceRequest({
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
   throw Exception('فشل رفض طلب الحضور: ${response.statusCode}');
+}
+
+// Attendance Control APIs - Updated to support date filtering
+static Future<EmployeeStatusResult> getEmployeeAttendanceStatus({
+  String? branchId,
+  DateTime? date,
+}) async {
+  final queryParams = <String, String>{};
+  if (branchId != null) queryParams['branchId'] = branchId;
+  if (date != null) {
+    // Format date as YYYY-MM-DD
+    queryParams['date'] = "${date.year}-${date.month.toString().padLeft(2,'0')}-${date.day.toString().padLeft(2,'0')}";
+  }
+
+  final uri = Uri.parse(ownerAttendanceStatusEndpoint).replace(queryParameters: queryParams);
+  final response = await http.get(uri, headers: _jsonHeaders);
+
+  if (response.statusCode == 200) {
+    final Map<String, dynamic> jsonResponse = json.decode(response.body);
+    return EmployeeStatusResult.fromJson(jsonResponse);
+  } else {
+    throw Exception('فشل تحميل حالة الحضور: ${response.statusCode}');
+  }
+}
+
+static Future<void> manualCheckIn(String employeeId, {String? reason}) async {
+  final uri = Uri.parse(ownerManualCheckInEndpoint);
+  final response = await http.post(
+    uri,
+    headers: _jsonHeaders,
+    body: json.encode({'employeeId': employeeId, 'reason': reason}),
+  );
+  if (response.statusCode != 200) {
+    final error = json.decode(response.body)['message'] ?? 'فشل تسجيل الحضور اليدوي';
+    throw Exception(error);
+  }
+}
+
+static Future<void> manualCheckOut(String employeeId, {String? reason}) async {
+  final uri = Uri.parse(ownerManualCheckOutEndpoint);
+  final response = await http.post(
+    uri,
+    headers: _jsonHeaders,
+    body: json.encode({'employeeId': employeeId, 'reason': reason}),
+  );
+  if (response.statusCode != 200) {
+    final error = json.decode(response.body)['message'] ?? 'فشل تسجيل الانصراف اليدوي';
+    throw Exception(error);
+  }
+}
+
+/// Updates the BSSID for a specific branch
+static Future<void> updateBranchBssid(String branchId, String bssid) async {
+  final url = Uri.parse('$apiBaseUrl/owner/branches/$branchId/bssid');
+  final response = await http.put(
+    url,
+    headers: _jsonHeaders,
+    body: jsonEncode({'bssid': bssid, 'owner_id': 'OWNER001'}), // Using default owner ID
+  );
+
+  if (response.statusCode != 200) {
+    final error = json.decode(response.body)['message'] ?? 'فشل تحديث BSSID';
+    throw Exception(error);
+  }
 }
 }

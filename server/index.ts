@@ -43,6 +43,17 @@ function getDateString(date: Date | string): string {
   }
   return date.toISOString().split('T')[0];
 }
+
+/**
+ * Helper function to validate BSSID format
+ * BSSID should be 6 pairs of hex digits separated by colons or dashes
+ */
+function isValidBssid(bssid: string): boolean {
+  if (!bssid) return false;
+  // Regex to match 6 pairs of hex digits (0-9, A-F, a-f) separated by : or -
+  const bssidRegex = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
+  return bssidRegex.test(bssid);
+}
 // =============================================================================
 
 /**
@@ -3115,6 +3126,55 @@ app.get('/api/owner/dashboard', async (req, res) => {
   }
 });
 
+// Update branch BSSID for owner
+app.put('/api/owner/branches/:branchId/bssid', async (req, res) => {
+  const branchId = req.params.branchId;
+  const { bssid } = req.body;
+
+  // Verify owner permissions
+  const ownerId = req.query.owner_id as string | undefined;
+  if (!ownerId) {
+    return res.status(400).json({ error: 'owner_id is required' });
+  }
+
+  const ownerRecord = await getOwnerRecord(ownerId);
+  if (!ownerRecord) {
+    return res.status(403).json({ error: 'لا توجد صلاحيات للوصول إلى بيانات الفروع' });
+  }
+
+  // Validate BSSID format (server-side validation)
+  if (!isValidBssid(bssid)) {
+    return res.status(400).json({ message: 'صيغة الـ BSSID غير صحيحة.' });
+  }
+
+  // Standardize BSSID format
+  const formattedBssid = bssid.toUpperCase().replace(/-/g, ':');
+
+  try {
+    // Update branch BSSID
+    const updated = await db.update(branches)
+      .set({
+        wifiBssid: formattedBssid,
+        updatedAt: new Date(),
+      })
+      .where(eq(branches.id, branchId))
+      .returning();
+
+    if (updated.length === 0) {
+      return res.status(404).json({ message: 'لم يتم العثور على الفرع.' });
+    }
+
+    res.json({
+      success: true,
+      message: 'تم تحديث BSSID الفرع بنجاح.',
+      branch: updated[0]
+    });
+  } catch (error) {
+    console.error("Error updating branch BSSID:", error);
+    res.status(500).json({ message: "حدث خطأ أثناء تحديث BSSID." });
+  }
+});
+
 // قائمة الموظفين للمالك
 app.get('/api/owner/employees', async (req, res) => {
   try {
@@ -3659,6 +3719,214 @@ app.get('/api/owner/payroll/summary', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/owner/attendance/status
+ * (مُعدّل) جلب قائمة الموظفين وحالة حضورهم ليوم معين وفرع معين
+ * يقبل ?branchId=xxx و ?date=YYYY-MM-DD
+ */
+app.get('/api/owner/attendance/status', async (req, res) => {
+  const branchId = req.query.branchId as string | undefined;
+  // --- التعديل: قراءة التاريخ من الـ query ---
+  const dateQuery = req.query.date as string | undefined;
+
+  // استخدام التاريخ المطلوب أو تاريخ اليوم الحالي
+  const targetDateStr = dateQuery && /^\d{4}-\d{2}-\d{2}$/.test(dateQuery)
+                      ? dateQuery
+                      : new Date().toISOString().split('T')[0];
+
+  try {
+    // 1. جلب الموظفين (مع الفلترة بالفرع)
+    const employeeQuery = db.select({
+        id: employees.id,
+        fullName: employees.fullName,
+        role: employees.role,
+        branchName: branches.name,
+        // photoUrl: employees.photoUrl // (إذا أضفنا حقل للصورة)
+      })
+      .from(employees)
+      .leftJoin(branches, eq(employees.branchId, branches.id))
+      .where(and(
+        eq(employees.active, true),
+        branchId ? eq(employees.branchId, branchId) : undefined
+      ))
+      .orderBy(employees.fullName);
+
+    const employeeList = await employeeQuery;
+
+    if (employeeList.length === 0) {
+      return res.json({ summary: { present: 0, absent: 0, on_leave: 0, checked_out: 0 }, employees: [] });
+    }
+
+    // 2. جلب سجلات الحضور لهؤلاء الموظفين للتاريخ المستهدف
+    const employeeIds = employeeList.map(emp => emp.id);
+    const attendanceRecords = await db.select()
+      .from(attendance)
+      .where(and(
+        // --- التعديل: استخدام التاريخ المستهدف ---
+        eq(attendance.date, targetDateStr),
+        inArray(attendance.employeeId, employeeIds)
+      ));
+
+    // 3. دمج البيانات وتحديد الحالة (نفس المنطق السابق)
+    let presentCount = 0, absentCount = 0, onLeaveCount = 0, checkedOutCount = 0;
+
+    const results = employeeList.map(emp => {
+      const record = attendanceRecords.find(att => att.employeeId === emp.id);
+      let status = 'absent';
+      let checkInTime: Date | null = null;
+      let checkOutTime: Date | null = null;
+      let recordId: string | null = null;
+
+      if (record) {
+          recordId = record.id;
+          checkInTime = record.checkInTime ?? record.modifiedCheckInTime;
+          checkOutTime = record.checkOutTime;
+
+          if (record.status === 'ON_LEAVE') {
+            status = 'on_leave';
+            onLeaveCount++;
+          } else if (checkInTime && !checkOutTime) {
+            status = 'present';
+            presentCount++;
+          } else if (checkInTime && checkOutTime) {
+            status = 'checked_out';
+            checkedOutCount++;
+          } else {
+             absentCount++; // إذا كان السجل موجود ولكن بدون أوقات (قد لا تحدث)
+          }
+      } else {
+          absentCount++; // لا يوجد سجل = غائب
+      }
+
+      return {
+        employeeId: emp.id,
+        employeeName: emp.fullName,
+        employeeRole: emp.role,
+        branchName: emp.branchName,
+        // photoUrl: emp.photoUrl,
+        status: status,
+        checkInTime: checkInTime?.toISOString(),
+        checkOutTime: checkOutTime?.toISOString(),
+        attendanceRecordId: recordId,
+      };
+    });
+
+    // --- إرجاع الملخص مع قائمة الموظفين ---
+    res.json({
+      summary: {
+        present: presentCount,
+        absent: absentCount,
+        on_leave: onLeaveCount,
+        checked_out: checkedOutCount,
+      },
+      employees: results
+    });
+
+  } catch (error) {
+    console.error("Error fetching employee attendance status:", error);
+    res.status(500).json({ message: "حدث خطأ." });
+  }
+});
+
+/**
+ * POST /api/owner/attendance/manual-checkin
+ * تسجيل حضور يدوي لموظف بواسطة الأونر
+ */
+app.post('/api/owner/attendance/manual-checkin', async (req, res) => {
+  const { employeeId, reason } = req.body;
+
+  if (!employeeId) {
+    return res.status(400).json({ message: "معرف الموظف مطلوب." });
+  }
+
+  try {
+    await db.transaction(async (tx) => {
+      // 1. تحقق إذا كان هناك سجل حضور مفتوح بالفعل لهذا اليوم
+      const existingRecord = await tx.select({ id: attendance.id })
+        .from(attendance)
+        .where(and(
+          eq(attendance.employeeId, employeeId),
+          eq(attendance.date, new Date().toISOString().split('T')[0]),
+          isNull(attendance.checkOutTime) // لا يزال مفتوحاً
+        ))
+        .limit(1);
+
+      if (existingRecord.length > 0) {
+        throw new Error('الموظف مسجل حضوره بالفعل ولم يسجل انصراف.');
+      }
+
+      // 2. احذف أي سجل حضور آخر لهذا اليوم (مثل سجل غياب سابق)
+      await tx.delete(attendance)
+        .where(and(
+          eq(attendance.employeeId, employeeId),
+          eq(attendance.date, new Date().toISOString().split('T')[0])
+        ));
+
+      // 3. إنشاء سجل الحضور اليدوي
+      await tx.insert(attendance).values({
+        employeeId: employeeId,
+        date: new Date().toISOString().split('T')[0],
+        checkInTime: new Date(), // وقت الحضور هو الآن
+        // استخدام حقول التعديل لتوضيح أنه يدوي
+        modifiedCheckInTime: new Date(),
+        modifiedBy: 'owner', // سيتم تحديث هذا لاحقاً
+        modifiedAt: new Date(),
+        modificationReason: `[تسجيل يدوي بواسطة الأونر] ${reason || 'لا يوجد سبب'}`,
+        status: 'active', // أو 'present'
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    });
+
+    res.json({ success: true, message: 'تم تسجيل الحضور اليدوي بنجاح.' });
+
+  } catch (error: any) {
+    console.error("Error manual check-in:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/**
+ * POST /api/owner/attendance/manual-checkout
+ * تسجيل انصراف يدوي لموظف بواسطة الأونر
+ */
+app.post('/api/owner/attendance/manual-checkout', async (req, res) => {
+  const { employeeId, reason } = req.body;
+
+  if (!employeeId) {
+    return res.status(400).json({ message: "معرف الموظف مطلوب." });
+  }
+
+  try {
+    // 1. البحث عن سجل الحضور المفتوح وتحديثه
+    const updated = await db.update(attendance)
+      .set({
+        checkOutTime: new Date(), // وقت الانصراف هو الآن
+        modifiedBy: 'owner', // سيتم تحديث هذا لاحقاً
+        modifiedAt: new Date(),
+        modificationReason: `[انصراف يدوي بواسطة الأونر] ${reason || 'لا يوجد سبب'}`,
+        updatedAt: new Date(),
+        // (يجب إعادة حساب ساعات العمل هنا أيضاً)
+      })
+      .where(and(
+        eq(attendance.employeeId, employeeId),
+        eq(attendance.date, new Date().toISOString().split('T')[0]),
+        isNull(attendance.checkOutTime) // فقط السجلات المفتوحة
+      ))
+      .returning();
+
+    if (updated.length === 0) {
+      return res.status(404).json({ message: 'لم يتم العثور على سجل حضور مفتوح لهذا الموظف اليوم.' });
+    }
+
+    res.json({ success: true, message: 'تم تسجيل الانصراف اليدوي بنجاح.' });
+
+  } catch (error: any) {
+    console.error("Error manual check-out:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // Hierarchical approval dashboard (Manager/Owner)
 app.get('/api/approvals/pending/:reviewerId', async (req, res) => {
   try {
@@ -3687,8 +3955,8 @@ app.get('/api/approvals/pending/:reviewerId', async (req, res) => {
       allowedEmployeeRoles = ['staff', 'monitor'];
     } else {
       // Other roles cannot approve
-      return res.status(403).json({ 
-        error: 'هذا الدور لا يملك صلاحيات الموافقة على الطلبات' 
+      return res.status(403).json({
+        error: 'هذا الدور لا يملك صلاحيات الموافقة على الطلبات'
       });
     }
 
@@ -3767,16 +4035,16 @@ app.get('/api/approvals/pending/:reviewerId', async (req, res) => {
       .orderBy(desc(absenceNotifications.notifiedAt));
 
     // Filter requests based on reviewer role
-    const filteredAttendance = attendanceReqs.filter(req => 
+    const filteredAttendance = attendanceReqs.filter(req =>
       allowedEmployeeRoles.includes(req.employeeRole as string)
     );
-    const filteredLeave = leaveReqs.filter(req => 
+    const filteredLeave = leaveReqs.filter(req =>
       allowedEmployeeRoles.includes(req.employeeRole as string)
     );
-    const filteredAdvances = advanceReqs.filter(req => 
+    const filteredAdvances = advanceReqs.filter(req =>
       allowedEmployeeRoles.includes(req.employeeRole as string)
     );
-    const filteredAbsences = absenceReqs.filter(req => 
+    const filteredAbsences = absenceReqs.filter(req =>
       allowedEmployeeRoles.includes(req.employeeRole as string)
     );
 
@@ -3794,7 +4062,7 @@ app.get('/api/approvals/pending/:reviewerId', async (req, res) => {
         absences: filteredAbsences,
       },
       summary: {
-        totalPending: filteredAttendance.length + filteredLeave.length + 
+        totalPending: filteredAttendance.length + filteredLeave.length +
                       filteredAdvances.length + filteredAbsences.length,
         attendanceCount: filteredAttendance.length,
         leaveCount: filteredLeave.length,
