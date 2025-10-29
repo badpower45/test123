@@ -32,6 +32,15 @@ app.use(express.static(path.join(__dirname, '../public')));
 
 // =============================================================================
 // UTILITY FUNCTIONS
+/**
+ * Helper function to get date string in YYYY-MM-DD format
+ */
+function getDateString(date: Date | string): string {
+  if (typeof date === 'string') {
+    return date;
+  }
+  return date.toISOString().split('T')[0];
+}
 // =============================================================================
 
 /**
@@ -473,6 +482,16 @@ app.post('/api/attendance/check-in', async (req, res) => {
       return res.status(404).json({ error: 'Employee not found' });
     }
 
+    // --- START DEBUG LOG ---
+    console.log(`[Check-In Debug] Employee: ${employee_id}, Shift Start: ${employee.shiftStartTime}, Shift End: ${employee.shiftEndTime}`);
+    console.log(`[Check-In Debug] Server Time (UTC): ${new Date().toISOString()}`);
+    console.log(`[Check-In Debug] Server Time (Local - Assumed Cairo): ${new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' })}`);
+    const now = new Date();
+    const currentHour = now.getHours(); // Uses server's local time
+    const currentMinute = now.getMinutes();
+    console.log(`[Check-In Debug] Current Time (Server Local HH:MM): ${currentHour}:${currentMinute}`);
+    // --- END DEBUG LOG ---
+
     // Validate shift time if shift is defined
     if (employee.shiftStartTime && employee.shiftEndTime) {
       const now = new Date();
@@ -611,9 +630,9 @@ app.post('/api/attendance/check-in', async (req, res) => {
     // Send notification to owner
     const ownerId = await getOwnerId();
     if (ownerId) {
-      const checkInTime = new Date().toLocaleTimeString('ar-EG', { 
-        hour: '2-digit', 
-        minute: '2-digit' 
+      const checkInTime = new Date().toLocaleTimeString('ar-EG', {
+        hour: '2-digit',
+        minute: '2-digit'
       });
       await sendNotification(
         ownerId,
@@ -621,7 +640,7 @@ app.post('/api/attendance/check-in', async (req, res) => {
         'تسجيل حضور جديد',
         `${employee.fullName} سجل حضوره في ${checkInTime}`,
         employee_id,
-        result?.id
+        (result as any)?.id
       );
     }
 
@@ -1430,14 +1449,14 @@ app.post('/api/advances/:advanceId/review', async (req, res) => {
         reviewedAt: new Date(),
       })
       .where(eq(advances.id, advanceId))
-      .returning({ id: advances.id, employeeId: advances.employeeId, amount: advances.amount, eligibleAmount: advances.eligibleAmount, currentSalary: advances.currentSalary, status: advances.status, reviewedBy: advances.reviewedBy, reviewedAt: advances.reviewedAt });
-    const updated = extractFirstRow(updateResult) as any;
+      .returning();
+    const updated = extractFirstRow(updateResult);
 
     // If approved, deduct the advance amount from salary by creating a deduction record
     if (action === 'approve' && updated) {
       await db.insert(deductions).values({
-        employeeId: updated.employeeId,
-        amount: String(updated.amount),
+        employeeId: (updated as any).employeeId,
+        amount: String((updated as any).amount),
         reason: 'سلفة معتمدة من المدير',
         deductionDate: new Date().toISOString().split('T')[0],
         deductionType: 'advance',
@@ -1619,16 +1638,6 @@ app.get('/api/reports/comprehensive/:employeeId', async (req, res) => {
     const { employeeId } = req.params;
     const { start_date, end_date, skip_date_check } = req.query;
 
-    // Check if it's 1st or 16th (skip for managers/admins)
-    // التقارير متاحة فقط يوم 1 (للفترة من 16-31) ويوم 16 (للفترة من 1-15)
-    if (!skip_date_check) {
-      const today = new Date().getDate();
-      if (today !== 1 && today !== 16) {
-        return res.status(403).json({ 
-          error: 'التقارير متاحة فقط يوم 1 و 16 من كل شهر - يتجدد حافز الغياب كل 15 يوم' 
-        });
-      }
-    }
 
     // Get employee info
     const [employee] = await db
@@ -2194,29 +2203,62 @@ app.delete('/api/employees/:id', async (req, res) => {
       return res.status(404).json({ error: 'الموظف غير موجود' });
     }
 
-    // Delete related records first (to maintain referential integrity)
-    // Delete attendance records
-    await db.delete(attendance).where(eq(attendance.employeeId, employeeId));
+    // Use a transaction to ensure all deletions happen or none do
+    await db.transaction(async (tx) => {
+      // Delete related records from all referencing tables first
+      console.log(`[Delete Employee] Deleting related records for ${employeeId}...`);
+      await tx.delete(attendance).where(eq(attendance.employeeId, employeeId));
+      console.log(`[Delete Employee] Deleted attendance.`);
+      await tx.delete(pulses).where(eq(pulses.employeeId, employeeId));
+      console.log(`[Delete Employee] Deleted pulses.`);
+      await tx.delete(breaks).where(eq(breaks.employeeId, employeeId));
+      console.log(`[Delete Employee] Deleted breaks.`);
+      await tx.delete(deviceSessions).where(eq(deviceSessions.employeeId, employeeId));
+      console.log(`[Delete Employee] Deleted device sessions.`);
+      await tx.delete(notifications).where(eq(notifications.recipientId, employeeId));
+      // Optionally delete notifications sent BY this employee if needed,
+      // but schema might have ON DELETE SET NULL for senderId
+      // await tx.delete(notifications).where(eq(notifications.senderId, employeeId));
+      console.log(`[Delete Employee] Deleted notifications.`);
+      await tx.delete(salaryCalculations).where(eq(salaryCalculations.employeeId, employeeId));
+      console.log(`[Delete Employee] Deleted salary calculations.`);
+      await tx.delete(attendanceRequests).where(eq(attendanceRequests.employeeId, employeeId));
+      console.log(`[Delete Employee] Deleted attendance requests.`);
+      await tx.delete(leaveRequests).where(eq(leaveRequests.employeeId, employeeId));
+      console.log(`[Delete Employee] Deleted leave requests.`);
+      await tx.delete(advances).where(eq(advances.employeeId, employeeId));
+      console.log(`[Delete Employee] Deleted advances.`);
+      await tx.delete(deductions).where(eq(deductions.employeeId, employeeId));
+      console.log(`[Delete Employee] Deleted deductions.`);
+      await tx.delete(absenceNotifications).where(eq(absenceNotifications.employeeId, employeeId));
+      console.log(`[Delete Employee] Deleted absence notifications.`);
+      await tx.delete(branchManagers).where(eq(branchManagers.employeeId, employeeId)); // Handles linking table if used
+      console.log(`[Delete Employee] Deleted branch manager links.`);
+      // Consider userRoles if employees can be users (adjust userId column if needed)
+      // Assuming employee.id might map to a user id elsewhere. Check your user table structure.
+      // await tx.delete(userRoles).where(eq(userRoles.userId, /* potential user UUID linked to employee */));
 
-    // Delete pulses
-    await db.delete(pulses).where(eq(pulses.employeeId, employeeId));
+      // Unlink manager from branches if this employee was a manager
+      console.log(`[Delete Employee] Unlinking as manager from branches for ${employeeId}`);
+      await tx.update(branches).set({ managerId: null, updatedAt: new Date() }).where(eq(branches.managerId, employeeId));
 
-    // Delete breaks
-    await db.delete(breaks).where(eq(breaks.employeeId, employeeId));
 
-    // Finally, delete the employee
-    await db.delete(employees).where(eq(employees.id, employeeId));
+      // Finally, delete the employee
+      console.log(`[Delete Employee] Deleting employee record ${employeeId}...`);
+      await tx.delete(employees).where(eq(employees.id, employeeId));
+    });
 
     console.log(`[Employee Deleted] ID: ${employeeId}, Name: ${existingEmployee.fullName}`);
 
     res.json({
       success: true,
-      message: 'تم حذف الموظف بنجاح',
+      message: 'تم حذف الموظف وجميع سجلاته المرتبطة بنجاح',
       employeeId,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Delete employee error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    // Provide more specific error details if possible
+    res.status(500).json({ error: 'Internal server error', message: error.message, stack: error.stack });
   }
 });
 
@@ -3765,6 +3807,58 @@ app.post('/api/branches/:branchId/assign-manager', async (req, res) => {
   }
 });
 
+// Delete branch
+app.delete('/api/branches/:id', async (req, res) => {
+  try {
+    const branchId = req.params.id;
+
+    // Check if branch exists
+    const [existingBranch] = await db
+      .select({ id: branches.id, name: branches.name })
+      .from(branches)
+      .where(eq(branches.id, branchId))
+      .limit(1);
+
+    if (!existingBranch) {
+      return res.status(404).json({ error: 'الفرع غير موجود' });
+    }
+
+    // Use transaction to ensure atomicity
+    await db.transaction(async (tx) => {
+        // Delete related BSSIDs first
+        console.log(`[Delete Branch] Deleting BSSIDs for branch ${branchId}`);
+        await tx.delete(branchBssids).where(eq(branchBssids.branchId, branchId));
+
+        // Unlink employees from this branch (set branchId and branch name to null)
+        console.log(`[Delete Branch] Unlinking employees from branch ${branchId}`);
+        await tx
+          .update(employees)
+          .set({ branchId: null, branch: null, updatedAt: new Date() }) // Also update 'branch' name column if used
+          .where(eq(employees.branchId, branchId));
+
+        // Unlink any managers directly linked via branchManagers table (if this table is actively used)
+        console.log(`[Delete Branch] Deleting links from branch_managers for branch ${branchId}`);
+        await tx.delete(branchManagers).where(eq(branchManagers.branchId, branchId));
+
+        // Finally, delete the branch itself
+        console.log(`[Delete Branch] Deleting branch record ${branchId}`);
+        await tx.delete(branches).where(eq(branches.id, branchId));
+    });
+
+
+    console.log(`[Branch Deleted] ID: ${branchId}, Name: ${existingBranch.name}`);
+
+    res.json({
+      success: true,
+      message: 'تم حذف الفرع بنجاح، وتم فك ارتباط الموظفين به.',
+      branchId,
+    });
+  } catch (error: any) {
+    console.error('Delete branch error:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+});
+
 // Update branch
 app.put('/api/branches/:id', async (req, res) => {
   try {
@@ -4568,22 +4662,19 @@ app.post('/api/salary/calculate', async (req, res) => {
 
     const totalWorkDays = workDays.size;
 
-    // Get advances for the period
+    // Get advances for the period (previously deducted ones are excluded)
     const advancesResult = await db
       .select()
       .from(advances)
       .where(and(
         eq(advances.employeeId, employeeId),
         eq(advances.status, 'approved'),
-        or(
-          isNull(advances.deductedAt),
-          eq(advances.isDeducted, false)
-        ),
-        gte(advances.requestDate, periodStart),
-        lte(advances.requestDate, periodEnd)
+        isNull(advances.deductedAt), // Check if deductedAt is null instead of isDeducted
+        gte(advances.requestDate, new Date(periodStart)), // Convert string to Date
+        lte(advances.requestDate, new Date(periodEnd))      // Convert string to Date
       ));
 
-    const advancesTotal = advancesResult.reduce((sum, adv) => sum + parseFloat(adv.amount), 0);
+    const advancesTotal = advancesResult.reduce((sum, adv) => sum + parseFloat(adv.amount || '0'), 0); // Ensure amount is parsed correctly
 
     // Get deductions for the period
     const deductionsResult = await db
@@ -4632,11 +4723,11 @@ app.post('/api/salary/calculate', async (req, res) => {
       .returning();
     const calculation = extractFirstRow(insertResult);
 
-    // Mark advances as deducted
+    // Mark advances as deducted (Remove isDeducted)
     if (advancesResult.length > 0) {
       await db
         .update(advances)
-        .set({ isDeducted: true, deductedAt: new Date() })
+        .set({ deductedAt: new Date() }) // Only set deductedAt
         .where(inArray(advances.id, advancesResult.map(a => a.id)));
     }
 
@@ -4774,7 +4865,8 @@ app.get('/api/owner/employee-attendance/:employeeId', async (req, res) => {
         leaveRequests,
         and(
           eq(leaveRequests.employeeId, employeeId),
-          eq(leaveRequests.leaveDate, attendance.date),
+          gte(attendance.date, leaveRequests.startDate),
+          lte(attendance.date, leaveRequests.endDate),
           eq(leaveRequests.status, 'approved')
         )
       )
@@ -4786,13 +4878,14 @@ app.get('/api/owner/employee-attendance/:employeeId', async (req, res) => {
       .orderBy(desc(attendance.date));
 
     // Get all advances for this employee in date range
+    // Convert startDate and endDate to Date objects for comparison
     const advancesResult = await db
       .select()
       .from(advances)
       .where(and(
         eq(advances.employeeId, employeeId),
-        gte(advances.requestDate, startDate as string),
-        lte(advances.requestDate, endDate as string)
+        gte(advances.requestDate, new Date(startDate as string)), // Convert to Date
+        lte(advances.requestDate, new Date(endDate as string))    // Convert to Date
       ))
       .orderBy(desc(advances.requestDate));
 
@@ -4812,9 +4905,11 @@ app.get('/api/owner/employee-attendance/:employeeId', async (req, res) => {
       const att = record.attendance;
       const leave = record.leaveRequest;
       
-      // Get advances for this date
+      // Get advances for this date (Compare YYYY-MM-DD strings)
+      const attDateString = att.date; // Already YYYY-MM-DD
       const dayAdvances = advancesResult.filter(
-        adv => adv.requestDate === att.date && adv.status === 'approved'
+         // Convert adv.requestDate to YYYY-MM-DD string for comparison
+         adv => getDateString(adv.requestDate) === attDateString && adv.status === 'approved'
       );
       const advancesAmount = dayAdvances.reduce((sum, adv) => sum + parseFloat(adv.amount || '0'), 0);
       
@@ -4830,11 +4925,12 @@ app.get('/api/owner/employee-attendance/:employeeId', async (req, res) => {
         checkOut: att.checkOutTime || '--',
         workHours: att.workHours ? parseFloat(att.workHours).toFixed(2) : '0.00',
         advances: advancesAmount.toFixed(2),
-        leaveAllowance: leave ? parseFloat(leave.amount || '0').toFixed(2) : '0.00',
+        // Use leave.allowanceAmount instead of leave.amount
+        leaveAllowance: leave ? parseFloat(leave.allowanceAmount || '0').toFixed(2) : '0.00',
         hasLeave: !!leave,
         deductions: deductionsAmount.toFixed(2),
-        advancesList: dayAdvances,
-        deductionsList: dayDeductions
+        advancesList: dayAdvances.map(a => normalizeNumericFields(a, ['amount', 'eligibleAmount', 'currentSalary'])), // Normalize fields
+        deductionsList: dayDeductions.map(d => normalizeNumericFields(d, ['amount'])) // Normalize fields
       };
     });
 

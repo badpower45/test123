@@ -889,28 +889,6 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
               
               const SizedBox(height: 32),
               
-              // Quick Stats
-              Row(
-                children: [
-                  Expanded(
-                    child: _buildStatCard(
-                      icon: Icons.calendar_month,
-                      label: 'هذا الشهر',
-                      value: '22 يوم',
-                      color: AppColors.info,
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: _buildStatCard(
-                      icon: Icons.schedule,
-                      label: 'إجمالي الساعات',
-                      value: '176 ساعة',
-                      color: AppColors.success,
-                    ),
-                  ),
-                ],
-              ),
             ],
           ),
         ),
