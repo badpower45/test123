@@ -4,7 +4,6 @@ class LocationService {
   // Cache للموقع الأخير لتسريع الاستجابة
   static Position? _lastKnownPosition;
   static DateTime? _lastPositionTime;
-  static const Duration _cacheValidDuration = Duration(minutes: 2);
 
   Future<bool> _ensureServiceEnabled() async {
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
@@ -41,24 +40,33 @@ class LocationService {
       return null;
     }
 
-    // استخدم الـ cache إذا كان حديث (أقل من دقيقتين)
+    // استخدم الـ cache إذا كان حديث (أقل من دقيقة واحدة)
     if (_lastKnownPosition != null && _lastPositionTime != null) {
       final age = DateTime.now().difference(_lastPositionTime!);
-      if (age < _cacheValidDuration) {
+      if (age < Duration(seconds: 30)) {
         print('[LocationService] 📍 Using cached position (${age.inSeconds}s old)');
         return _lastKnownPosition;
       }
     }
 
     try {
-      // محاولة واحدة سريعة - قبول أي دقة معقولة
+      // محاولة الحصول على آخر موقع معروف أولاً (فوري)
+      final lastKnown = await Geolocator.getLastKnownPosition();
+      if (lastKnown != null) {
+        print('[LocationService] 📍 Using last known position (accuracy: ${lastKnown.accuracy.toStringAsFixed(1)}m)');
+        _lastKnownPosition = lastKnown;
+        _lastPositionTime = DateTime.now();
+        return lastKnown;
+      }
+      
+      // إذا مفيش last known، جيب موقع جديد
       print('[LocationService] 🔍 Getting fresh location...');
       
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium, // متوسط - أسرع من best
-        forceAndroidLocationManager: false, // استخدم Google Play Services (أسرع)
-        timeLimit: const Duration(seconds: 8),
-      ).timeout(const Duration(seconds: 10));
+        desiredAccuracy: LocationAccuracy.low, // low = أسرع وأوفر بطارية
+        forceAndroidLocationManager: false,
+        timeLimit: const Duration(seconds: 5),
+      ).timeout(const Duration(seconds: 8));
 
       print('[LocationService] ✅ Got position: accuracy=${position.accuracy.toStringAsFixed(1)}m');
       
@@ -69,20 +77,7 @@ class LocationService {
       return position;
       
     } catch (e) {
-      print('[LocationService] ⚠️ Failed to get fresh location: $e');
-      
-      // Fallback: استخدم آخر موقع معروف من النظام
-      try {
-        final lastKnown = await Geolocator.getLastKnownPosition();
-        if (lastKnown != null) {
-          print('[LocationService] 📍 Using last known position from system');
-          _lastKnownPosition = lastKnown;
-          _lastPositionTime = DateTime.now();
-          return lastKnown;
-        }
-      } catch (e2) {
-        print('[LocationService] ❌ Failed to get last known position: $e2');
-      }
+      print('[LocationService] ⚠️ Failed to get location: $e');
       
       // Fallback نهائي: استخدم الـ cache حتى لو قديم
       if (_lastKnownPosition != null) {

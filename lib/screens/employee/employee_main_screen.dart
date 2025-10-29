@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../theme/app_colors.dart';
 import '../../services/auth_service.dart';
+import '../../services/attendance_api_service.dart';
 import '../login_screen.dart';
 import 'employee_home_page.dart';
 import 'requests_page.dart';
@@ -91,6 +92,25 @@ class _EmployeeMainScreenState extends State<EmployeeMainScreen> {
               );
 
               if (confirmed == true) {
+                // تسجيل خروج تلقائي إذا كان مسجل حضور
+                try {
+                  final status = await AttendanceApiService.fetchEmployeeStatus(widget.employeeId);
+                  final isCheckedIn = status['attendance']?['status'] == 'active';
+                  
+                  if (isCheckedIn) {
+                    // عمل check-out تلقائي
+                    await AttendanceApiService.checkOut(
+                      employeeId: widget.employeeId,
+                      latitude: 0, // dummy location
+                      longitude: 0,
+                    );
+                    print('✅ Auto check-out on logout');
+                  }
+                } catch (e) {
+                  print('⚠️ Failed to auto check-out: $e');
+                  // Continue with logout anyway
+                }
+                
                 await AuthService.logout();
                 if (!mounted) return;
                 Navigator.of(context).pushAndRemoveUntil(

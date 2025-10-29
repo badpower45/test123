@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../theme/app_colors.dart';
 import '../../services/auth_service.dart';
+import '../../services/attendance_api_service.dart';
 import '../branch_manager_screen.dart';
 import '../employee/refreshable_tab.dart';
 import '../login_screen.dart';
@@ -101,6 +102,24 @@ class _ManagerMainScreenState extends State<ManagerMainScreen> {
               );
 
               if (confirmed == true) {
+                // Auto check-out if checked in
+                try {
+                  final status = await AttendanceApiService.fetchEmployeeStatus(widget.managerId);
+                  final isCheckedIn = status['attendance']?['status'] == 'active';
+                  
+                  if (isCheckedIn) {
+                    await AttendanceApiService.checkOut(
+                      employeeId: widget.managerId,
+                      latitude: 0, // dummy values, not validated on logout
+                      longitude: 0,
+                    );
+                    print('✅ Auto check-out successful');
+                  }
+                } catch (e) {
+                  print('⚠️ Failed to auto check-out: $e');
+                  // Continue with logout even if check-out fails
+                }
+                
                 await AuthService.logout();
                 if (!mounted) return;
                 Navigator.of(context).pushAndRemoveUntil(

@@ -1376,6 +1376,217 @@ app.post('/api/leave/requests/:requestId/review', async (req, res) => {
 });
 
 // =============================================================================
+// LEAVE REQUEST ENHANCEMENTS - تحسينات نظام طلبات الإجازات
+// =============================================================================
+
+// دالة مساعدة للحصول على كل التواريخ بين تاريخين
+function getDatesInRange(startDateStr: string, endDateStr: string): Date[] {
+  const dates: Date[] = [];
+  // معالجة التواريخ لضمان عدم الوقوع في مشاكل التوقيت المحلي (Timezone)
+  const start = new Date(startDateStr + 'T00:00:00Z');
+  const end = new Date(endDateStr + 'T00:00:00Z');
+
+  let current = new Date(start.getTime());
+
+  while (current <= end) {
+    dates.push(new Date(current.getTime())); // إضافة نسخة من التاريخ
+    current.setDate(current.getDate() + 1); // الانتقال لليوم التالي
+  }
+  return dates;
+}
+
+/**
+ * دالة لجلب طلبات الإجازة المعلقة مع تفاصيل الموظف والفرع للأونر
+ */
+export async function getDetailedPendingLeaveRequestsForOwner() {
+
+  const detailedRequests = await db.select({
+    // --- من جدول leaveRequests ---
+    requestId: leaveRequests.id,
+    startDate: leaveRequests.startDate,
+    endDate: leaveRequests.endDate,
+    leaveType: leaveRequests.leaveType,
+    reason: leaveRequests.reason,
+    status: leaveRequests.status,
+    daysCount: leaveRequests.daysCount,
+    allowanceAmount: leaveRequests.allowanceAmount,
+    createdAt: leaveRequests.createdAt,
+
+    // --- من جدول employees ---
+    employeeId: employees.id,
+    employeeName: employees.fullName,
+    employeeRole: employees.role,
+    employeeSalary: employees.monthlySalary,
+
+    // --- من جدول branches ---
+    branchName: branches.name,
+
+  })
+  .from(leaveRequests)
+  .leftJoin(employees, eq(leaveRequests.employeeId, employees.id))
+  .leftJoin(branches, eq(employees.branchId, branches.id))
+  .where(
+     and(
+       eq(leaveRequests.status, 'pending'),
+       // يمكنك تحديد رتب معينة (مثل 'manager') إذا أردت
+       // inArray(employees.role, ['manager'])
+     )
+  )
+  .orderBy(desc(leaveRequests.createdAt));
+
+  return detailedRequests;
+}
+
+/**
+ * دالة لموافقة الأونر على طلب إجازة + تسجيله آلياً في جدول الحضور
+ * @param leaveRequestId - ID طلب الإجازة للموافقة عليه
+ * @param ownerUserId - ID الأونر الذي قام بالموافقة (من جدول 'users')
+ */
+export async function approveLeaveRequestAndLogAttendance(
+  leaveRequestId: string,
+  ownerUserId: string // نفترض أنه UUID حسب الـ schema
+) {
+
+  // نستخدم Transaction لضمان تنفيذ العمليتين معاً أو فشلهما معاً
+  const result = await db.transaction(async (tx) => {
+
+    // 1. تحديث حالة طلب الإجازة إلى "approved"
+    const updatedLeaves = await tx
+      .update(leaveRequests)
+      .set({
+        status: 'approved',
+        reviewedBy: ownerUserId, // reviewedBy هو UUID حسب الـ schema
+        reviewedAt: new Date(),
+      })
+      .where(and(
+        eq(leaveRequests.id, leaveRequestId),
+        eq(leaveRequests.status, 'pending') // ضمان الموافقة مرة واحدة فقط
+      ))
+      .returning({ // استرجاع البيانات التي نحتاجها للخطوة التالية
+        employeeId: leaveRequests.employeeId,
+        startDate: leaveRequests.startDate,
+        endDate: leaveRequests.endDate
+      });
+
+    if (updatedLeaves.length === 0) {
+      throw new Error('لم يتم العثور على الطلب أو تم مراجعته من قبل.');
+    }
+
+    const leave = updatedLeaves[0];
+
+    // 2. الحصول على قائمة الأيام الخاصة بالإجازة
+    // (الـ Schema تشير إلى أن startDate/endDate من نوع 'date')
+    const datesToLog = getDatesInRange(leave.startDate, leave.endDate);
+
+    if (datesToLog.length === 0) {
+       throw new Error('نطاق التواريخ غير صحيح.');
+    }
+
+    const datesAsStrings = datesToLog.map(d => d.toISOString().split('T')[0]); // 'YYYY-MM-DD'
+
+    // 3. (مهم جداً) حذف أي سجلات حضور موجودة لهذا الموظف في هذه الأيام
+    // هذا يضمن أن سجل "الإجازة" يحل محل أي سجل "غياب آلي"
+    await tx
+      .delete(attendance)
+      .where(and(
+        eq(attendance.employeeId, leave.employeeId),
+        inArray(attendance.date, datesAsStrings)
+      ));
+
+    // 4. تجهيز سجلات الحضور الجديدة (يوم لكل تاريخ)
+    const attendanceRecordsToInsert: NewAttendance[] = datesAsStrings.map(dateStr => ({
+      // 'id' سيتم إنشاؤه آلياً (defaultRandom)
+      employeeId: leave.employeeId,
+      date: dateStr, // تاريخ اليوم 'YYYY-MM-DD'
+      status: 'ON_LEAVE', // <-- *** الحالة الجديدة التي تميز الإجازة ***
+      checkInTime: null,
+      checkOutTime: null,
+      workHours: '0', // ساعات العمل صفر لأنه إجازة
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }));
+
+    // 5. إدخال السجلات الجديدة دفعة واحدة في جدول الحضور
+    if (attendanceRecordsToInsert.length > 0) {
+        await tx
+          .insert(attendance)
+          .values(attendanceRecordsToInsert);
+    }
+
+    return {
+      success: true,
+      message: 'تمت الموافقة وتسجيل الإجازة في الحضور',
+      employeeId: leave.employeeId,
+      daysLogged: datesToLog.length
+    };
+  });
+
+  return result;
+}
+
+// New API endpoint for owner to get detailed pending leave requests
+app.get('/api/owner/leaves/pending', async (req, res) => {
+  try {
+    const ownerId = req.query.owner_id as string | undefined;
+
+    if (!ownerId) {
+      return res.status(400).json({ error: 'owner_id is required' });
+    }
+
+    const ownerRecord = await getOwnerRecord(ownerId);
+    if (!ownerRecord) {
+      return res.status(403).json({ error: 'لا توجد صلاحيات للوصول إلى طلبات الإجازات' });
+    }
+
+    const detailedRequests = await getDetailedPendingLeaveRequestsForOwner();
+
+    // Normalize numeric fields
+    const normalizedRequests = detailedRequests.map(request => ({
+      ...request,
+      daysCount: request.daysCount ? Number(request.daysCount) : 0,
+      allowanceAmount: request.allowanceAmount ? Number(request.allowanceAmount) : 0,
+      employeeSalary: request.employeeSalary ? Number(request.employeeSalary) : 0,
+    }));
+
+    res.json({
+      success: true,
+      requests: normalizedRequests,
+    });
+  } catch (error) {
+    console.error('Get detailed pending leave requests error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// New API endpoint for owner to approve leave request and log attendance
+app.post('/api/owner/leaves/approve', async (req, res) => {
+  try {
+    const { leave_request_id, owner_user_id } = req.body;
+
+    if (!leave_request_id || !owner_user_id) {
+      return res.status(400).json({ error: 'leave_request_id and owner_user_id are required' });
+    }
+
+    // Verify owner permissions
+    const ownerRecord = await getOwnerRecord(owner_user_id);
+    if (!ownerRecord) {
+      return res.status(403).json({ error: 'لا توجد صلاحيات للموافقة على طلبات الإجازات' });
+    }
+
+    const result = await approveLeaveRequestAndLogAttendance(leave_request_id, owner_user_id);
+
+    res.json(result);
+  } catch (error) {
+    console.error('Approve leave and log attendance error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      message: error?.message
+    });
+  }
+});
+
+// =============================================================================
 // SALARY ADVANCES - السلف
 // =============================================================================
 

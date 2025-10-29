@@ -143,6 +143,35 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
 
       print('📍 Position: ${position?.latitude}, ${position?.longitude} (accuracy: ${position?.accuracy}m)');
       print('📶 WiFi BSSID: $wifiBSSID');
+      print('📶 Allowed BSSIDs: $_allowedBssids');
+
+      // التحقق من WiFi BSSID أولاً
+      if (_allowedBssids.isNotEmpty) {
+        if (wifiBSSID == null || wifiBSSID.isEmpty) {
+          throw Exception(
+            'يجب الاتصال بشبكة WiFi الفرع.\n'
+            'لم يتم اكتشاف شبكة WiFi.\n'
+            'يرجى التأكد من تفعيل WiFi والاتصال بشبكة الفرع.'
+          );
+        }
+        
+        // تطبيع الـ BSSID للمقارنة
+        final normalizedCurrent = wifiBSSID.toUpperCase().trim();
+        final isAllowedWifi = _allowedBssids.any((allowed) {
+          final normalizedAllowed = allowed.toUpperCase().trim();
+          return normalizedCurrent == normalizedAllowed;
+        });
+        
+        if (!isAllowedWifi) {
+          throw Exception(
+            'أنت غير متصل بشبكة الفرع المسموح بها.\n'
+            'BSSID الحالي: $normalizedCurrent\n'
+            'يرجى الاتصال بشبكة WiFi الخاصة بالفرع.'
+          );
+        }
+        
+        print('✅ WiFi validation passed: $normalizedCurrent');
+      }
 
       // Validate location using branch data
       if (RestaurantConfig.enforceLocation && _branchData != null) {
@@ -150,9 +179,9 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           throw Exception('تعذر تحديد موقعك، يرجى تفعيل خدمة تحديد الموقع والمحاولة مرة أخرى.');
         }
         
-        // تخفيف شرط الدقة - قبول حتى 150 متر
-        if (position.accuracy > 150) {
-          throw Exception('دقة الموقع ضعيفة جداً (${position.accuracy.toStringAsFixed(0)}م). يرجى الانتقال إلى مكان مفتوح وإعادة المحاولة.');
+        // قبول أي دقة - حتى لو ضعيفة (300-500 متر في الأماكن المغلقة)
+        if (position.accuracy > 500) {
+          print('⚠️ Poor accuracy: ${position.accuracy.toStringAsFixed(0)}m - but accepting it');
         }
         
         // Use branch coordinates if available
@@ -175,8 +204,10 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           print('  Distance: ${distance.toStringAsFixed(1)}m');
           print('  Allowed radius: ${branchRadius}m');
           
-          // إضافة هامش أكبر للدقة - أكثر تسامحاً
-          final accuracyMargin = position.accuracy > 50 ? position.accuracy * 0.8 : position.accuracy * 0.3;
+          // هامش كبير جداً للدقة الضعيفة
+          final accuracyMargin = position.accuracy > 100 
+              ? position.accuracy * 1.5  // دقة ضعيفة: نضرب في 1.5
+              : position.accuracy * 1.0; // دقة جيدة: نضرب في 1.0
           final effectiveRadius = branchRadius + accuracyMargin;
           
           print('  Effective radius (with margin): ${effectiveRadius.toStringAsFixed(1)}m');
@@ -209,6 +240,15 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           wifiBssid: wifiBSSID,
         );
         
+        // تحديث الحالة فوراً
+        setState(() {
+          _isCheckedIn = true;
+          _checkInTime = DateTime.now();
+          _isLoading = false;
+        });
+        
+        _startTimer();
+        
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -235,6 +275,15 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         // Show offline notification
         await NotificationService.instance.showOfflineModeNotification();
         
+        // تحديث الحالة فوراً
+        setState(() {
+          _isCheckedIn = true;
+          _checkInTime = DateTime.now();
+          _isLoading = false;
+        });
+        
+        _startTimer();
+        
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -247,7 +296,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         }
       }
       
-      // Start geofence monitoring with old service
+      // Start geofence monitoring
       if (_branchData != null) {
         await _startGeofenceMonitoring();
       }
@@ -316,6 +365,35 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
       print('  Position: ${position != null ? "(${position.latitude}, ${position.longitude})" : "null"}');
       print('  Accuracy: ${position?.accuracy.toStringAsFixed(1) ?? "N/A"}m');
       print('  WiFi BSSID: ${wifiBSSID ?? "null"}');
+      print('  Allowed BSSIDs: $_allowedBssids');
+
+      // التحقق من WiFi BSSID أولاً
+      if (_allowedBssids.isNotEmpty) {
+        if (wifiBSSID == null || wifiBSSID.isEmpty) {
+          throw Exception(
+            'يجب الاتصال بشبكة WiFi الفرع.\n'
+            'لم يتم اكتشاف شبكة WiFi.\n'
+            'يرجى التأكد من تفعيل WiFi والاتصال بشبكة الفرع.'
+          );
+        }
+        
+        // تطبيع الـ BSSID للمقارنة
+        final normalizedCurrent = wifiBSSID.toUpperCase().trim();
+        final isAllowedWifi = _allowedBssids.any((allowed) {
+          final normalizedAllowed = allowed.toUpperCase().trim();
+          return normalizedCurrent == normalizedAllowed;
+        });
+        
+        if (!isAllowedWifi) {
+          throw Exception(
+            'أنت غير متصل بشبكة الفرع المسموح بها.\n'
+            'BSSID الحالي: $normalizedCurrent\n'
+            'يرجى الاتصال بشبكة WiFi الخاصة بالفرع.'
+          );
+        }
+        
+        print('✅ WiFi validation passed: $normalizedCurrent');
+      }
 
       // Validate location using branch data
       if (RestaurantConfig.enforceLocation && _branchData != null) {
@@ -323,9 +401,9 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           throw Exception('تعذر تحديد موقعك، يرجى تفعيل خدمة تحديد الموقع والمحاولة مرة أخرى.');
         }
 
-        // Check accuracy - أكثر تسامحاً مع الدقة الضعيفة
-        if (position.accuracy > 150) {
-          throw Exception('دقة الموقع ضعيفة جداً (${position.accuracy.toStringAsFixed(0)}م). يرجى الانتقال إلى مكان مفتوح وإعادة المحاولة.');
+        // قبول أي دقة - حتى لو ضعيفة
+        if (position.accuracy > 500) {
+          print('⚠️ Poor accuracy: ${position.accuracy.toStringAsFixed(0)}m - but accepting it');
         }
 
         // Use branch coordinates if available
@@ -348,8 +426,10 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           print('  Distance: ${distance.toStringAsFixed(1)}m');
           print('  Allowed radius: ${branchRadius}m');
 
-          // إضافة هامش أكبر للدقة - أكثر تسامحاً
-          final accuracyMargin = position.accuracy > 50 ? position.accuracy * 0.8 : position.accuracy * 0.3;
+          // هامش كبير جداً للدقة الضعيفة
+          final accuracyMargin = position.accuracy > 100 
+              ? position.accuracy * 1.5  // دقة ضعيفة: نضرب في 1.5
+              : position.accuracy * 1.0; // دقة جيدة: نضرب في 1.0
           final effectiveRadius = branchRadius + accuracyMargin;
           
           print('  Effective radius (with margin): ${effectiveRadius.toStringAsFixed(1)}m');

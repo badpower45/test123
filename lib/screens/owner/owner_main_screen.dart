@@ -790,7 +790,7 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
     try {
       // Fetch presence status from API
       final response = await http.get(
-        Uri.parse('${rootBaseUrl}/api/branch/presence-status${_selectedBranch != null ? '?branchId=$_selectedBranch' : ''}'),
+        Uri.parse('${rootBaseUrl}/api/attendance/presence${_selectedBranch != null ? '?branchId=$_selectedBranch' : ''}'),
       );
 
       if (response.statusCode == 200) {

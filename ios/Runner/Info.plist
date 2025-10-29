@@ -49,6 +49,8 @@
 	<string>تستخدم أولديزز وركرز موقعك للتأكد من وجودك داخل نطاق العمل قبل تسجيل الحضور.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>يحتاج التطبيق إلى الوصول لموقعك في الخلفية لتتبع الحضور وضمان وجودك في نطاق العمل.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>يحتاج التطبيق إلى الوصول لموقعك دائماً لتتبع الحضور والتأكد من وجودك في نطاق العمل.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>
@@ -65,5 +67,22 @@
 	<string>تستخدم أولديزز وركرز الشبكة المحلية للتحقق من WiFi BSSID للتأكد من وجودك في مكان العمل.</string>
 	<key>NSUserTrackingUsageDescription</key>
 	<string>نستخدم هذه المعلومات لتحسين تجربتك في التطبيق.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>16.171.208.249</key>
+			<dict>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+				<key>NSTemporaryExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSTemporaryExceptionMinimumTLSVersion</key>
+				<string>TLSv1.0</string>
+			</dict>
+		</dict>
+	</dict>
 </dict>
 </plist>
