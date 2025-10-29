@@ -1,10 +1,13 @@
 // Comprehensive Owner Management System
 // This screen provides complete management functionality for owners
 
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:network_info_plus/network_info_plus.dart';
+import 'package:http/http.dart' as http;
 
+import '../../constants/api_endpoints.dart';
 import '../../services/branch_manager_api_service.dart';
 import '../../services/owner_api_service.dart';
 import '../../services/branch_api_service.dart';
@@ -785,19 +788,40 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
 
   Future<Map<String, dynamic>> _loadPresenceData() async {
     try {
-      // Fetch branches from API
-      final branches = await BranchApiService.getBranches();
-      final branchNames = branches.map((branch) => branch['name'] as String).toList();
-      // For now, return sample data with real branches
-      return {
-        'present': [],
-        'absent': [],
-        'offline': [],
-        'branches': branchNames,
-        'totalEmployees': 0,
-        'presentCount': 0,
-        'absentCount': 0,
-      };
+      // Fetch presence status from API
+      final response = await http.get(
+        Uri.parse('${rootBaseUrl}/api/branch/presence-status${_selectedBranch != null ? '?branchId=$_selectedBranch' : ''}'),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        
+        // Filter by status if selected
+        List<dynamic> presentEmployees = data['present'] ?? [];
+        List<dynamic> absentEmployees = data['absent'] ?? [];
+        
+        if (_selectedStatus == 'present') {
+          absentEmployees = [];
+        } else if (_selectedStatus == 'absent') {
+          presentEmployees = [];
+        }
+        
+        // Fetch branches for filter
+        final branches = await BranchApiService.getBranches();
+        final branchNames = branches.map((branch) => branch['name'] as String).toList();
+        
+        return {
+          'present': presentEmployees,
+          'absent': absentEmployees,
+          'offline': [],
+          'branches': branchNames,
+          'totalEmployees': presentEmployees.length + absentEmployees.length,
+          'presentCount': presentEmployees.length,
+          'absentCount': absentEmployees.length,
+        };
+      } else {
+        throw Exception('Failed to load presence data');
+      }
     } catch (error) {
       throw Exception('Failed to load presence data: $error');
     }

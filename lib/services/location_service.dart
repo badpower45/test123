@@ -22,69 +22,68 @@ class LocationService {
     return true;
   }
 
-  /// Get current position with enhanced accuracy and retry mechanism
   Future<Position?> _getCurrentPosition() async {
     final hasService = await _ensureServiceEnabled();
     if (!hasService) {
       print('[LocationService] Location service not enabled');
       return null;
     }
-    
+
     final hasPermission = await _ensurePermissionGranted();
     if (!hasPermission) {
       print('[LocationService] Location permission not granted');
       return null;
     }
 
-    // Try multiple times to get accurate location
-    Position? bestPosition;
+    // --- بداية التعديلات ---
+    Position? position;
     int attempts = 0;
-    const maxAttempts = 3;
-    
+    // قلّلنا عدد المحاولات لـ 2
+    const maxAttempts = 2;
+
     while (attempts < maxAttempts) {
       try {
-        final position = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.best,
+        position = await Geolocator.getCurrentPosition(
+          // قلّلنا الدقة المطلوبة
+          desiredAccuracy: LocationAccuracy.high,
           forceAndroidLocationManager: true,
-          timeLimit: const Duration(seconds: 15),
-        ).timeout(const Duration(seconds: 20));
-        
+          // قلّلنا مهلة الانتظار لكل محاولة
+          timeLimit: const Duration(seconds: 10),
+        ).timeout(const Duration(seconds: 12)); // مهلة إجمالية للمحاولة
+
         print('[LocationService] Attempt ${attempts + 1}: accuracy=${position.accuracy.toStringAsFixed(1)}m');
-        
-        // If this is the first position or better accuracy than previous
-        if (bestPosition == null || position.accuracy < bestPosition.accuracy) {
-          bestPosition = position;
+
+        // هنقبل أي دقة أقل من 50 متر (بدلاً من 30)
+        if (position.accuracy <= 50) {
+          print('[LocationService] Good enough accuracy achieved: ${position.accuracy.toStringAsFixed(1)}m');
+          return position; // ارجع بالنتيجة فوراً
         }
-        
-        // If accuracy is good enough (less than 30 meters), use it
-        if (position.accuracy <= 30) {
-          print('[LocationService] Good accuracy achieved: ${position.accuracy.toStringAsFixed(1)}m');
-          return position;
-        }
-        
+
+        // لو الدقة وحشة، حاول مرة كمان لو لسه فيه محاولات
         attempts++;
-        
-        // Wait a bit before next attempt
         if (attempts < maxAttempts) {
-          await Future.delayed(const Duration(seconds: 2));
+          await Future.delayed(const Duration(seconds: 1)); // انتظار ثانية قبل المحاولة التالية
         }
+
       } catch (e) {
         print('[LocationService] Attempt ${attempts + 1} failed: $e');
         attempts++;
-        
+
         if (attempts < maxAttempts) {
-          await Future.delayed(const Duration(seconds: 2));
+          await Future.delayed(const Duration(seconds: 1));
         }
       }
     }
-    
-    if (bestPosition != null) {
-      print('[LocationService] Using best position with accuracy: ${bestPosition.accuracy.toStringAsFixed(1)}m');
+
+    // لو فشلت كل المحاولات أو الدقة لسه وحشة بعد المحاولتين، رجع آخر نتيجة (أو null)
+    if (position != null) {
+       print('[LocationService] Using best available position after $attempts attempts: accuracy=${position.accuracy.toStringAsFixed(1)}m');
     } else {
-      print('[LocationService] Failed to get any position after $maxAttempts attempts');
+       print('[LocationService] Failed to get location after $attempts attempts');
     }
-    
-    return bestPosition;
+    // --- نهاية التعديلات ---
+
+    return position; // رجع أفضل نتيجة تم الحصول عليها (حتى لو مش مثالية)
   }
 
   Future<bool> isWithinRestaurantArea({

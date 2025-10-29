@@ -1596,16 +1596,59 @@ app.post('/api/absence/:notificationId/review', async (req, res) => {
 
     let deductionAmount = '0';
 
-    // If rejected → apply 2 days deduction (غياب بدون إذن)
-    // حسب السيستم الإداري: الغياب مرة واحدة بدون إذن = خصم يومين كاملين
+    // If rejected → apply 2 days deduction based on employee's shift hours
     if (action === 'reject') {
-      deductionAmount = '400'; // 2 days * 200 EGP/day (خصم يومين)
+      // Get employee to calculate shift-based deduction
+      const [employee] = await db
+        .select()
+        .from(employees)
+        .where(eq(employees.id, notification.employeeId))
+        .limit(1);
+
+      if (employee && employee.shiftStartTime && employee.shiftEndTime) {
+        // Parse shift times
+        const [startHour, startMinute] = employee.shiftStartTime.split(':').map(Number);
+        const [endHour, endMinute] = employee.shiftEndTime.split(':').map(Number);
+        
+        // Calculate shift duration in hours
+        let shiftDurationMinutes;
+        const startTimeMinutes = startHour * 60 + startMinute;
+        const endTimeMinutes = endHour * 60 + endMinute;
+        
+        if (endTimeMinutes > startTimeMinutes) {
+          // Normal shift (e.g., 9:00 - 17:00)
+          shiftDurationMinutes = endTimeMinutes - startTimeMinutes;
+        } else {
+          // Night shift crossing midnight (e.g., 21:00 - 05:00)
+          shiftDurationMinutes = (24 * 60 - startTimeMinutes) + endTimeMinutes;
+        }
+        
+        const shiftDurationHours = shiftDurationMinutes / 60;
+        const hourlyRate = parseFloat(employee.hourlyRate?.toString() || '40'); // Default 40 EGP/hour
+        
+        // Calculate: (shift hours × hourly rate) × 2 days
+        const oneDayDeduction = shiftDurationHours * hourlyRate;
+        const twoDaysDeduction = oneDayDeduction * 2;
+        
+        deductionAmount = Math.round(twoDaysDeduction).toString();
+        
+        console.log(`[Absence Review] Employee: ${employee.fullName}`);
+        console.log(`[Absence Review] Shift: ${employee.shiftStartTime} - ${employee.shiftEndTime}`);
+        console.log(`[Absence Review] Duration: ${shiftDurationHours.toFixed(2)} hours`);
+        console.log(`[Absence Review] Hourly Rate: ${hourlyRate} EGP`);
+        console.log(`[Absence Review] 1 Day = ${oneDayDeduction.toFixed(2)} EGP`);
+        console.log(`[Absence Review] 2 Days Deduction = ${deductionAmount} EGP`);
+      } else {
+        // Fallback: if no shift info, use default 400 EGP (8 hours × 40 EGP/hour × 2 days)
+        deductionAmount = '400';
+        console.log(`[Absence Review] No shift info, using default deduction: ${deductionAmount} EGP`);
+      }
 
       // Create deduction record
       await db.insert(deductions).values({
         employeeId: notification.employeeId,
         amount: deductionAmount,
-        reason: notes || 'غياب بدون إذن - خصم يومين كاملين',
+        reason: notes || `غياب بدون إذن - خصم يومين (${deductionAmount} جنيه)`,
         deductionDate: notification.absenceDate,
         deductionType: 'absence',
         appliedBy: reviewer_id,
@@ -1630,7 +1673,7 @@ app.post('/api/absence/:notificationId/review', async (req, res) => {
       success: true,
       message: action === 'approve' 
         ? 'تم الموافقة على الغياب - غياب بإذن' 
-        : 'تم رفض الغياب - تم تطبيق خصم يومين',
+        : `تم رفض الغياب - تم تطبيق خصم يومين (${deductionAmount} جنيه)`,
       notification: updated,
       deductionAmount: action === 'reject' ? deductionAmount : '0',
     });
