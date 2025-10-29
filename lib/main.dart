@@ -18,7 +18,6 @@ import 'screens/home_screen.dart';
 import 'screens/employee/employee_main_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/splash_screen.dart';
-import 'services/new_background_service.dart';
 import 'services/pulse_backend_client.dart';
 import 'services/pulse_sync_manager.dart';
 import 'theme/app_colors.dart';

@@ -11,11 +11,12 @@ import '../../services/location_service.dart';
 import '../../services/requests_api_service.dart';
 import '../../services/sync_service.dart';
 import '../../services/notification_service.dart';
-import '../../services/new_background_service.dart';
 import '../../services/auth_service.dart';
+import '../../services/geofence_service.dart';
 import '../../database/offline_database.dart';
 import '../../theme/app_colors.dart';
 import 'my_attendance_table_screen.dart';
+import 'package:geolocator/geolocator.dart';
 
 class EmployeeHomePage extends StatefulWidget {
   final String employeeId;
@@ -231,10 +232,9 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         }
       }
       
-      // Start background tracking with the new service
+      // Start geofence monitoring with old service
       if (_branchData != null) {
-        await NewBackgroundService.instance.init(widget.employeeId);
-        await NewBackgroundService.instance.startTracking(_branchData!, _allowedBssids);
+        await _startGeofenceMonitoring();
       }
     } catch (e) {
       setState(() => _isLoading = false);
@@ -372,6 +372,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         }
       } else {
         // Offline mode: Save locally
+        final db = OfflineDatabase.instance;
 
         // For checkout we need attendance_id, but in offline mode we might not have it
         // So we'll save with a placeholder and let the sync service handle it
@@ -429,209 +430,6 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
 
   // Start geofence monitoring
   Future<void> _startGeofenceMonitoring() async {
-    // This method is now replaced by the new background service
-    // Keep empty for backwards compatibility
-  }
-      
-      setState(() {
-        _isCheckedIn = true;
-        _checkInTime = DateTime.now();
-        _isLoading = false;
-      });
-      
-      _startTimer();
-      
-    } on Exception catch (e) {
-      setState(() => _isLoading = false);
-      
-      // Parse error message
-      String errorMessage = e.toString().replaceAll('Exception: ', '');
-      
-      // Check if it's a shift time error
-      if (errorMessage.contains('وقت الشيفت')) {
-        // Show detailed shift time error
-        if (mounted) {
-          showDialog(
-            context: context,
-            builder: (context) => AlertDialog(
-              title: const Text('خارج وقت الشيفت', textAlign: TextAlign.right),
-              content: Text(
-                errorMessage,
-                textAlign: TextAlign.right,
-                style: const TextStyle(fontSize: 16),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('حسناً'),
-                ),
-              ],
-            ),
-          );
-        }
-      } else {
-        // Show regular error
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(errorMessage),
-              backgroundColor: AppColors.error,
-              behavior: SnackBarBehavior.floating,
-              duration: const Duration(seconds: 5),
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      setState(() => _isLoading = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('خطأ: ${e.toString()}'),
-            backgroundColor: AppColors.error,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    }
-  }
-
-  Future<void> _handleCheckOut() async {
-    setState(() => _isLoading = true);
-    
-    try {
-      final locationService = LocationService();
-      final position = await locationService.tryGetPosition();
-
-      if (RestaurantConfig.enforceLocation && _branchData != null) {
-        if (position == null) {
-          throw Exception('تعذر تحديد موقعك، يرجى تفعيل خدمة تحديد الموقع والمحاولة مرة أخرى.');
-        }
-        
-        // Check accuracy - warn if too poor
-        if (position.accuracy > 100) {
-          throw Exception('دقة الموقع ضعيفة جداً (${position.accuracy.toStringAsFixed(0)}م). يرجى الانتقال إلى مكان مفتوح وإعادة المحاولة.');
-        }
-        
-        // Use branch coordinates if available
-        final branchLat = _branchData!['latitude'] as double?;
-        final branchLng = _branchData!['longitude'] as double?;
-        final branchRadius = (_branchData!['geofence_radius'] as int?) ?? 200;
-        
-        if (branchLat != null && branchLng != null) {
-          final distance = Geolocator.distanceBetween(
-            branchLat,
-            branchLng,
-            position.latitude,
-            position.longitude,
-          );
-          
-          print('📍 Geofence check (checkout):');
-          print('  Branch: ($branchLat, $branchLng)');
-          print('  Current: (${position.latitude}, ${position.longitude})');
-          print('  Accuracy: ${position.accuracy.toStringAsFixed(1)}m');
-          print('  Distance: ${distance.toStringAsFixed(1)}m');
-          print('  Allowed radius: ${branchRadius}m');
-          
-          // Add accuracy buffer
-          final effectiveRadius = branchRadius + (position.accuracy > 30 ? position.accuracy * 0.5 : 0);
-          
-          if (distance > effectiveRadius) {
-            throw Exception(
-              'أنت خارج نطاق الموقع المسموح للمطعم.\n'
-              'المسافة: ${distance.toStringAsFixed(0)}م من ${branchRadius}م\n'
-              'دقة GPS: ${position.accuracy.toStringAsFixed(0)}م\n'
-              'يرجى الاقتراب من المطعم وإعادة المحاولة.'
-            );
-          }
-        }
-      }
-
-      final latitude = position?.latitude ?? RestaurantConfig.latitude;
-      final longitude = position?.longitude ?? RestaurantConfig.longitude;
-
-      // Check internet connection
-      final syncService = SyncService.instance;
-      final hasInternet = await syncService.hasInternet();
-
-      if (hasInternet) {
-        // Online mode: Send to API directly
-        await AttendanceApiService.checkOut(
-          employeeId: widget.employeeId,
-          latitude: latitude,
-          longitude: longitude,
-          wifiBssid: wifiBSSID,
-        );
-        
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('✓ تم تسجيل الانصراف بنجاح'),
-              backgroundColor: AppColors.success,
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
-        }
-      } else {
-        // Offline mode: Save locally
-        final db = OfflineDatabase.instance;
-        
-        // For checkout we need attendance_id, but in offline mode we might not have it
-        // So we'll save with a placeholder and let the sync service handle it
-        await db.insertPendingCheckout(
-          employeeId: widget.employeeId,
-          attendanceId: null, // Will be resolved during sync
-          timestamp: DateTime.now(),
-          latitude: latitude,
-          longitude: longitude,
-        );
-        
-        // Start sync service if not already running
-        syncService.startPeriodicSync();
-        
-        // Show offline notification
-        await NotificationService.instance.showOfflineModeNotification();
-        
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('📴 تم حفظ الانصراف محلياً - سيتم الرفع عند توفر الإنترنت'),
-              backgroundColor: AppColors.warning,
-              behavior: SnackBarBehavior.floating,
-              duration: Duration(seconds: 5),
-            ),
-          );
-        }
-      }
-      
-      setState(() {
-        _isCheckedIn = false;
-        _checkInTime = null;
-        _elapsedTime = '00:00:00';
-        _isLoading = false;
-      });
-      
-      _timer?.cancel();
-      
-      // Stop background tracking on checkout
-      await NewBackgroundService.instance.stopTracking();
-      
-    } catch (e) {
-      setState(() => _isLoading = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('خطأ: ${e.toString()}'),
-            backgroundColor: AppColors.error,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    }
-  }
-
-  // Start geofence monitoring
-  Future<void> _startGeofenceMonitoring() async {
     try {
       // Get employee info from SharedPreferences
       final loginData = await AuthService.getLoginData();
@@ -644,7 +442,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         branchLatitude: RestaurantConfig.latitude,
         branchLongitude: RestaurantConfig.longitude,
         geofenceRadius: RestaurantConfig.allowedRadiusInMeters,
-        requiredBssid: RestaurantConfig.allowedWifiBssid,
+        requiredBssids: [RestaurantConfig.allowedWifiBssid ?? ''],
       );
 
       print('[EmployeeHomePage] Geofence monitoring started');

@@ -48,9 +48,9 @@ class GeofenceService {
 
     _isMonitoring = true;
     
-    // Check location every 5 minutes
+    // Check location every 10 minutes for battery saving
     _locationCheckTimer = Timer.periodic(
-      const Duration(minutes: 5),
+      const Duration(minutes: 10),
       (_) => _checkGeofence(),
     );
 
@@ -83,7 +83,7 @@ class GeofenceService {
       while (attempts < maxAttempts && position == null) {
         try {
           position = await Geolocator.getCurrentPosition(
-            desiredAccuracy: LocationAccuracy.best,
+            desiredAccuracy: LocationAccuracy.high,
             forceAndroidLocationManager: true,
             timeLimit: const Duration(seconds: 15),
           ).timeout(const Duration(seconds: 20));
