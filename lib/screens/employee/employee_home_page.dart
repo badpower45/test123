@@ -124,22 +124,35 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
 
   Future<void> _handleCheckIn() async {
     setState(() => _isLoading = true);
-    
+
     try {
       print('🚀 Starting check-in process...');
-      
-      // استخدام الـ services المحسّنة
-      final locationService = LocationService();
-      final wifiService = WiFiService.instance;
-      
-      // الحصول على الموقع والـ WiFi بالتوازي (أسرع)
-      final results = await Future.wait([
-        locationService.tryGetPosition(),
-        wifiService.getWifiBSSID(),
-      ]);
-      
-      final position = results[0] as Position?;
-      final wifiBSSID = results[1] as String?;
+
+      // Create a simple employee object for validation
+      // In a real implementation, you'd get this from the auth service
+      final authData = await AuthService.getLoginData();
+      final employee = Employee(
+        id: authData['employeeId'] ?? widget.employeeId,
+        fullName: authData['fullName'] ?? 'الموظف',
+        pin: '', // We don't need PIN for validation
+        role: EmployeeRole.staff, // Default to staff for now
+        branch: authData['branch'] ?? 'المركز الرئيسي',
+      );
+
+      // Use the new validation method for check-in (GPS + WiFi required)
+      final validation = await GeofenceService.validateForCheckIn(employee);
+
+      if (!validation.isValid) {
+        throw Exception(validation.message);
+      }
+
+      // Ensure we have position and BSSID for check-in
+      if (validation.position == null || validation.bssid == null) {
+        throw Exception('خطأ في التحقق من البيانات');
+      }
+
+      final position = validation.position!;
+      final wifiBSSID = validation.bssid!;
 
       print('📍 Position: ${position?.latitude}, ${position?.longitude} (accuracy: ${position?.accuracy}m)');
       print('📶 WiFi BSSID: $wifiBSSID');
@@ -235,8 +248,8 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         // Online mode: Send to API directly
         await AttendanceApiService.checkIn(
           employeeId: widget.employeeId,
-          latitude: latitude,
-          longitude: longitude,
+          latitude: position.latitude,
+          longitude: position.longitude,
           wifiBssid: wifiBSSID,
         );
         
@@ -348,103 +361,32 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
     setState(() => _isLoading = true);
 
     try {
-      // استخدام الخدمات المحسنة مع التنفيذ المتوازي
-      final locationService = LocationService();
-      final wifiService = WiFiService.instance;
-      
-      // تنفيذ متوازي للحصول على الموقع والـ WiFi معاً
-      final results = await Future.wait([
-        locationService.tryGetPosition(),
-        wifiService.getWifiBSSID(),
-      ]);
-      
-      final position = results[0] as Position?;
-      final wifiBSSID = results[1] as String?;
-      
-      print('🚪 Check-out attempt:');
-      print('  Position: ${position != null ? "(${position.latitude}, ${position.longitude})" : "null"}');
-      print('  Accuracy: ${position?.accuracy.toStringAsFixed(1) ?? "N/A"}m');
-      print('  WiFi BSSID: ${wifiBSSID ?? "null"}');
-      print('  Allowed BSSIDs: $_allowedBssids');
+      print('🚪 Starting check-out process...');
 
-      // التحقق من WiFi BSSID أولاً
-      if (_allowedBssids.isNotEmpty) {
-        if (wifiBSSID == null || wifiBSSID.isEmpty) {
-          throw Exception(
-            'يجب الاتصال بشبكة WiFi الفرع.\n'
-            'لم يتم اكتشاف شبكة WiFi.\n'
-            'يرجى التأكد من تفعيل WiFi والاتصال بشبكة الفرع.'
-          );
-        }
-        
-        // تطبيع الـ BSSID للمقارنة
-        final normalizedCurrent = wifiBSSID.toUpperCase().trim();
-        final isAllowedWifi = _allowedBssids.any((allowed) {
-          final normalizedAllowed = allowed.toUpperCase().trim();
-          return normalizedCurrent == normalizedAllowed;
-        });
-        
-        if (!isAllowedWifi) {
-          throw Exception(
-            'أنت غير متصل بشبكة الفرع المسموح بها.\n'
-            'BSSID الحالي: $normalizedCurrent\n'
-            'يرجى الاتصال بشبكة WiFi الخاصة بالفرع.'
-          );
-        }
-        
-        print('✅ WiFi validation passed: $normalizedCurrent');
+      // Create a simple employee object for validation
+      final authData = await AuthService.getLoginData();
+      final employee = Employee(
+        id: authData['employeeId'] ?? widget.employeeId,
+        fullName: authData['fullName'] ?? 'الموظف',
+        pin: '', // We don't need PIN for validation
+        role: EmployeeRole.staff, // Default to staff for now
+        branch: authData['branch'] ?? 'المركز الرئيسي',
+      );
+
+      // Use the new validation method for check-out (GPS only)
+      final validation = await GeofenceService.validateForCheckOut(employee);
+
+      if (!validation.isValid) {
+        throw Exception(validation.message);
       }
 
-      // Validate location using branch data
-      if (RestaurantConfig.enforceLocation && _branchData != null) {
-        if (position == null) {
-          throw Exception('تعذر تحديد موقعك، يرجى تفعيل خدمة تحديد الموقع والمحاولة مرة أخرى.');
-        }
-
-        // قبول أي دقة - حتى لو ضعيفة
-        if (position.accuracy > 500) {
-          print('⚠️ Poor accuracy: ${position.accuracy.toStringAsFixed(0)}m - but accepting it');
-        }
-
-        // Use branch coordinates if available
-        final branchLat = _branchData!['latitude'] as double?;
-        final branchLng = _branchData!['longitude'] as double?;
-        final branchRadius = (_branchData!['geofence_radius'] as int?) ?? 200;
-
-        if (branchLat != null && branchLng != null) {
-          final distance = Geolocator.distanceBetween(
-            branchLat,
-            branchLng,
-            position.latitude,
-            position.longitude,
-          );
-
-          print('📍 Geofence check (checkout):');
-          print('  Branch: ($branchLat, $branchLng)');
-          print('  Current: (${position.latitude}, ${position.longitude})');
-          print('  Accuracy: ${position.accuracy.toStringAsFixed(1)}m');
-          print('  Distance: ${distance.toStringAsFixed(1)}m');
-          print('  Allowed radius: ${branchRadius}m');
-
-          // هامش كبير جداً للدقة الضعيفة
-          final accuracyMargin = position.accuracy > 100 
-              ? position.accuracy * 1.5  // دقة ضعيفة: نضرب في 1.5
-              : position.accuracy * 1.0; // دقة جيدة: نضرب في 1.0
-          final effectiveRadius = branchRadius + accuracyMargin;
-          
-          print('  Effective radius (with margin): ${effectiveRadius.toStringAsFixed(1)}m');
-          print('  Within range: ${distance <= effectiveRadius}');
-
-          if (distance > effectiveRadius) {
-            throw Exception(
-              'أنت خارج نطاق الموقع المسموح للمطعم.\n'
-              'المسافة: ${distance.toStringAsFixed(0)}م من ${branchRadius}م\n'
-              'دقة GPS: ${position.accuracy.toStringAsFixed(0)}م\n'
-              'يرجى الاقتراب من المطعم وإعادة المحاولة.'
-            );
-          }
-        }
+      // Ensure we have position for check-out
+      if (validation.position == null) {
+        throw Exception('خطأ في تحديد الموقع');
       }
+
+      final position = validation.position!;
+
 
       final latitude = position?.latitude ?? RestaurantConfig.latitude;
       final longitude = position?.longitude ?? RestaurantConfig.longitude;
@@ -457,9 +399,8 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         // Online mode: Send to API directly
         await AttendanceApiService.checkOut(
           employeeId: widget.employeeId,
-          latitude: latitude,
-          longitude: longitude,
-          wifiBssid: wifiBSSID,
+          latitude: position.latitude,
+          longitude: position.longitude,
         );
 
         if (mounted) {
@@ -481,8 +422,8 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           employeeId: widget.employeeId,
           attendanceId: null, // Will be resolved during sync
           timestamp: DateTime.now(),
-          latitude: latitude,
-          longitude: longitude,
+          latitude: position.latitude,
+          longitude: position.longitude,
         );
 
         // Start sync service if not already running

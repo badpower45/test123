@@ -3,6 +3,21 @@ import 'package:geolocator/geolocator.dart';
 import '../database/offline_database.dart';
 import 'notification_service.dart';
 import 'wifi_service.dart';
+import '../models/employee.dart';
+
+class GeofenceValidationResult {
+  final bool isValid;
+  final String message;
+  final Position? position;
+  final String? bssid;
+
+  GeofenceValidationResult({
+    required this.isValid,
+    required this.message,
+    this.position,
+    this.bssid,
+  });
+}
 
 class GeofenceService {
   static final GeofenceService instance = GeofenceService._init();
@@ -229,4 +244,108 @@ class GeofenceService {
 
   // Get current employee info
   String? get currentEmployeeId => _currentEmployeeId;
+
+  /// --- New Method: Validate for Check-In (GPS + WiFi) ---
+  static Future<GeofenceValidationResult> validateForCheckIn(Employee employee) async {
+    // 1. Get current location
+    Position position;
+    try {
+      position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        forceAndroidLocationManager: true,
+        timeLimit: const Duration(seconds: 15),
+      );
+    } catch (e) {
+      return GeofenceValidationResult(isValid: false, message: 'فشل في تحديد الموقع: $e');
+    }
+
+    // For now, we'll use a simple distance check with hardcoded coordinates
+    // TODO: Implement proper branch lookup from API
+    const double branchLat = 31.2652; // Default location
+    const double branchLng = 29.9863; // Default location
+    const double geofenceRadius = 500.0; // Default radius
+
+    final distance = Geolocator.distanceBetween(
+      position.latitude,
+      position.longitude,
+      branchLat,
+      branchLng,
+    );
+
+    if (distance > geofenceRadius) {
+      return GeofenceValidationResult(
+        isValid: false,
+        message: 'يجب أن تكون داخل نطاق الفرع (المسافة: ${distance.round()} متر)',
+      );
+    }
+
+    // 2. Validate WiFi BSSID (required for check-in)
+    final bssid = await WiFiService.instance.getWifiBSSID();
+    if (bssid == null) {
+      return GeofenceValidationResult(
+        isValid: false,
+        message: 'يرجى الاتصال بشبكة الواي فاي الخاصة بالفرع',
+      );
+    }
+
+    // For now, accept any BSSID - TODO: Implement proper branch BSSID validation
+    // final isBssidValid = await WiFiService.isBssidValidForBranch(bssid, branch.id);
+    // if (!isBssidValid) {
+    //   return GeofenceValidationResult(
+    //     isValid: false,
+    //     message: 'أنت متصل بشبكة واي فاي غير صحيحة.',
+    //   );
+    // }
+
+    // Success - both location and WiFi are valid
+    return GeofenceValidationResult(
+      isValid: true,
+      message: 'الموقع والشبكة صحيحان',
+      position: position,
+      bssid: bssid,
+    );
+  }
+
+  /// --- New Method: Validate for Check-Out (GPS only) ---
+  static Future<GeofenceValidationResult> validateForCheckOut(Employee employee) async {
+    // 1. Get current location
+    Position position;
+    try {
+      position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        forceAndroidLocationManager: true,
+        timeLimit: const Duration(seconds: 15),
+      );
+    } catch (e) {
+      return GeofenceValidationResult(isValid: false, message: 'فشل في تحديد الموقع: $e');
+    }
+
+    // For now, we'll use a simple distance check with hardcoded coordinates
+    // TODO: Implement proper branch lookup from API
+    const double branchLat = 31.2652; // Default location
+    const double branchLng = 29.9863; // Default location
+    const double geofenceRadius = 500.0; // Default radius
+
+    final distance = Geolocator.distanceBetween(
+      position.latitude,
+      position.longitude,
+      branchLat,
+      branchLng,
+    );
+
+    if (distance > geofenceRadius) {
+      return GeofenceValidationResult(
+        isValid: false,
+        message: 'يجب أن تكون داخل نطاق الفرع (المسافة: ${distance.round()} متر)',
+      );
+    }
+
+    // 2. Location is valid (WiFi not required for check-out)
+    return GeofenceValidationResult(
+      isValid: true,
+      message: 'الموقع صحيح',
+      position: position,
+      bssid: null, // Not required for check-out
+    );
+  }
 }
