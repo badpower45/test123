@@ -62,10 +62,10 @@ class GeofenceService {
     }
 
     _isMonitoring = true;
-    
-    // Check location every 10 minutes for battery saving
+
+    // Check location every 15 minutes for better battery saving (increased from 10)
     _locationCheckTimer = Timer.periodic(
-      const Duration(minutes: 10),
+      const Duration(minutes: 15),
       (_) => _checkGeofence(),
     );
 
@@ -90,25 +90,25 @@ class GeofenceService {
     if (!_isMonitoring || _currentEmployeeId == null) return;
 
     try {
-      // Get current position with BEST accuracy and multiple attempts
+      // Get current position with BALANCED accuracy for battery efficiency
       Position? position;
       int attempts = 0;
-      const maxAttempts = 3;
-      
+      const maxAttempts = 2; // Reduced from 3 to 2 for better battery
+
       while (attempts < maxAttempts && position == null) {
         try {
           position = await Geolocator.getCurrentPosition(
-            desiredAccuracy: LocationAccuracy.high,
-            forceAndroidLocationManager: true,
-            timeLimit: const Duration(seconds: 15),
-          ).timeout(const Duration(seconds: 20));
-          
-          // Verify accuracy is good enough (less than 50 meters)
-          if (position.accuracy > 50) {
+            desiredAccuracy: LocationAccuracy.balanced, // Changed from high to balanced
+            forceAndroidLocationManager: false, // Let system choose best provider
+            timeLimit: const Duration(seconds: 10), // Reduced from 15
+          ).timeout(const Duration(seconds: 12)); // Reduced from 20
+
+          // Verify accuracy is acceptable (less than 100 meters for periodic checks)
+          if (position.accuracy > 100) {
             print('[GeofenceService] Poor accuracy (${position.accuracy}m), retrying...');
             position = null;
             attempts++;
-            await Future.delayed(const Duration(seconds: 2));
+            await Future.delayed(const Duration(milliseconds: 1500)); // Reduced delay
           } else {
             break;
           }
@@ -116,13 +116,13 @@ class GeofenceService {
           attempts++;
           print('[GeofenceService] Attempt $attempts failed: $e');
           if (attempts < maxAttempts) {
-            await Future.delayed(const Duration(seconds: 2));
+            await Future.delayed(const Duration(milliseconds: 1500));
           }
         }
       }
-      
+
       if (position == null) {
-        print('[GeofenceService] Failed to get accurate location after $maxAttempts attempts');
+        print('[GeofenceService] Failed to get location after $maxAttempts attempts');
         return;
       }
 
@@ -138,17 +138,23 @@ class GeofenceService {
 
       final isWithinGeofence = distance <= _geofenceRadius!;
 
-      // Check WiFi BSSID if required
+      // Smart WiFi checking: only check if inside geofence or close to it
+      // This saves battery by not checking WiFi when employee is far away
       bool isCorrectWifi = true;
-      if (_requiredBssids.isNotEmpty) {
+      if (_requiredBssids.isNotEmpty && distance <= (_geofenceRadius! * 1.5)) {
         try {
           final wifiBSSID = await WiFiService.getCurrentWifiBssidValidated();
           isCorrectWifi = _requiredBssids.contains(wifiBSSID.toUpperCase());
           print('[GeofenceService] WiFi check: BSSID=$wifiBSSID, isCorrect=$isCorrectWifi');
         } catch (e) {
           print('[GeofenceService] Failed to check WiFi: $e');
-          isCorrectWifi = false;
+          // Only consider WiFi invalid if we're inside geofence
+          // If outside geofence, WiFi check is not critical
+          isCorrectWifi = !isWithinGeofence;
         }
+      } else if (_requiredBssids.isNotEmpty) {
+        // Employee is far from geofence, skip WiFi check to save battery
+        print('[GeofenceService] Skipping WiFi check (too far from geofence)');
       }
 
       // If outside geofence or wrong WiFi
