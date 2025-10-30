@@ -76,4 +76,88 @@ class ManagerApiService {
       throw Exception(errorBody['error'] ?? 'فشل قبول العذر: ${response.statusCode}');
     }
   }
+
+  // دالة لمراجعة (قبول/رفض) طلبات الإجازة
+  static Future<Map<String, dynamic>> reviewLeaveRequest({
+    required String requestId,
+    required String managerId,
+    required bool approve,
+    String? notes,
+  }) async {
+    final url = '$apiBaseUrl/api/leave/requests/$requestId/review';
+    print('📝 Reviewing leave request: $requestId, approve: $approve');
+
+    final response = await http.post(
+      Uri.parse(url),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'action': approve ? 'approve' : 'reject',
+        'reviewer_id': managerId,
+        if (notes != null) 'notes': notes,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
+      throw Exception(errorBody['error'] ?? 'فشل مراجعة طلب الإجازة: ${response.statusCode}');
+    }
+  }
+
+  // دالة لمراجعة (قبول/رفض) طلبات السلف
+  static Future<Map<String, dynamic>> reviewAdvanceRequest({
+    required String advanceId,
+    required String managerId,
+    required bool approve,
+    String? notes,
+  }) async {
+    final url = '$apiBaseUrl/api/advances/$advanceId/review';
+    print('💰 Reviewing advance request: $advanceId, approve: $approve');
+
+    final response = await http.post(
+      Uri.parse(url),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'action': approve ? 'approve' : 'reject',
+        'reviewer_id': managerId,
+        if (notes != null) 'notes': notes,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
+      throw Exception(errorBody['error'] ?? 'فشل مراجعة طلب السلفة: ${response.statusCode}');
+    }
+  }
+
+  // دالة لمراجعة (قبول/رفض) طلبات الحضور
+  static Future<Map<String, dynamic>> reviewAttendanceRequest({
+    required String requestId,
+    required String managerId,
+    required bool approve,
+    String? notes,
+  }) async {
+    final url = '$apiBaseUrl/api/attendance/requests/$requestId/review';
+    print('⏰ Reviewing attendance request: $requestId, approve: $approve');
+
+    final response = await http.post(
+      Uri.parse(url),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'action': approve ? 'approve' : 'reject',
+        'reviewer_id': managerId,
+        if (notes != null) 'notes': notes,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
+      throw Exception(errorBody['error'] ?? 'فشل مراجعة طلب الحضور: ${response.statusCode}');
+    }
+  }
 }
