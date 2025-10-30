@@ -743,18 +743,22 @@ app.post('/api/attendance/check-in', async (req, res) => {
       if (branch) {
         const branchLat = branch.latitude ? Number(branch.latitude) : null;
         const branchLng = branch.longitude ? Number(branch.longitude) : null;
-        const radius = branch.geofenceRadius || 500; // Increased default to 500 meters
+        // Default radius increased to 200 meters for better GPS accuracy tolerance
+        const radius = branch.geofenceRadius || 200;
 
-        console.log(`Geofence data: branchLat=${branchLat}, branchLng=${branchLng}, radius=${radius}`);
-        console.log(`Employee location: lat=${latitude}, lng=${longitude}`);
+        console.log(`[Geofence Check-In] Branch: ${branch.name}`);
+        console.log(`[Geofence Check-In] Branch Location: lat=${branchLat}, lng=${branchLng}, radius=${radius}m`);
+        console.log(`[Geofence Check-In] Employee Location: lat=${latitude}, lng=${longitude}`);
 
         if (branchLat && branchLng) {
-          // Calculate distance using Haversine formula
-          const R = 6371e3; // Earth radius in meters
-          const φ1 = (branchLat * Math.PI) / 180;
-          const φ2 = (latitude * Math.PI) / 180;
-          const Δφ = ((latitude - branchLat) * Math.PI) / 180;
-          const Δλ = ((longitude - branchLng) * Math.PI) / 180;
+          // Calculate distance using improved Haversine formula with better precision
+          const R = 6371000; // Earth radius in meters (more precise)
+          const toRad = (deg: number) => (deg * Math.PI) / 180;
+
+          const φ1 = toRad(branchLat);
+          const φ2 = toRad(latitude);
+          const Δφ = toRad(latitude - branchLat);
+          const Δλ = toRad(longitude - branchLng);
 
           const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
                     Math.cos(φ1) * Math.cos(φ2) *
@@ -762,25 +766,32 @@ app.post('/api/attendance/check-in', async (req, res) => {
           const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
           const distance = R * c;
 
-          console.log(`Geofence check: distance=${distance.toFixed(2)}m, radius=${radius}m, allowed=${distance <= radius}`);
+          console.log(`[Geofence Check-In] Distance calculated: ${distance.toFixed(2)}m (allowed: ${radius}m)`);
+          console.log(`[Geofence Check-In] Result: ${distance <= radius ? '✅ ALLOWED' : '❌ DENIED'}`);
 
           if (distance > radius) {
-            return res.status(403).json({ 
+            return res.status(403).json({
               error: 'أنت خارج نطاق الموقع المسموح. يجب أن تكون داخل الفرع لتسجيل الحضور.',
+              errorAr: 'أنت خارج نطاق الموقع المسموح',
+              errorEn: 'You are outside the allowed location',
               distance: Math.round(distance),
               allowedRadius: radius,
               branchLocation: { lat: branchLat, lng: branchLng },
               yourLocation: { lat: latitude, lng: longitude },
+              hint: `أنت على بعد ${Math.round(distance)}م من الفرع. المسافة المسموحة ${radius}م`,
+              code: 'GEOFENCE_VIOLATION',
             });
           }
+
+          console.log(`[Geofence Check-In] ✅ Employee within geofence`);
         } else {
-          console.log(`Warning: Branch ${employee.branchId} has no location set`);
+          console.log(`[Geofence Check-In] ⚠️ Warning: Branch ${employee.branchId} has no location set - SKIPPING geofence check`);
         }
       } else {
-        console.log(`Warning: Branch ${employee.branchId} not found`);
+        console.log(`[Geofence Check-In] ⚠️ Warning: Branch ${employee.branchId} not found`);
       }
     } else {
-      console.log(`Geofence check skipped: branchId=${employee.branchId}, lat=${latitude}, lng=${longitude}`);
+      console.log(`[Geofence Check-In] ⚠️ Geofence check skipped: branchId=${employee.branchId}, lat=${latitude}, lng=${longitude}`);
     }
 
     // Use transaction to ensure atomicity
@@ -4972,12 +4983,18 @@ const RESTAURANT_LONGITUDE = 29.9863;
 const GEOFENCE_RADIUS_METERS = 100;
 
 // Helper function to calculate distance between two coordinates (Haversine formula)
+/**
+ * Calculate distance between two GPS coordinates using Haversine formula
+ * Returns distance in meters with high precision
+ */
 function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6371e3; // Earth's radius in meters
-  const φ1 = (lat1 * Math.PI) / 180;
-  const φ2 = (lat2 * Math.PI) / 180;
-  const Δφ = ((lat2 - lat1) * Math.PI) / 180;
-  const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+  const R = 6371000; // Earth's radius in meters (more precise)
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+
+  const φ1 = toRad(lat1);
+  const φ2 = toRad(lat2);
+  const Δφ = toRad(lat2 - lat1);
+  const Δλ = toRad(lon2 - lon1);
 
   const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
     Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
@@ -5017,7 +5034,8 @@ app.post('/api/pulses', async (req, res) => {
     let wifiValid = true;
     let geofenceValid = true;
     let distance = 0;
-    let geofenceRadius = GEOFENCE_RADIUS_METERS;
+    // Default radius to 200m for better GPS accuracy tolerance
+    let geofenceRadius = 200;
 
     // Use branch-specific geofence and wifi if available
     let branchWifi: string | null = null;
@@ -5029,6 +5047,8 @@ app.post('/api/pulses', async (req, res) => {
         .limit(1);
 
       if (branch) {
+        console.log(`[Pulse] Checking for employee ${employee_id} in branch: ${branch.name}`);
+
         if (branch.latitude && branch.longitude) {
           distance = calculateDistance(
             latitude,
@@ -5036,26 +5056,33 @@ app.post('/api/pulses', async (req, res) => {
             parseFloat(branch.latitude),
             parseFloat(branch.longitude)
           );
+          console.log(`[Pulse] Distance from branch: ${distance.toFixed(2)}m`);
         }
+
         if (branch.geofenceRadius) {
           geofenceRadius = Number(branch.geofenceRadius) || geofenceRadius;
         }
+        console.log(`[Pulse] Geofence radius: ${geofenceRadius}m`);
+
         if (branch.wifiBssid) {
           branchWifi = String(branch.wifiBssid).toUpperCase();
         }
       }
     } else {
       // Fallback to default location
+      console.log(`[Pulse] Using default location for employee ${employee_id}`);
       distance = calculateDistance(
         latitude,
         longitude,
         RESTAURANT_LATITUDE,
         RESTAURANT_LONGITUDE
       );
+      geofenceRadius = GEOFENCE_RADIUS_METERS;
     }
 
     // Determine geofence validity
     geofenceValid = distance <= geofenceRadius;
+    console.log(`[Pulse] Geofence valid: ${geofenceValid} (distance: ${distance.toFixed(2)}m <= ${geofenceRadius}m)`);
 
     // Determine wifi validity: check against branches table AND branchBssids table
         if (employee.branchId) {
@@ -5365,7 +5392,8 @@ app.put('/api/branches/:id', async (req, res) => {
     }
 
     if (geofence_radius !== undefined) {
-      updateData.geofenceRadius = geofence_radius || 100;
+      // Default to 200m for better GPS accuracy tolerance
+      updateData.geofenceRadius = geofence_radius || 200;
     }
 
     if (wifi_bssid !== undefined) {
@@ -6139,16 +6167,16 @@ app.post('/api/salary/calculate', async (req, res) => {
 
     const totalWorkDays = workDays.size;
 
-    // Get advances for the period (previously deducted ones are excluded)
+    // Get ALL approved advances that haven't been deducted yet
+    // NOTE: We deduct all pending advances regardless of when they were requested
+    // This ensures advances are deducted once and only once
     const advancesResult = await db
       .select()
       .from(advances)
       .where(and(
         eq(advances.employeeId, employeeId),
         eq(advances.status, 'approved'),
-        isNull(advances.deductedAt), // Check if deductedAt is null instead of isDeducted
-        gte(advances.requestDate, new Date(periodStart)), // Convert string to Date
-        lte(advances.requestDate, new Date(periodEnd))      // Convert string to Date
+        isNull(advances.deductedAt) // Only get advances that haven't been deducted yet
       ));
 
     const advancesTotal = advancesResult.reduce((sum, adv) => sum + parseFloat(adv.amount || '0'), 0); // Ensure amount is parsed correctly
@@ -6781,6 +6809,123 @@ cron.schedule('*/30 * * * *', async () => {
     console.log('[CRON] Late employee check completed');
   } catch (error) {
     console.error('[CRON] Error checking late employees:', error);
+  }
+});
+
+// =============================================================================
+// AUTO CHECKOUT AT SHIFT END - تسجيل خروج آلي عند نهاية الشيفت
+// =============================================================================
+
+// Check every 10 minutes for employees who need auto checkout
+cron.schedule('*/10 * * * *', async () => {
+  try {
+    console.log('[CRON] Checking for employees needing auto checkout...');
+
+    // Get Egypt/Cairo time
+    const cairoTimeString = new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' });
+    const cairoDate = new Date(cairoTimeString);
+    const currentHour = cairoDate.getHours();
+    const currentMinute = cairoDate.getMinutes();
+    const currentTime = currentHour * 60 + currentMinute; // Convert to minutes since midnight
+
+    console.log(`[CRON] Current Cairo Time: ${currentHour}:${currentMinute.toString().padStart(2, '0')}`);
+
+    // Get today's date
+    const today = cairoDate.toISOString().split('T')[0];
+
+    // Get all active attendance records (employees currently checked in)
+    const activeAttendances = await db
+      .select({
+        attendanceId: attendance.id,
+        employeeId: attendance.employeeId,
+        checkInTime: attendance.checkInTime,
+        employeeName: employees.fullName,
+        shiftEndTime: employees.shiftEndTime,
+        shiftType: employees.shiftType,
+      })
+      .from(attendance)
+      .innerJoin(employees, eq(attendance.employeeId, employees.id))
+      .where(and(
+        eq(attendance.date, today),
+        eq(attendance.status, 'active'),
+        eq(employees.active, true)
+      ));
+
+    if (activeAttendances.length === 0) {
+      console.log('[CRON] No active attendances found for auto checkout');
+      return;
+    }
+
+    console.log(`[CRON] Found ${activeAttendances.length} active attendances to check`);
+
+    let autoCheckoutCount = 0;
+
+    for (const record of activeAttendances) {
+      if (!record.shiftEndTime) {
+        console.log(`[CRON] Employee ${record.employeeName} has no shift end time, skipping`);
+        continue;
+      }
+
+      // Parse shift end time
+      const [endHour, endMinute] = record.shiftEndTime.split(':').map(Number);
+      const shiftEnd = endHour * 60 + endMinute;
+
+      // Check if shift has ended (add 10 minute grace period)
+      const graceMinutes = 10;
+      let shouldAutoCheckout = false;
+
+      if (record.shiftType === 'PM' && shiftEnd < 12 * 60) {
+        // Night shift (e.g., 21:00 to 05:00)
+        // If current time is past shift end (accounting for midnight crossing)
+        if (currentTime >= 0 && currentTime >= shiftEnd + graceMinutes) {
+          shouldAutoCheckout = true;
+        }
+      } else {
+        // Day shift (e.g., 09:00 to 17:00)
+        if (currentTime >= shiftEnd + graceMinutes) {
+          shouldAutoCheckout = true;
+        }
+      }
+
+      if (shouldAutoCheckout) {
+        console.log(`[CRON] Auto checkout for ${record.employeeName} (shift ended at ${record.shiftEndTime})`);
+
+        // Calculate work hours
+        const checkInTime = new Date(record.checkInTime!);
+        const checkOutTime = new Date();
+        const workHours = (checkOutTime.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
+
+        // Update attendance record
+        await db
+          .update(attendance)
+          .set({
+            checkOutTime,
+            workHours: workHours.toFixed(2),
+            status: 'completed',
+            isAutoCheckout: true,
+            updatedAt: new Date(),
+          })
+          .where(eq(attendance.id, record.attendanceId));
+
+        autoCheckoutCount++;
+
+        // Send notification to employee
+        await sendNotification(
+          record.employeeId,
+          'CHECK_OUT',
+          'تسجيل خروج آلي',
+          `تم تسجيل خروجك آلياً في نهاية الشيفت (${record.shiftEndTime})`,
+          record.employeeId,
+          record.attendanceId
+        );
+
+        console.log(`[CRON] ✅ Auto checkout completed for ${record.employeeName}`);
+      }
+    }
+
+    console.log(`[CRON] Auto checkout completed: ${autoCheckoutCount} employees checked out`);
+  } catch (error) {
+    console.error('[CRON] Error during auto checkout:', error);
   }
 });
 

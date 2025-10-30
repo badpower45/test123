@@ -6,7 +6,7 @@ import bcrypt from 'bcrypt';
 import cron from 'node-cron';
 import { db } from './db.js';
 import { employees, attendance, attendanceRequests, leaveRequests, advances, deductions, absenceNotifications, pulses, branches, branchBssids, branchManagers, breaks, deviceSessions, notifications, salaryCalculations, geofenceViolations } from '../shared/schema.js';
-import { eq, and, gte, lte, lt, desc, sql, inArray, isNull } from 'drizzle-orm';
+import { eq, and, gte, lte, lt, desc, sql, inArray, isNull, or } from 'drizzle-orm';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const app = express();
@@ -89,6 +89,66 @@ async function getOwnerRecord(ownerId) {
         return null;
     }
     return owner;
+}
+/**
+ * Check if reviewer can approve a request from an employee
+ * Rules:
+ * - If employee is a MANAGER, only OWNER can approve
+ * - If employee is STAFF, MANAGER or OWNER can approve
+ */
+async function canApproveRequest(reviewerId, employeeId) {
+    try {
+        // Get reviewer info
+        const [reviewer] = await db
+            .select()
+            .from(employees)
+            .where(eq(employees.id, reviewerId))
+            .limit(1);
+        if (!reviewer) {
+            return { canApprove: false, reason: 'Reviewer not found' };
+        }
+        // Get employee info
+        const [employee] = await db
+            .select()
+            .from(employees)
+            .where(eq(employees.id, employeeId))
+            .limit(1);
+        if (!employee) {
+            return { canApprove: false, reason: 'Employee not found' };
+        }
+        const reviewerRole = reviewer.role;
+        const employeeRole = employee.role;
+        // Owner can approve anything
+        if (reviewerRole === 'owner') {
+            return { canApprove: true };
+        }
+        // If employee is a manager, only owner can approve
+        if (employeeRole === 'manager') {
+            return {
+                canApprove: false,
+                reason: 'Only owner can approve requests from managers. Manager requests must be reviewed by owner.'
+            };
+        }
+        // If employee is staff and reviewer is manager, check if they're in same branch
+        if (reviewerRole === 'manager' && (employeeRole === 'staff' || employeeRole === 'monitor' || employeeRole === 'hr')) {
+            // Check if they're in the same branch
+            if (reviewer.branchId && employee.branchId && reviewer.branchId === employee.branchId) {
+                return { canApprove: true };
+            }
+            return {
+                canApprove: false,
+                reason: 'Manager can only approve requests from employees in their branch'
+            };
+        }
+        return {
+            canApprove: false,
+            reason: 'Insufficient permissions to approve this request'
+        };
+    }
+    catch (error) {
+        console.error('Error checking approval permissions:', error);
+        return { canApprove: false, reason: 'Error checking permissions' };
+    }
 }
 /**
  * Send notification to user
@@ -210,6 +270,50 @@ app.post('/api/branch/request/:type/:id/:action', async (req, res) => {
         const validActions = ['approve', 'reject', 'postpone'];
         if (!validTypes.includes(type) || !validActions.includes(action)) {
             return res.status(400).json({ error: 'Invalid type or action' });
+        }
+        const reviewerId = req.body?.reviewer_id || req.body?.manager_id;
+        if (!reviewerId) {
+            return res.status(400).json({ error: 'reviewer_id or manager_id is required' });
+        }
+        // Get the employee ID from the request based on type
+        let employeeId;
+        if (type === 'break') {
+            const [breakRecord] = await db.select().from(breaks).where(eq(breaks.id, id)).limit(1);
+            if (!breakRecord) {
+                return res.status(404).json({ error: 'Break request not found' });
+            }
+            employeeId = breakRecord.employeeId;
+        }
+        else {
+            let table;
+            switch (type) {
+                case 'leave':
+                    table = leaveRequests;
+                    break;
+                case 'advance':
+                    table = advances;
+                    break;
+                case 'attendance':
+                    table = attendanceRequests;
+                    break;
+                case 'absence':
+                    table = absenceNotifications;
+                    break;
+                default: return res.status(400).json({ error: 'Invalid request type' });
+            }
+            const [record] = await db.select().from(table).where(eq(table.id, id)).limit(1);
+            if (!record) {
+                return res.status(404).json({ error: 'Request not found' });
+            }
+            employeeId = record.employeeId;
+        }
+        // Check if reviewer can approve this request
+        const approvalCheck = await canApproveRequest(reviewerId, employeeId);
+        if (!approvalCheck.canApprove) {
+            return res.status(403).json({
+                error: 'Forbidden',
+                message: approvalCheck.reason || 'You do not have permission to approve this request'
+            });
         }
         if (type === 'break') {
             const statusUpdate = action === 'approve' ? 'APPROVED' : action === 'reject' ? 'REJECTED' : 'POSTPONED';
@@ -564,42 +668,51 @@ app.post('/api/attendance/check-in', async (req, res) => {
             if (branch) {
                 const branchLat = branch.latitude ? Number(branch.latitude) : null;
                 const branchLng = branch.longitude ? Number(branch.longitude) : null;
-                const radius = branch.geofenceRadius || 500; // Increased default to 500 meters
-                console.log(`Geofence data: branchLat=${branchLat}, branchLng=${branchLng}, radius=${radius}`);
-                console.log(`Employee location: lat=${latitude}, lng=${longitude}`);
+                // Default radius increased to 200 meters for better GPS accuracy tolerance
+                const radius = branch.geofenceRadius || 200;
+                console.log(`[Geofence Check-In] Branch: ${branch.name}`);
+                console.log(`[Geofence Check-In] Branch Location: lat=${branchLat}, lng=${branchLng}, radius=${radius}m`);
+                console.log(`[Geofence Check-In] Employee Location: lat=${latitude}, lng=${longitude}`);
                 if (branchLat && branchLng) {
-                    // Calculate distance using Haversine formula
-                    const R = 6371e3; // Earth radius in meters
-                    const φ1 = (branchLat * Math.PI) / 180;
-                    const φ2 = (latitude * Math.PI) / 180;
-                    const Δφ = ((latitude - branchLat) * Math.PI) / 180;
-                    const Δλ = ((longitude - branchLng) * Math.PI) / 180;
+                    // Calculate distance using improved Haversine formula with better precision
+                    const R = 6371000; // Earth radius in meters (more precise)
+                    const toRad = (deg) => (deg * Math.PI) / 180;
+                    const φ1 = toRad(branchLat);
+                    const φ2 = toRad(latitude);
+                    const Δφ = toRad(latitude - branchLat);
+                    const Δλ = toRad(longitude - branchLng);
                     const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
                         Math.cos(φ1) * Math.cos(φ2) *
                             Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
                     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
                     const distance = R * c;
-                    console.log(`Geofence check: distance=${distance.toFixed(2)}m, radius=${radius}m, allowed=${distance <= radius}`);
+                    console.log(`[Geofence Check-In] Distance calculated: ${distance.toFixed(2)}m (allowed: ${radius}m)`);
+                    console.log(`[Geofence Check-In] Result: ${distance <= radius ? '✅ ALLOWED' : '❌ DENIED'}`);
                     if (distance > radius) {
                         return res.status(403).json({
                             error: 'أنت خارج نطاق الموقع المسموح. يجب أن تكون داخل الفرع لتسجيل الحضور.',
+                            errorAr: 'أنت خارج نطاق الموقع المسموح',
+                            errorEn: 'You are outside the allowed location',
                             distance: Math.round(distance),
                             allowedRadius: radius,
                             branchLocation: { lat: branchLat, lng: branchLng },
                             yourLocation: { lat: latitude, lng: longitude },
+                            hint: `أنت على بعد ${Math.round(distance)}م من الفرع. المسافة المسموحة ${radius}م`,
+                            code: 'GEOFENCE_VIOLATION',
                         });
                     }
+                    console.log(`[Geofence Check-In] ✅ Employee within geofence`);
                 }
                 else {
-                    console.log(`Warning: Branch ${employee.branchId} has no location set`);
+                    console.log(`[Geofence Check-In] ⚠️ Warning: Branch ${employee.branchId} has no location set - SKIPPING geofence check`);
                 }
             }
             else {
-                console.log(`Warning: Branch ${employee.branchId} not found`);
+                console.log(`[Geofence Check-In] ⚠️ Warning: Branch ${employee.branchId} not found`);
             }
         }
         else {
-            console.log(`Geofence check skipped: branchId=${employee.branchId}, lat=${latitude}, lng=${longitude}`);
+            console.log(`[Geofence Check-In] ⚠️ Geofence check skipped: branchId=${employee.branchId}, lat=${latitude}, lng=${longitude}`);
         }
         // Use transaction to ensure atomicity
         const result = await db.transaction(async (tx) => {
@@ -995,6 +1108,9 @@ app.post('/api/attendance/requests/:requestId/review', async (req, res) => {
         if (!action || !['approve', 'reject'].includes(action)) {
             return res.status(400).json({ error: 'Action must be approve or reject' });
         }
+        if (!reviewer_id) {
+            return res.status(400).json({ error: 'reviewer_id is required' });
+        }
         // Get request details
         const [request] = await db
             .select()
@@ -1003,6 +1119,14 @@ app.post('/api/attendance/requests/:requestId/review', async (req, res) => {
             .limit(1);
         if (!request) {
             return res.status(404).json({ error: 'Request not found' });
+        }
+        // Check if reviewer can approve this request
+        const approvalCheck = await canApproveRequest(reviewer_id, request.employeeId);
+        if (!approvalCheck.canApprove) {
+            return res.status(403).json({
+                error: 'Forbidden',
+                message: approvalCheck.reason || 'You do not have permission to approve this request'
+            });
         }
         // Update request status
         const updateResult = await db
@@ -1202,6 +1326,26 @@ app.post('/api/leave/requests/:requestId/review', async (req, res) => {
         const { action, reviewer_id, notes } = req.body;
         if (!action || !['approve', 'reject'].includes(action)) {
             return res.status(400).json({ error: 'Action must be approve or reject' });
+        }
+        if (!reviewer_id) {
+            return res.status(400).json({ error: 'reviewer_id is required' });
+        }
+        // Get request details
+        const [request] = await db
+            .select()
+            .from(leaveRequests)
+            .where(eq(leaveRequests.id, requestId))
+            .limit(1);
+        if (!request) {
+            return res.status(404).json({ error: 'Request not found' });
+        }
+        // Check if reviewer can approve this request
+        const approvalCheck = await canApproveRequest(reviewer_id, request.employeeId);
+        if (!approvalCheck.canApprove) {
+            return res.status(403).json({
+                error: 'Forbidden',
+                message: approvalCheck.reason || 'You do not have permission to approve this request'
+            });
         }
         const updateResult = await db
             .update(leaveRequests)
@@ -1508,6 +1652,26 @@ app.post('/api/advances/:advanceId/review', async (req, res) => {
         if (!action || !['approve', 'reject'].includes(action)) {
             return res.status(400).json({ error: 'Action must be approve or reject' });
         }
+        if (!reviewer_id) {
+            return res.status(400).json({ error: 'reviewer_id is required' });
+        }
+        // Get advance details
+        const [advance] = await db
+            .select()
+            .from(advances)
+            .where(eq(advances.id, advanceId))
+            .limit(1);
+        if (!advance) {
+            return res.status(404).json({ error: 'Advance request not found' });
+        }
+        // Check if reviewer can approve this request
+        const approvalCheck = await canApproveRequest(reviewer_id, advance.employeeId);
+        if (!approvalCheck.canApprove) {
+            return res.status(403).json({
+                error: 'Forbidden',
+                message: approvalCheck.reason || 'You do not have permission to approve this request'
+            });
+        }
         // Update advance status
         const updateResult = await db
             .update(advances)
@@ -1563,6 +1727,9 @@ app.post('/api/absence/:notificationId/review', async (req, res) => {
         if (!action || !['approve', 'reject'].includes(action)) {
             return res.status(400).json({ error: 'Action must be approve or reject' });
         }
+        if (!reviewer_id) {
+            return res.status(400).json({ error: 'reviewer_id is required' });
+        }
         // Get notification
         const [notification] = await db
             .select()
@@ -1571,6 +1738,14 @@ app.post('/api/absence/:notificationId/review', async (req, res) => {
             .limit(1);
         if (!notification) {
             return res.status(404).json({ error: 'Notification not found' });
+        }
+        // Check if reviewer can approve this request
+        const approvalCheck = await canApproveRequest(reviewer_id, notification.employeeId);
+        if (!approvalCheck.canApprove) {
+            return res.status(403).json({
+                error: 'Forbidden',
+                message: approvalCheck.reason || 'You do not have permission to approve this request'
+            });
         }
         let deductionAmount = '0';
         // If rejected → apply 2 days deduction based on employee's shift hours
@@ -2450,11 +2625,13 @@ app.post('/api/manager/absence-notifications/:id/apply-deduction', async (req, r
         if (!notification) {
             return res.status(404).json({ error: 'Absence notification not found or already reviewed' });
         }
-        // Verify manager has access to this employee's branch
-        const [employee] = await db.select().from(employees).where(eq(employees.id, notification.employeeId)).limit(1);
-        const [manager] = await db.select().from(employees).where(eq(employees.id, managerId)).limit(1);
-        if (!employee || !manager || employee.branchId !== manager.branchId) {
-            return res.status(403).json({ error: 'Access denied: Manager can only review notifications for their branch employees' });
+        // Check if manager can approve this absence notification
+        const approvalCheck = await canApproveRequest(managerId, notification.employeeId);
+        if (!approvalCheck.canApprove) {
+            return res.status(403).json({
+                error: 'Forbidden',
+                message: approvalCheck.reason || 'You do not have permission to apply deduction for this employee'
+            });
         }
         const deductionValue = parseFloat(deductionAmount);
         // Use transaction to update notification and create deduction
@@ -2510,11 +2687,13 @@ app.post('/api/manager/absence-notifications/:id/excuse', async (req, res) => {
         if (!notification) {
             return res.status(404).json({ error: 'Absence notification not found or already reviewed' });
         }
-        // Verify manager has access to this employee's branch
-        const [employee] = await db.select().from(employees).where(eq(employees.id, notification.employeeId)).limit(1);
-        const [manager] = await db.select().from(employees).where(eq(employees.id, managerId)).limit(1);
-        if (!employee || !manager || employee.branchId !== manager.branchId) {
-            return res.status(403).json({ error: 'Access denied: Manager can only review notifications for their branch employees' });
+        // Check if manager can excuse this absence notification
+        const approvalCheck = await canApproveRequest(managerId, notification.employeeId);
+        if (!approvalCheck.canApprove) {
+            return res.status(403).json({
+                error: 'Forbidden',
+                message: approvalCheck.reason || 'You do not have permission to excuse this employee'
+            });
         }
         // Update absence notification to excused
         await db
@@ -2539,6 +2718,23 @@ app.post('/api/manager/absence-notifications/:id/excuse', async (req, res) => {
 });
 app.get('/api/manager/dashboard', async (req, res) => {
     try {
+        const managerId = req.query.manager_id;
+        if (!managerId) {
+            return res.status(400).json({ error: 'manager_id is required' });
+        }
+        // Get manager details
+        const [manager] = await db
+            .select()
+            .from(employees)
+            .where(eq(employees.id, managerId))
+            .limit(1);
+        if (!manager) {
+            return res.status(404).json({ error: 'Manager not found' });
+        }
+        if (!manager.branchId) {
+            return res.status(400).json({ error: 'Manager is not assigned to any branch' });
+        }
+        // Only show pending requests from NON-MANAGER employees in the same branch
         const pendingAttendanceRequests = await db
             .select({
             id: attendanceRequests.id,
@@ -2552,7 +2748,7 @@ app.get('/api/manager/dashboard', async (req, res) => {
         })
             .from(attendanceRequests)
             .innerJoin(employees, eq(attendanceRequests.employeeId, employees.id))
-            .where(eq(attendanceRequests.status, 'pending'))
+            .where(and(eq(attendanceRequests.status, 'pending'), eq(employees.branchId, manager.branchId), or(eq(employees.role, 'staff'), eq(employees.role, 'hr'), eq(employees.role, 'monitor'))))
             .orderBy(desc(attendanceRequests.createdAt));
         // Ensure status and requestType are sent as strings
         const normalizedAttendanceRequests = pendingAttendanceRequests.map(a => ({
@@ -2576,7 +2772,7 @@ app.get('/api/manager/dashboard', async (req, res) => {
         })
             .from(leaveRequests)
             .innerJoin(employees, eq(leaveRequests.employeeId, employees.id))
-            .where(eq(leaveRequests.status, 'pending'))
+            .where(and(eq(leaveRequests.status, 'pending'), eq(employees.branchId, manager.branchId), or(eq(employees.role, 'staff'), eq(employees.role, 'hr'), eq(employees.role, 'monitor'))))
             .orderBy(desc(leaveRequests.createdAt));
         const pendingAdvances = await db
             .select({
@@ -2591,7 +2787,7 @@ app.get('/api/manager/dashboard', async (req, res) => {
         })
             .from(advances)
             .innerJoin(employees, eq(advances.employeeId, employees.id))
-            .where(eq(advances.status, 'pending'))
+            .where(and(eq(advances.status, 'pending'), eq(employees.branchId, manager.branchId), or(eq(employees.role, 'staff'), eq(employees.role, 'hr'), eq(employees.role, 'monitor'))))
             .orderBy(desc(advances.requestDate));
         const pendingAbsences = await db
             .select({
@@ -2605,7 +2801,7 @@ app.get('/api/manager/dashboard', async (req, res) => {
         })
             .from(absenceNotifications)
             .innerJoin(employees, eq(absenceNotifications.employeeId, employees.id))
-            .where(eq(absenceNotifications.status, 'pending'))
+            .where(and(eq(absenceNotifications.status, 'pending'), eq(employees.branchId, manager.branchId), or(eq(employees.role, 'staff'), eq(employees.role, 'hr'), eq(employees.role, 'monitor'))))
             .orderBy(desc(absenceNotifications.notifiedAt));
         const pendingBreaks = await db
             .select({
@@ -2618,7 +2814,7 @@ app.get('/api/manager/dashboard', async (req, res) => {
         })
             .from(breaks)
             .innerJoin(employees, eq(breaks.employeeId, employees.id))
-            .where(eq(breaks.status, 'PENDING'))
+            .where(and(eq(breaks.status, 'PENDING'), eq(employees.branchId, manager.branchId), or(eq(employees.role, 'staff'), eq(employees.role, 'hr'), eq(employees.role, 'monitor'))))
             .orderBy(desc(breaks.createdAt));
         // Ensure status is sent as string
         const normalizedBreaks = pendingBreaks.map(b => ({
@@ -3937,12 +4133,17 @@ const RESTAURANT_LATITUDE = 31.2652;
 const RESTAURANT_LONGITUDE = 29.9863;
 const GEOFENCE_RADIUS_METERS = 100;
 // Helper function to calculate distance between two coordinates (Haversine formula)
+/**
+ * Calculate distance between two GPS coordinates using Haversine formula
+ * Returns distance in meters with high precision
+ */
 function calculateDistance(lat1, lon1, lat2, lon2) {
-    const R = 6371e3; // Earth's radius in meters
-    const φ1 = (lat1 * Math.PI) / 180;
-    const φ2 = (lat2 * Math.PI) / 180;
-    const Δφ = ((lat2 - lat1) * Math.PI) / 180;
-    const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+    const R = 6371000; // Earth's radius in meters (more precise)
+    const toRad = (deg) => (deg * Math.PI) / 180;
+    const φ1 = toRad(lat1);
+    const φ2 = toRad(lat2);
+    const Δφ = toRad(lat2 - lat1);
+    const Δλ = toRad(lon2 - lon1);
     const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
         Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
@@ -3969,7 +4170,8 @@ app.post('/api/pulses', async (req, res) => {
         let wifiValid = true;
         let geofenceValid = true;
         let distance = 0;
-        let geofenceRadius = GEOFENCE_RADIUS_METERS;
+        // Default radius to 200m for better GPS accuracy tolerance
+        let geofenceRadius = 200;
         // Use branch-specific geofence and wifi if available
         let branchWifi = null;
         if (employee.branchId) {
@@ -3979,12 +4181,15 @@ app.post('/api/pulses', async (req, res) => {
                 .where(eq(branches.id, employee.branchId))
                 .limit(1);
             if (branch) {
+                console.log(`[Pulse] Checking for employee ${employee_id} in branch: ${branch.name}`);
                 if (branch.latitude && branch.longitude) {
                     distance = calculateDistance(latitude, longitude, parseFloat(branch.latitude), parseFloat(branch.longitude));
+                    console.log(`[Pulse] Distance from branch: ${distance.toFixed(2)}m`);
                 }
                 if (branch.geofenceRadius) {
                     geofenceRadius = Number(branch.geofenceRadius) || geofenceRadius;
                 }
+                console.log(`[Pulse] Geofence radius: ${geofenceRadius}m`);
                 if (branch.wifiBssid) {
                     branchWifi = String(branch.wifiBssid).toUpperCase();
                 }
@@ -3992,10 +4197,13 @@ app.post('/api/pulses', async (req, res) => {
         }
         else {
             // Fallback to default location
+            console.log(`[Pulse] Using default location for employee ${employee_id}`);
             distance = calculateDistance(latitude, longitude, RESTAURANT_LATITUDE, RESTAURANT_LONGITUDE);
+            geofenceRadius = GEOFENCE_RADIUS_METERS;
         }
         // Determine geofence validity
         geofenceValid = distance <= geofenceRadius;
+        console.log(`[Pulse] Geofence valid: ${geofenceValid} (distance: ${distance.toFixed(2)}m <= ${geofenceRadius}m)`);
         // Determine wifi validity: check against branches table AND branchBssids table
         if (employee.branchId) {
             const [branch] = await db
@@ -4099,7 +4307,7 @@ app.post('/api/branches', async (req, res) => {
             latitude: latitude ? latitude.toString() : null,
             longitude: longitude ? longitude.toString() : null,
             geofenceRadius: geofence_radius || 100,
-            wifiBssid: wifi_bssid || null,
+            bssid_1: wifi_bssid || null,
         })
             .returning();
         const newBranch = extractFirstRow(result);
@@ -4267,10 +4475,11 @@ app.put('/api/branches/:id', async (req, res) => {
             updateData.longitude = longitude ? longitude.toString() : null;
         }
         if (geofence_radius !== undefined) {
-            updateData.geofenceRadius = geofence_radius || 100;
+            // Default to 200m for better GPS accuracy tolerance
+            updateData.geofenceRadius = geofence_radius || 200;
         }
         if (wifi_bssid !== undefined) {
-            updateData.wifiBssid = wifi_bssid || null;
+            updateData.bssid_1 = wifi_bssid || null;
             // Update branchBssids table
             if (wifi_bssid && wifi_bssid.trim() !== '') {
                 // Delete old BSSIDs for this branch
@@ -4465,6 +4674,26 @@ app.post('/api/breaks/:breakId/review', async (req, res) => {
         const { action, manager_id } = req.body;
         if (!action || !['approve', 'reject', 'postpone'].includes(action)) {
             return res.status(400).json({ error: 'Action must be approve, reject or postpone' });
+        }
+        if (!manager_id) {
+            return res.status(400).json({ error: 'manager_id is required' });
+        }
+        // Get break details
+        const [breakRecord] = await db
+            .select()
+            .from(breaks)
+            .where(eq(breaks.id, breakId))
+            .limit(1);
+        if (!breakRecord) {
+            return res.status(404).json({ error: 'Break request not found' });
+        }
+        // Check if reviewer can approve this request
+        const approvalCheck = await canApproveRequest(manager_id, breakRecord.employeeId);
+        if (!approvalCheck.canApprove) {
+            return res.status(403).json({
+                error: 'Forbidden',
+                message: approvalCheck.reason || 'You do not have permission to approve this request'
+            });
         }
         let setData = {
             approvedBy: manager_id,
@@ -4906,13 +5135,13 @@ app.post('/api/salary/calculate', async (req, res) => {
             }
         }
         const totalWorkDays = workDays.size;
-        // Get advances for the period (previously deducted ones are excluded)
+        // Get ALL approved advances that haven't been deducted yet
+        // NOTE: We deduct all pending advances regardless of when they were requested
+        // This ensures advances are deducted once and only once
         const advancesResult = await db
             .select()
             .from(advances)
-            .where(and(eq(advances.employeeId, employeeId), eq(advances.status, 'approved'), isNull(advances.deductedAt), // Check if deductedAt is null instead of isDeducted
-        gte(advances.requestDate, new Date(periodStart)), // Convert string to Date
-        lte(advances.requestDate, new Date(periodEnd)) // Convert string to Date
+            .where(and(eq(advances.employeeId, employeeId), eq(advances.status, 'approved'), isNull(advances.deductedAt) // Only get advances that haven't been deducted yet
         ));
         const advancesTotal = advancesResult.reduce((sum, adv) => sum + parseFloat(adv.amount || '0'), 0); // Ensure amount is parsed correctly
         // Get deductions for the period
@@ -5400,6 +5629,94 @@ cron.schedule('*/30 * * * *', async () => {
     }
     catch (error) {
         console.error('[CRON] Error checking late employees:', error);
+    }
+});
+// =============================================================================
+// AUTO CHECKOUT AT SHIFT END - تسجيل خروج آلي عند نهاية الشيفت
+// =============================================================================
+// Check every 10 minutes for employees who need auto checkout
+cron.schedule('*/10 * * * *', async () => {
+    try {
+        console.log('[CRON] Checking for employees needing auto checkout...');
+        // Get Egypt/Cairo time
+        const cairoTimeString = new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' });
+        const cairoDate = new Date(cairoTimeString);
+        const currentHour = cairoDate.getHours();
+        const currentMinute = cairoDate.getMinutes();
+        const currentTime = currentHour * 60 + currentMinute; // Convert to minutes since midnight
+        console.log(`[CRON] Current Cairo Time: ${currentHour}:${currentMinute.toString().padStart(2, '0')}`);
+        // Get today's date
+        const today = cairoDate.toISOString().split('T')[0];
+        // Get all active attendance records (employees currently checked in)
+        const activeAttendances = await db
+            .select({
+            attendanceId: attendance.id,
+            employeeId: attendance.employeeId,
+            checkInTime: attendance.checkInTime,
+            employeeName: employees.fullName,
+            shiftEndTime: employees.shiftEndTime,
+            shiftType: employees.shiftType,
+        })
+            .from(attendance)
+            .innerJoin(employees, eq(attendance.employeeId, employees.id))
+            .where(and(eq(attendance.date, today), eq(attendance.status, 'active'), eq(employees.active, true)));
+        if (activeAttendances.length === 0) {
+            console.log('[CRON] No active attendances found for auto checkout');
+            return;
+        }
+        console.log(`[CRON] Found ${activeAttendances.length} active attendances to check`);
+        let autoCheckoutCount = 0;
+        for (const record of activeAttendances) {
+            if (!record.shiftEndTime) {
+                console.log(`[CRON] Employee ${record.employeeName} has no shift end time, skipping`);
+                continue;
+            }
+            // Parse shift end time
+            const [endHour, endMinute] = record.shiftEndTime.split(':').map(Number);
+            const shiftEnd = endHour * 60 + endMinute;
+            // Check if shift has ended (add 10 minute grace period)
+            const graceMinutes = 10;
+            let shouldAutoCheckout = false;
+            if (record.shiftType === 'PM' && shiftEnd < 12 * 60) {
+                // Night shift (e.g., 21:00 to 05:00)
+                // If current time is past shift end (accounting for midnight crossing)
+                if (currentTime >= 0 && currentTime >= shiftEnd + graceMinutes) {
+                    shouldAutoCheckout = true;
+                }
+            }
+            else {
+                // Day shift (e.g., 09:00 to 17:00)
+                if (currentTime >= shiftEnd + graceMinutes) {
+                    shouldAutoCheckout = true;
+                }
+            }
+            if (shouldAutoCheckout) {
+                console.log(`[CRON] Auto checkout for ${record.employeeName} (shift ended at ${record.shiftEndTime})`);
+                // Calculate work hours
+                const checkInTime = new Date(record.checkInTime);
+                const checkOutTime = new Date();
+                const workHours = (checkOutTime.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
+                // Update attendance record
+                await db
+                    .update(attendance)
+                    .set({
+                    checkOutTime,
+                    workHours: workHours.toFixed(2),
+                    status: 'completed',
+                    isAutoCheckout: true,
+                    updatedAt: new Date(),
+                })
+                    .where(eq(attendance.id, record.attendanceId));
+                autoCheckoutCount++;
+                // Send notification to employee
+                await sendNotification(record.employeeId, 'CHECK_OUT', 'تسجيل خروج آلي', `تم تسجيل خروجك آلياً في نهاية الشيفت (${record.shiftEndTime})`, record.employeeId, record.attendanceId);
+                console.log(`[CRON] ✅ Auto checkout completed for ${record.employeeName}`);
+            }
+        }
+        console.log(`[CRON] Auto checkout completed: ${autoCheckoutCount} employees checked out`);
+    }
+    catch (error) {
+        console.error('[CRON] Error during auto checkout:', error);
     }
 });
 // Listen on 0.0.0.0 to accept connections from all interfaces (including IPv4)

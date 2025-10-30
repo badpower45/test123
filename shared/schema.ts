@@ -82,7 +82,7 @@ export const attendanceRequests = pgTable('attendance_requests', {
   requestedTime: timestamp('requested_time', { withTimezone: true }).notNull(),
   reason: text('reason').notNull(),
   status: requestStatusEnum('status').default('pending').notNull(),
-  reviewedBy: uuid('reviewed_by').references(() => users.id),
+  reviewedBy: text('reviewed_by'), // Can be employee ID or user ID
   reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
   reviewNotes: text('review_notes'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
@@ -102,7 +102,7 @@ export const leaveRequests = pgTable('leave_requests', {
   daysCount: integer('days_count').notNull(),
   allowanceAmount: numeric('allowance_amount').default('0'),
   status: requestStatusEnum('status').default('pending').notNull(),
-  reviewedBy: uuid('reviewed_by').references(() => users.id),
+  reviewedBy: text('reviewed_by'), // Can be employee ID or user ID
   reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
   reviewNotes: text('review_notes'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
@@ -121,7 +121,7 @@ export const advances = pgTable('advances', {
   eligibleAmount: numeric('eligible_amount').notNull(),
   currentSalary: numeric('current_salary').notNull(),
   status: requestStatusEnum('status').default('pending').notNull(),
-  reviewedBy: uuid('reviewed_by').references(() => users.id),
+  reviewedBy: text('reviewed_by'), // Can be employee ID or user ID
   reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
   paidAt: timestamp('paid_at', { withTimezone: true }),
   deductedAt: timestamp('deducted_at', { withTimezone: true }),
@@ -140,7 +140,7 @@ export const deductions = pgTable('deductions', {
   reason: text('reason').notNull(),
   deductionDate: date('deduction_date').notNull(),
   deductionType: text('deduction_type').notNull(),
-  appliedBy: uuid('applied_by').references(() => users.id),
+  appliedBy: text('applied_by'), // Can be employee ID or user ID
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   employeeIdIdx: index('idx_deductions_employee_id').on(table.employeeId),
@@ -156,7 +156,7 @@ export const absenceNotifications = pgTable('absence_notifications', {
   status: requestStatusEnum('status').default('pending').notNull(),
   deductionApplied: boolean('deduction_applied').default(false),
   deductionAmount: numeric('deduction_amount'),
-  reviewedBy: uuid('reviewed_by').references(() => users.id),
+  reviewedBy: text('reviewed_by'), // Can be employee ID or user ID
   reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
@@ -416,7 +416,7 @@ export const notifications = pgTable('notifications', {
   type: notificationTypeEnum('type').notNull(),
   title: text('title').notNull(),
   message: text('message').notNull(),
-  relatedId: uuid('related_id'), // ID of related record (attendance, request, etc.)
+  relatedId: text('related_id'), // ID of related record (can be text or UUID string)
   isRead: boolean('is_read').default(false).notNull(),
   readAt: timestamp('read_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),

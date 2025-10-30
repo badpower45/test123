@@ -15,7 +15,17 @@
       "Bash(scp:*)",
       "Bash(ssh -i \"D:\\mytest123.pem\" ubuntu@16.171.208.249 \"cd oldies-server && npm run build 2>&1 | head -50\")",
       "Bash(ssh:*)",
-      "Bash(curl -s http://16.171.208.249:5000/health)"
+      "Bash(curl -s http://16.171.208.249:5000/health)",
+      "Bash(dir /s /b \"d:\\Coding\\project important\\test123 (7)\\test123\\server\")",
+      "Bash(certutil -hashfile:*)",
+      "Bash(findstr:*)",
+      "Bash(flutter --version:*)",
+      "Bash(flutter build:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npm install)",
+      "Bash(npm run build:server:*)",
+      "Bash(./node_modules/.bin/tsc:*)",
+      "Bash(npm install:*)"
     ],
     "deny": [],
     "ask": []

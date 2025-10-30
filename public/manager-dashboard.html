@@ -86,7 +86,7 @@
 
         .request-card.leave { border-right-color: #28a745; }
         .request-card.advance { border-right-color: #ffc107; }
-        .request-card.absence { border-right-color: #dc3545; }
+        /* Absence section removed - handled in manager panel */
 
         .request-header {
             display: flex;
@@ -200,7 +200,7 @@
         <div id="attendanceRequests" class="section"></div>
         <div id="leaveRequests" class="section"></div>
         <div id="advances" class="section"></div>
-        <div id="absences" class="section"></div>
+        <!-- Absence section removed - handled in manager panel app -->
         <div id="breakRequests" class="section"></div>
     </div>
 
@@ -217,7 +217,7 @@
                     renderAttendanceRequests(data.dashboard.attendanceRequests);
                     renderLeaveRequests(data.dashboard.leaveRequests);
                     renderAdvances(data.dashboard.advances);
-                    renderAbsences(data.dashboard.absences);
+                    // renderAbsences removed - handled in manager panel
                     renderBreakRequests(data.dashboard.breakRequests || []);
                 }
             } catch (error) {
@@ -245,10 +245,8 @@
                     <h3>${summary.advancesCount}</h3>
                     <p>طلبات سلف</p>
                 </div>
-                <div class="summary-card">
-                    <h3>${summary.absencesCount}</h3>
-                    <p>إخطارات غياب</p>
-                </div>
+                <!-- Absence card removed - handled in manager panel -->
+
                 <div class="summary-card">
                     <h3>${summary.breakRequestsCount || 0}</h3>
                     <p>طلبات استراحة</p>
@@ -357,37 +355,7 @@
             div.innerHTML = html;
         }
 
-        function renderAbsences(requests) {
-            const div = document.getElementById('absences');
-            if (requests.length === 0) {
-                div.innerHTML = `
-                    <h2>🚨 إخطارات الغياب</h2>
-                    <div class="empty-state">لا توجد إخطارات معلقة</div>
-                `;
-                return;
-            }
-
-            const html = `
-                <h2>🚨 إخطارات الغياب (${requests.length})</h2>
-                ${requests.map(req => `
-                    <div class="request-card absence">
-                        <div class="request-header">
-                            <span class="employee-name">${req.employeeName}</span>
-                            <span class="request-type">غياب</span>
-                        </div>
-                        <div class="request-details">
-                            <p><strong>تاريخ الغياب:</strong> ${req.absenceDate}</p>
-                            <p><strong>وقت الإخطار:</strong> ${new Date(req.notifiedAt).toLocaleString('ar-EG')}</p>
-                        </div>
-                        <div class="actions">
-                            <button class="btn btn-deduct" onclick="applyDeduction('${req.id}', '${req.employeeId}')">💸 تطبيق خصم (يومين عمل)</button>
-                            <button class="btn btn-approve" onclick="dismissAbsence('${req.id}')">✅ تجاهل</button>
-                        </div>
-                    </div>
-                `).join('')}
-            `;
-            div.innerHTML = html;
-        }
+        // renderAbsences function removed - absence handled in manager panel app
 
         function renderBreakRequests(requests) {
             const div = document.getElementById('breakRequests');
@@ -476,32 +444,7 @@
             }
         }
 
-        async function applyDeduction(notificationId, employeeId) {
-            try {
-                const response = await fetch(`${API_URL}/api/absence/${notificationId}/apply-deduction`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        reviewer_id: 'MANAGER_ID', // TODO: Replace with actual manager ID
-                        amount: '400' // 2 days work
-                    })
-                });
-
-                const data = await response.json();
-                if (data.success) {
-                    alert(data.message + ' - المبلغ: ' + data.deductionAmount + ' جنيه');
-                    loadDashboard();
-                }
-            } catch (error) {
-                console.error('Error:', error);
-                alert('حدث خطأ في تطبيق الخصم');
-            }
-        }
-
-        async function dismissAbsence(notificationId) {
-            // TODO: Implement dismiss absence
-            alert('سيتم تجاهل الإخطار');
-        }
+        // Absence functions removed - handled in manager panel app
 
         // Load dashboard on page load
         loadDashboard();
