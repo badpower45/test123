@@ -374,18 +374,23 @@ static Future<void> manualCheckOut(String employeeId, {String? reason}) async {
   }
 }
 
-/// Updates the BSSID for a specific branch
-static Future<void> updateBranchBssid(String branchId, String bssid) async {
+/// Updates the BSSIDs for a specific branch
+static Future<void> updateBranchBssid(String branchId, String bssid1, String? bssid2) async {
   final url = Uri.parse('$apiBaseUrl/owner/branches/$branchId/bssid');
   final response = await http.put(
     url,
     headers: _jsonHeaders,
-    body: jsonEncode({'bssid': bssid, 'owner_id': 'OWNER001'}), // Using default owner ID
+    body: jsonEncode({'bssid_1': bssid1, 'bssid_2': bssid2, 'owner_id': 'OWNER001'}), // Using default owner ID
   );
 
   if (response.statusCode != 200) {
     final error = json.decode(response.body)['message'] ?? 'فشل تحديث BSSID';
     throw Exception(error);
   }
+}
+
+/// Updates the BSSID for a specific branch (backward compatibility)
+static Future<void> updateBranchBssidSingle(String branchId, String bssid) async {
+  await updateBranchBssid(branchId, bssid, null);
 }
 }

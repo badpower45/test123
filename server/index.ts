@@ -496,32 +496,37 @@ app.post('/api/attendance/check-in', async (req, res) => {
     }
 
     // --- START WIFI BSSID VERIFICATION ---
-    if (employee.branchId) {
-      const bssids = await db
-        .select()
-        .from(branchBssids)
-        .where(eq(branchBssids.branchId, employee.branchId));
-
-      // If there are BSSIDs registered for the branch
-      if (bssids.length > 0) {
-        const allowedBssids = bssids.map(b => b.bssidAddress.toUpperCase());
-        const currentBssid = wifi_bssid ? String(wifi_bssid).toUpperCase() : null;
-
-        if (!currentBssid || !allowedBssids.includes(currentBssid)) {
-          console.log(`[Check-In] ❌ REJECTED - Invalid BSSID (${currentBssid}) for branch ${employee.branchId}. Allowed: [${allowedBssids.join(', ')}]`);
-          return res.status(403).json({
-            error: 'أنت غير متصل بشبكة الواي فاي المعتمدة للفرع.',
-            message: `الشبكة الحالية: ${currentBssid || 'غير معروف'}. يرجى الاتصال بالشبكة الصحيحة.`,
-            code: 'INVALID_WIFI_BSSID',
-          });
+        if (employee.branchId) {
+          const [branch] = await db
+            .select()
+            .from(branches)
+            .where(eq(branches.id, employee.branchId))
+            .limit(1);
+    
+          if (branch) {
+            const allowedBssids = [branch.bssid_1, branch.bssid_2]
+              .filter(Boolean)
+              .map(b => b.toUpperCase());
+    
+            if (allowedBssids.length > 0) {
+              const currentBssid = wifi_bssid ? String(wifi_bssid).toUpperCase() : null;
+    
+              if (!currentBssid || !allowedBssids.includes(currentBssid)) {
+                console.log(`[Check-In] ❌ REJECTED - Invalid BSSID (${currentBssid}) for branch ${employee.branchId}. Allowed: [${allowedBssids.join(', ')}]`);
+                return res.status(403).json({
+                  error: 'أنت غير متصل بشبكة الواي فاي المعتمدة للفرع.',
+                  message: `الشبكة الحالية: ${currentBssid || 'غير معروف'}. يرجى الاتصال بالشبكة الصحيحة.`,
+                  code: 'INVALID_WIFI_BSSID',
+                });
+              }
+              console.log(`[Check-In] ✅ APPROVED - Valid BSSID (${currentBssid})`);
+            } else {
+              // No BSSIDs registered, allow through
+              console.log(`[Check-In] WiFi check skipped: No BSSIDs registered for branch ${employee.branchId}`);
+            }
+          }
         }
-        console.log(`[Check-In] ✅ APPROVED - Valid BSSID (${currentBssid})`);
-      } else {
-        // No BSSIDs registered, allow through
-        console.log(`[Check-In] WiFi check skipped: No BSSIDs registered for branch ${employee.branchId}`);
-      }
-    }
-    // --- END WIFI BSSID VERIFICATION ---
+        // --- END WIFI BSSID VERIFICATION ---
 
     // --- START DEBUG LOG ---
     console.log(`[Check-In Debug] Employee: ${employee_id}, Shift Start: ${employee.shiftStartTime}, Shift End: ${employee.shiftEndTime}`);
@@ -755,32 +760,37 @@ app.post('/api/attendance/check-out', async (req, res) => {
       .limit(1);
 
     // --- START WIFI BSSID VERIFICATION ---
-    if (employee && employee.branchId) {
-      const bssids = await db
-        .select()
-        .from(branchBssids)
-        .where(eq(branchBssids.branchId, employee.branchId));
-
-      // If there are BSSIDs registered for the branch
-      if (bssids.length > 0) {
-        const allowedBssids = bssids.map(b => b.bssidAddress.toUpperCase());
-        const currentBssid = wifi_bssid ? String(wifi_bssid).toUpperCase() : null;
-
-        if (!currentBssid || !allowedBssids.includes(currentBssid)) {
-          console.log(`[Check-Out] ❌ REJECTED - Invalid BSSID (${currentBssid}) for branch ${employee.branchId}. Allowed: [${allowedBssids.join(', ')}]`);
-          return res.status(403).json({
-            error: 'أنت غير متصل بشبكة الواي فاي المعتمدة للفرع.',
-            message: `الشبكة الحالية: ${currentBssid || 'غير معروف'}. يرجى الاتصال بالشبكة الصحيحة.`,
-            code: 'INVALID_WIFI_BSSID',
-          });
+        if (employee && employee.branchId) {
+          const [branch] = await db
+            .select()
+            .from(branches)
+            .where(eq(branches.id, employee.branchId))
+            .limit(1);
+    
+          if (branch) {
+            const allowedBssids = [branch.bssid_1, branch.bssid_2]
+              .filter(Boolean)
+              .map(b => b.toUpperCase());
+    
+            if (allowedBssids.length > 0) {
+              const currentBssid = wifi_bssid ? String(wifi_bssid).toUpperCase() : null;
+    
+              if (!currentBssid || !allowedBssids.includes(currentBssid)) {
+                console.log(`[Check-Out] ❌ REJECTED - Invalid BSSID (${currentBssid}) for branch ${employee.branchId}. Allowed: [${allowedBssids.join(', ')}]`);
+                return res.status(403).json({
+                  error: 'أنت غير متصل بشبكة الواي فاي المعتمدة للفرع.',
+                  message: `الشبكة الحالية: ${currentBssid || 'غير معروف'}. يرجى الاتصال بالشبكة الصحيحة.`,
+                  code: 'INVALID_WIFI_BSSID',
+                });
+              }
+              console.log(`[Check-Out] ✅ APPROVED - Valid BSSID (${currentBssid})`);
+            } else {
+              // No BSSIDs registered, allow through
+              console.log(`[Check-Out] WiFi check skipped: No BSSIDs registered for branch ${employee.branchId}`);
+            }
+          }
         }
-        console.log(`[Check-Out] ✅ APPROVED - Valid BSSID (${currentBssid})`);
-      } else {
-        // No BSSIDs registered, allow through
-        console.log(`[Check-Out] WiFi check skipped: No BSSIDs registered for branch ${employee.branchId}`);
-      }
-    }
-    // --- END WIFI BSSID VERIFICATION ---
+        // --- END WIFI BSSID VERIFICATION ---
 
     if (employee && employee.branchId && latitude && longitude) {
       const [branch] = await db
@@ -4657,25 +4667,31 @@ app.post('/api/pulses', async (req, res) => {
     // Determine geofence validity
     geofenceValid = distance <= geofenceRadius;
 
-    // Determine wifi validity: check against branchBssids table
-    if (employee.branchId) {
-      const bssids = await db
-        .select()
-        .from(branchBssids)
-        .where(eq(branchBssids.branchId, employee.branchId));
-
-      if (bssids.length > 0) {
-        if (!wifi_bssid) {
-          wifiValid = false;
+    // Determine wifi validity: check against branches table
+        if (employee.branchId) {
+          const [branch] = await db
+            .select()
+            .from(branches)
+            .where(eq(branches.id, employee.branchId))
+            .limit(1);
+    
+          if (branch) {
+            const allowedBssids = [branch.bssid_1, branch.bssid_2].filter(Boolean);
+            if (allowedBssids.length > 0) {
+              if (!wifi_bssid) {
+                wifiValid = false;
+              } else {
+                wifiValid = allowedBssids.some(b => b.toUpperCase() === String(wifi_bssid).toUpperCase());
+              }
+            } else {
+              wifiValid = true; // No BSSIDs set, allow any
+            }
+          } else {
+            wifiValid = true;
+          }
         } else {
-          wifiValid = bssids.some(b => b.bssidAddress.toUpperCase() === String(wifi_bssid).toUpperCase());
+          wifiValid = true;
         }
-      } else {
-        wifiValid = true; // No BSSIDs set, allow any
-      }
-    } else {
-      wifiValid = true;
-    }
 
     // Pulse is within geofence if geofenceValid and not on active break
     let isWithinGeofence = geofenceValid;

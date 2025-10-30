@@ -17,7 +17,8 @@ export const branches = pgTable('branches', {
   latitude: numeric('latitude'),
   longitude: numeric('longitude'),
   geofenceRadius: integer('geofence_radius').default(100),
-  wifiBssid: text('wifi_bssid'),
+  bssid_1: text('bssid_1'),
+  bssid_2: text('bssid_2').default(null),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({

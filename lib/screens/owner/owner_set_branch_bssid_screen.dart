@@ -18,22 +18,34 @@ class OwnerSetBranchBssidScreen extends StatefulWidget {
 }
 
 class _OwnerSetBranchBssidScreenState extends State<OwnerSetBranchBssidScreen> {
-  String? _scannedBssid;
+  String? _scannedBssid1;
+  String? _scannedBssid2;
   bool _isScanning = false;
   bool _isSaving = false;
   String? _scanError;
+  final TextEditingController _bssid1Controller = TextEditingController();
+  final TextEditingController _bssid2Controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _bssid1Controller.dispose();
+    _bssid2Controller.dispose();
+    super.dispose();
+  }
 
   Future<void> _scanBssid() async {
     setState(() {
       _isScanning = true;
-      _scannedBssid = null;
+      _scannedBssid1 = null;
+      _scannedBssid2 = null;
       _scanError = null;
     });
     try {
       // Use the WiFiService to get validated BSSID
       final bssid = await WiFiService.getCurrentWifiBssidValidated();
       setState(() {
-        _scannedBssid = bssid;
+        _scannedBssid1 = bssid;
+        _bssid1Controller.text = bssid;
       });
     } catch (e) {
       setState(() {
@@ -47,15 +59,19 @@ class _OwnerSetBranchBssidScreenState extends State<OwnerSetBranchBssidScreen> {
   }
 
   Future<void> _saveBssid() async {
-    if (_scannedBssid == null) return;
+    if (_bssid1Controller.text.isEmpty) return;
 
     setState(() => _isSaving = true);
     try {
-      await OwnerApiService.updateBranchBssid(widget.branchId, _scannedBssid!);
+      await OwnerApiService.updateBranchBssid(
+        widget.branchId,
+        _bssid1Controller.text.trim().toUpperCase(),
+        _bssid2Controller.text.isNotEmpty ? _bssid2Controller.text.trim().toUpperCase() : null,
+      );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('✓ تم حفظ BSSID بنجاح'),
+            content: Text('✓ تم حفظ BSSIDs بنجاح'),
             backgroundColor: Colors.green,
           ),
         );
@@ -111,32 +127,46 @@ class _OwnerSetBranchBssidScreenState extends State<OwnerSetBranchBssidScreen> {
                 style: const TextStyle(color: Colors.red),
                 textAlign: TextAlign.center,
               ),
-            if (_scannedBssid != null) ...[
-              const Divider(height: 30),
-              const Text(
-                'الـ BSSID المقروء:',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                textAlign: TextAlign.center,
+            const Divider(height: 30),
+            const Text(
+              'BSSID 1 (إجباري):',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            TextFormField(
+              controller: _bssid1Controller,
+              decoration: const InputDecoration(
+                hintText: 'أدخل BSSID الأول أو اضغط على قراءة',
+                border: OutlineInputBorder(),
               ),
-              const SizedBox(height: 8),
-              SelectableText(
-                _scannedBssid!,
-                style: const TextStyle(fontSize: 18, fontFamily: 'monospace', color: Colors.green),
-                textAlign: TextAlign.center,
+              textCapitalization: TextCapitalization.characters,
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'BSSID 2 (اختياري):',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            TextFormField(
+              controller: _bssid2Controller,
+              decoration: const InputDecoration(
+                hintText: 'أدخل BSSID الثاني إذا كان موجوداً',
+                border: OutlineInputBorder(),
               ),
-              const SizedBox(height: 24),
-              ElevatedButton(
-                onPressed: _isSaving ? null : _saveBssid,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primaryOrange,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                ),
-                child: _isSaving
-                    ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Text('حفظ هذا الـ BSSID للفرع'),
+              textCapitalization: TextCapitalization.characters,
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton(
+              onPressed: _isSaving ? null : _saveBssid,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryOrange,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 16),
               ),
-            ],
+              child: _isSaving
+                  ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Text('حفظ BSSIDs للفرع'),
+            ),
           ],
         ),
       ),
