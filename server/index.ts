@@ -10,8 +10,8 @@ import {
   deductions, absenceNotifications, pulses, users, roles, permissions,
   rolePermissions, userRoles, branches, branchBssids, branchManagers, breaks,
   deviceSessions, notifications, salaryCalculations, geofenceViolations
-} from '../shared/schema.js';
-import { NewAttendance } from '../shared/schema.js';
+} from '../shared/schema';
+import { NewAttendance } from '../shared/schema';
 import { eq, and, gte, lte, lt, desc, sql, between, inArray, isNull, or } from 'drizzle-orm';
 import { requirePermission, getUserPermissions, checkUserPermission } from './auth.js';
 
@@ -5064,8 +5064,8 @@ app.post('/api/pulses', async (req, res) => {
         }
         console.log(`[Pulse] Geofence radius: ${geofenceRadius}m`);
 
-        if (branch.wifiBssid) {
-          branchWifi = String(branch.wifiBssid).toUpperCase();
+        if (branch.bssid_1) {
+          branchWifi = String(branch.bssid_1).toUpperCase();
         }
       }
     } else {

@@ -1,5 +1,5 @@
 import { db } from './db.js';
-import { employees, attendance, pulses } from '../shared/schema.js';
+import { employees, attendance, pulses } from '../shared/schema';
 
 async function seedHistoricalData() {
   try {

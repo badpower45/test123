@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { db } from './db.js';
-import { users, userRoles, rolePermissions, permissions } from '../shared/schema.js';
+import { users, userRoles, rolePermissions, permissions } from '../shared/schema';
 import { eq, and } from 'drizzle-orm';
 import { sql } from 'drizzle-orm';
 
