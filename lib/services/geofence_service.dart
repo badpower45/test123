@@ -98,7 +98,7 @@ class GeofenceService {
       while (attempts < maxAttempts && position == null) {
         try {
           position = await Geolocator.getCurrentPosition(
-            desiredAccuracy: LocationAccuracy.balanced, // Changed from high to balanced
+            desiredAccuracy: LocationAccuracy.medium, // Changed from high to medium
             forceAndroidLocationManager: false, // Let system choose best provider
             timeLimit: const Duration(seconds: 10), // Reduced from 15
           ).timeout(const Duration(seconds: 12)); // Reduced from 20

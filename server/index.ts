@@ -5170,7 +5170,7 @@ app.post('/api/branches', async (req, res) => {
         latitude: latitude ? latitude.toString() : null,
         longitude: longitude ? longitude.toString() : null,
         geofenceRadius: geofence_radius || 100,
-        wifiBssid: wifi_bssid || null,
+        bssid_1: wifi_bssid || null,
       })
       .returning();
     
@@ -5369,13 +5369,13 @@ app.put('/api/branches/:id', async (req, res) => {
     }
 
     if (wifi_bssid !== undefined) {
-      updateData.wifiBssid = wifi_bssid || null;
+      updateData.bssid_1 = wifi_bssid || null;
 
       // Update branchBssids table
       if (wifi_bssid && wifi_bssid.trim() !== '') {
         // Delete old BSSIDs for this branch
         await db.delete(branchBssids).where(eq(branchBssids.branchId, branchId));
-        
+
         // Insert new BSSID
         await db.insert(branchBssids).values({
           branchId,

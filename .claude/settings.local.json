@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir /s /b \"d:\\Coding\\project important\\test123 (7)\\test123\")",
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(tree:*)",
+      "Bash(wc:*)",
+      "Bash(head:*)",
+      "Bash(npm run build:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(ssh -i \"D:\\mytest123.pem\" ubuntu@16.171.208.249 \"cd oldies-server && git pull && npm run build\")",
+      "Bash(scp:*)",
+      "Bash(ssh -i \"D:\\mytest123.pem\" ubuntu@16.171.208.249 \"cd oldies-server && npm run build 2>&1 | head -50\")",
+      "Bash(ssh:*)",
+      "Bash(curl -s http://16.171.208.249:5000/health)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

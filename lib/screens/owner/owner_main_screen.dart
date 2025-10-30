@@ -7,6 +7,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 
 import '../../constants/api_endpoints.dart';
+import '../../models/attendance_summary.dart';
 import '../../models/employee_attendance_status.dart';
 import '../../services/branch_manager_api_service.dart';
 import '../../services/owner_api_service.dart';
