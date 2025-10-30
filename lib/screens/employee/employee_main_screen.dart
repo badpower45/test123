@@ -103,6 +103,7 @@ class _EmployeeMainScreenState extends State<EmployeeMainScreen> {
                       employeeId: widget.employeeId,
                       latitude: 0, // dummy location
                       longitude: 0,
+                      wifiBssid: null, // No BSSID for auto logout
                     );
                     print('✅ Auto check-out on logout');
                   }

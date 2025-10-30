@@ -60,7 +60,7 @@ class AttendanceApiService {
     required String employeeId,
     required double latitude,
     required double longitude,
-    // Note: wifiBssid is no longer required for check-out
+    String? wifiBssid,
   }) async {
     late http.Response response;
     late Map<String, dynamic> body;
@@ -73,7 +73,7 @@ class AttendanceApiService {
           'employee_id': employeeId,
           'latitude': latitude,
           'longitude': longitude,
-          // No wifi_bssid parameter - it's optional now
+          if (wifiBssid != null) 'wifi_bssid': wifiBssid,
         }),
       );
       body = _decodeBody(response.body);

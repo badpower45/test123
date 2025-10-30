@@ -3315,35 +3315,38 @@ app.get('/api/owner/dashboard', async (req, res) => {
   }
 });
 
-// Update branch BSSID for owner
+// Update branch BSSIDs for owner
 app.put('/api/owner/branches/:branchId/bssid', async (req, res) => {
   const branchId = req.params.branchId;
-  const { bssid } = req.body;
+  const { bssid_1, bssid_2, owner_id } = req.body;
 
   // Verify owner permissions
-  const ownerId = req.query.owner_id as string | undefined;
-  if (!ownerId) {
+  if (!owner_id) {
     return res.status(400).json({ error: 'owner_id is required' });
   }
-
-  const ownerRecord = await getOwnerRecord(ownerId);
+  const ownerRecord = await getOwnerRecord(owner_id as string);
   if (!ownerRecord) {
     return res.status(403).json({ error: 'لا توجد صلاحيات للوصول إلى بيانات الفروع' });
   }
 
-  // Validate BSSID format (server-side validation)
-  if (!isValidBssid(bssid)) {
-    return res.status(400).json({ message: 'صيغة الـ BSSID غير صحيحة.' });
+  // Validate BSSID formats
+  if (!bssid_1 || !isValidBssid(bssid_1)) {
+    return res.status(400).json({ message: 'صيغة BSSID 1 غير صحيحة.' });
+  }
+  if (bssid_2 && !isValidBssid(bssid_2)) {
+    return res.status(400).json({ message: 'صيغة BSSID 2 غير صحيحة.' });
   }
 
-  // Standardize BSSID format
-  const formattedBssid = bssid.toUpperCase().replace(/-/g, ':');
+  // Standardize BSSID formats
+  const formattedBssid1 = bssid_1.toUpperCase().replace(/-/g, ':');
+  const formattedBssid2 = bssid_2 ? bssid_2.toUpperCase().replace(/-/g, ':') : null;
 
   try {
-    // Update branch BSSID
+    // Update branch BSSIDs
     const updated = await db.update(branches)
       .set({
-        wifiBssid: formattedBssid,
+        bssid_1: formattedBssid1,
+        bssid_2: formattedBssid2,
         updatedAt: new Date(),
       })
       .where(eq(branches.id, branchId))
@@ -3355,12 +3358,12 @@ app.put('/api/owner/branches/:branchId/bssid', async (req, res) => {
 
     res.json({
       success: true,
-      message: 'تم تحديث BSSID الفرع بنجاح.',
+      message: 'تم تحديث BSSIDs الفرع بنجاح.',
       branch: updated[0]
     });
   } catch (error) {
-    console.error("Error updating branch BSSID:", error);
-    res.status(500).json({ message: "حدث خطأ أثناء تحديث BSSID." });
+    console.error("Error updating branch BSSIDs:", error);
+    res.status(500).json({ message: "حدث خطأ أثناء تحديث BSSIDs." });
   }
 });
 

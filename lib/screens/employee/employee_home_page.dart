@@ -402,6 +402,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           employeeId: widget.employeeId,
           latitude: position.latitude,
           longitude: position.longitude,
+          wifiBssid: validation.bssid, // Include BSSID for check-out validation
         );
 
         if (mounted) {
