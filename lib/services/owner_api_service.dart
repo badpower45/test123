@@ -393,4 +393,47 @@ static Future<void> updateBranchBssid(String branchId, String bssid1, String? bs
 static Future<void> updateBranchBssidSingle(String branchId, String bssid) async {
   await updateBranchBssid(branchId, bssid, null);
 }
+
+/// Get all BSSIDs for a specific branch
+static Future<List<String>> getBranchBssids(String branchId) async {
+  final url = Uri.parse('$apiBaseUrl/owner/branches/$branchId/bssids');
+  final response = await http.get(url, headers: _jsonHeaders);
+
+  if (response.statusCode == 200) {
+    final data = json.decode(response.body) as Map<String, dynamic>;
+    final bssids = data['bssids'] as List<dynamic>;
+    return bssids.map((b) => b.toString()).toList();
+  }
+
+  throw Exception('فشل تحميل BSSIDs: ${response.statusCode}');
+}
+
+/// Add a new BSSID to a branch
+static Future<void> addBranchBssid(String branchId, String bssid) async {
+  final url = Uri.parse('$apiBaseUrl/owner/branches/$branchId/bssids');
+  final response = await http.post(
+    url,
+    headers: _jsonHeaders,
+    body: jsonEncode({
+      'bssid': bssid,
+      'owner_id': 'OWNER001' // Using default owner ID
+    }),
+  );
+
+  if (response.statusCode != 200 && response.statusCode != 201) {
+    final error = json.decode(response.body)['message'] ?? 'فشل إضافة BSSID';
+    throw Exception(error);
+  }
+}
+
+/// Remove a BSSID from a branch
+static Future<void> removeBranchBssid(String branchId, String bssid) async {
+  final url = Uri.parse('$apiBaseUrl/owner/branches/$branchId/bssids/$bssid');
+  final response = await http.delete(url, headers: _jsonHeaders);
+
+  if (response.statusCode != 200) {
+    final error = json.decode(response.body)['message'] ?? 'فشل حذف BSSID';
+    throw Exception(error);
+  }
+}
 }

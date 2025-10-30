@@ -1,5 +1,6 @@
 import { Pool, neonConfig } from '@neondatabase/serverless';
 import { drizzle } from 'drizzle-orm/neon-serverless';
+import { sql } from 'drizzle-orm';
 import { config as loadEnv } from 'dotenv';
 import fs from 'fs';
 import path from 'path';
@@ -37,4 +38,17 @@ if (!process.env.DATABASE_URL) {
     console.warn('[db] DATABASE_URL not set. Falling back to local development connection string.');
 }
 export const pool = new Pool({ connectionString });
+// Add connection logging
+pool.on('connect', (client) => {
+    console.log('[db] New client connected to database');
+});
+pool.on('error', (err, client) => {
+    console.error('[db] Database connection error:', err);
+});
 export const db = drizzle({ client: pool, schema });
+// Test connection
+db.execute(sql `SELECT 1`).then(() => {
+    console.log('[db] Database connection test successful');
+}).catch(err => {
+    console.error('[db] Database connection test failed:', err);
+});

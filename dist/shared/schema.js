@@ -1,6 +1,8 @@
 import { pgTable, uuid, text, timestamp, boolean, numeric, index, doublePrecision, pgEnum, integer, date } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
-// Employee role enum
+// User role enum for multi-branch
+export const userRoleEnum = pgEnum('user_role', ['OWNER', 'MANAGER', 'EMPLOYEE']);
+// Legacy employee role enum (kept for compatibility)
 export const employeeRoleEnum = pgEnum('employee_role', ['owner', 'admin', 'manager', 'hr', 'monitor', 'staff']);
 // =============================================================================
 // BRANCHES TABLE - Multi-branch management
@@ -8,11 +10,12 @@ export const employeeRoleEnum = pgEnum('employee_role', ['owner', 'admin', 'mana
 export const branches = pgTable('branches', {
     id: uuid('id').primaryKey().defaultRandom(),
     name: text('name').notNull(),
-    wifiBssid: text('wifi_bssid'),
+    managerId: text('manager_id').references(() => employees.id), // Changed to text to reference employees
     latitude: numeric('latitude'),
     longitude: numeric('longitude'),
     geofenceRadius: integer('geofence_radius').default(100),
-    managerId: text('manager_id').references(() => employees.id),
+    bssid_1: text('bssid_1'),
+    bssid_2: text('bssid_2').default(null),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
@@ -33,6 +36,9 @@ export const employees = pgTable('employees', {
     branchId: uuid('branch_id').references(() => branches.id),
     monthlySalary: numeric('monthly_salary'),
     hourlyRate: numeric('hourly_rate'),
+    shiftStartTime: text('shift_start_time'), // e.g., '09:00' or '21:00'
+    shiftEndTime: text('shift_end_time'), // e.g., '17:00' or '05:00'
+    shiftType: text('shift_type'), // 'AM' or 'PM'
     active: boolean('active').default(true).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
@@ -45,6 +51,11 @@ export const attendance = pgTable('attendance', {
     employeeId: text('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
     checkInTime: timestamp('check_in_time', { withTimezone: true }),
     checkOutTime: timestamp('check_out_time', { withTimezone: true }),
+    actualCheckInTime: timestamp('actual_check_in_time', { withTimezone: true }), // الوقت الفعلي للحضور
+    modifiedCheckInTime: timestamp('modified_check_in_time', { withTimezone: true }), // الوقت المعدل
+    modifiedBy: text('modified_by').references(() => employees.id),
+    modifiedAt: timestamp('modified_at', { withTimezone: true }),
+    modificationReason: text('modification_reason'),
     workHours: numeric('work_hours'),
     date: date('date').notNull(),
     status: text('status').default('active').notNull(),
@@ -141,25 +152,49 @@ export const absenceNotifications = pgTable('absence_notifications', {
     statusIdx: index('idx_absence_notifications_status').on(table.status),
     dateIdx: index('idx_absence_notifications_date').on(table.absenceDate),
 }));
-// Pulses table - location tracking (from original schema)
+// =============================================================================
+// GEOFENCE VIOLATIONS - مخالفات النطاق الجغرافي
+// =============================================================================
+export const geofenceViolations = pgTable('geofence_violations', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    employeeId: text('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
+    branchId: uuid('branch_id').references(() => branches.id, { onDelete: 'set null' }),
+    exitTime: timestamp('exit_time', { withTimezone: true }).notNull(),
+    enterTime: timestamp('enter_time', { withTimezone: true }),
+    durationSeconds: integer('duration_seconds'),
+    latitude: doublePrecision('latitude'),
+    longitude: doublePrecision('longitude'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+    employeeIdIdx: index('idx_geofence_violations_employee_id').on(table.employeeId),
+    exitTimeIdx: index('idx_geofence_violations_exit_time').on(table.exitTime),
+}));
+// Pulses table - location tracking (updated for multi-branch)
 export const pulses = pgTable('pulses', {
     id: uuid('id').primaryKey().defaultRandom(),
     employeeId: text('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
+    branchId: uuid('branch_id').references(() => branches.id, { onDelete: 'cascade' }),
     timestamp: timestamp('timestamp', { withTimezone: true }).defaultNow().notNull(),
     latitude: doublePrecision('latitude'),
     longitude: doublePrecision('longitude'),
     location: text('location'),
+    bssidAddress: text('bssid_address'),
     isWithinGeofence: boolean('is_within_geofence').default(false),
     isFake: boolean('is_fake').default(false).notNull(),
+    isSynced: boolean('is_synced').default(true),
     sentFromDevice: boolean('sent_from_device').default(true).notNull(),
     sentViaSupabase: boolean('sent_via_supabase').default(false).notNull(),
     offlineBatchId: uuid('offline_batch_id'),
     source: text('source'),
+    status: text('status').default('IN'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
     employeeIdIdx: index('idx_pulses_employee_id').on(table.employeeId),
+    branchIdIdx: index('idx_pulses_branch_id').on(table.branchId),
     timestampIdx: index('idx_pulses_timestamp').on(table.timestamp),
     latLonIdx: index('idx_pulses_latitude_longitude').on(table.latitude, table.longitude),
+    geofenceIdx: index('idx_pulses_geofence').on(table.isWithinGeofence),
+    createdAtIdx: index('idx_pulses_created_at').on(table.createdAt),
 }));
 // Legacy profiles table (kept for compatibility)
 export const profiles = pgTable('profiles', {
@@ -188,10 +223,29 @@ export const shifts = pgTable('shifts', {
     checkInTimeIdx: index('idx_shifts_check_in_time').on(table.checkInTime),
 }));
 // =============================================================================
-// ADMIN USERS AND PERMISSIONS
+// USERS TABLE - Multi-branch users
 // =============================================================================
-// Admin users table
 export const users = pgTable('users', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    username: text('username').unique().notNull(),
+    passwordHash: text('password_hash').notNull(),
+    role: userRoleEnum('role').notNull(),
+    branchId: uuid('branch_id').references(() => branches.id),
+    fullName: text('full_name').notNull(),
+    email: text('email').unique(),
+    isActive: boolean('is_active').default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+}, (table) => ({
+    usernameIdx: index('idx_users_username').on(table.username),
+    roleIdx: index('idx_users_role').on(table.role),
+    branchIdIdx: index('idx_users_branch_id').on(table.branchId),
+}));
+// =============================================================================
+// ADMIN USERS AND PERMISSIONS (Legacy - kept for compatibility)
+// =============================================================================
+// Legacy admin users table
+export const adminUsers = pgTable('admin_users', {
     id: uuid('id').primaryKey().defaultRandom(),
     email: text('email').unique().notNull(),
     passwordHash: text('password_hash').notNull(),
@@ -200,8 +254,8 @@ export const users = pgTable('users', {
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 }, (table) => ({
-    emailIdx: index('idx_users_email').on(table.email),
-    isActiveIdx: index('idx_users_is_active').on(table.isActive),
+    emailIdx: index('idx_admin_users_email').on(table.email),
+    isActiveIdx: index('idx_admin_users_is_active').on(table.isActive),
 }));
 // Roles table
 export const roles = pgTable('roles', {
@@ -248,7 +302,17 @@ export const userRoles = pgTable('user_roles', {
     userIdIdx: index('idx_user_roles_user_id').on(table.userId),
     roleIdIdx: index('idx_user_roles_role_id').on(table.roleId),
 }));
-// Branch-Managers junction table
+// Branch_BSSIDs table - Multiple BSSIDs per branch
+export const branchBssids = pgTable('branch_bssids', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    branchId: uuid('branch_id').notNull().references(() => branches.id, { onDelete: 'cascade' }),
+    bssidAddress: text('bssid_address').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (table) => ({
+    branchIdIdx: index('idx_branch_bssids_branch_id').on(table.branchId),
+    bssidAddressIdx: index('idx_branch_bssids_bssid_address').on(table.bssidAddress),
+}));
+// Legacy Branch-Managers junction table (kept for compatibility)
 export const branchManagers = pgTable('branch_managers', {
     id: uuid('id').primaryKey().defaultRandom(),
     employeeId: text('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
@@ -282,4 +346,80 @@ export const breaks = pgTable('breaks', {
     shiftIdIdx: index('idx_breaks_shift_id').on(table.shiftId),
     employeeIdIdx: index('idx_breaks_employee_id').on(table.employeeId),
     statusIdx: index('idx_breaks_status').on(table.status),
+}));
+// =============================================================================
+// DEVICE SESSIONS - Single Device Login Management
+// =============================================================================
+export const deviceSessions = pgTable('device_sessions', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    employeeId: text('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
+    deviceId: text('device_id').notNull(),
+    deviceName: text('device_name'),
+    deviceModel: text('device_model'),
+    osVersion: text('os_version'),
+    appVersion: text('app_version'),
+    lastActiveAt: timestamp('last_active_at', { withTimezone: true }).defaultNow().notNull(),
+    isActive: boolean('is_active').default(true).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+    employeeIdIdx: index('idx_device_sessions_employee_id').on(table.employeeId),
+    deviceIdIdx: index('idx_device_sessions_device_id').on(table.deviceId),
+    isActiveIdx: index('idx_device_sessions_is_active').on(table.isActive),
+}));
+// =============================================================================
+// NOTIFICATIONS - Real-time notifications system
+// =============================================================================
+export const notificationTypeEnum = pgEnum('notification_type', [
+    'CHECK_IN',
+    'CHECK_OUT',
+    'LEAVE_REQUEST',
+    'ADVANCE_REQUEST',
+    'ATTENDANCE_REQUEST',
+    'ABSENCE_ALERT',
+    'SALARY_PAID',
+    'GENERAL'
+]);
+export const notifications = pgTable('notifications', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    recipientId: text('recipient_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
+    senderId: text('sender_id').references(() => employees.id, { onDelete: 'set null' }),
+    type: notificationTypeEnum('type').notNull(),
+    title: text('title').notNull(),
+    message: text('message').notNull(),
+    relatedId: uuid('related_id'), // ID of related record (attendance, request, etc.)
+    isRead: boolean('is_read').default(false).notNull(),
+    readAt: timestamp('read_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+    recipientIdIdx: index('idx_notifications_recipient_id').on(table.recipientId),
+    typeIdx: index('idx_notifications_type').on(table.type),
+    isReadIdx: index('idx_notifications_is_read').on(table.isRead),
+    createdAtIdx: index('idx_notifications_created_at').on(table.createdAt),
+}));
+// =============================================================================
+// SALARY CALCULATIONS - Salary computation and tracking
+// =============================================================================
+export const salaryCalculations = pgTable('salary_calculations', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    employeeId: text('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
+    periodStart: date('period_start').notNull(),
+    periodEnd: date('period_end').notNull(),
+    baseSalary: numeric('base_salary').notNull(),
+    totalWorkHours: numeric('total_work_hours').default('0').notNull(),
+    totalWorkDays: integer('total_work_days').default(0).notNull(),
+    overtimeHours: numeric('overtime_hours').default('0'),
+    overtimeAmount: numeric('overtime_amount').default('0'),
+    advancesTotal: numeric('advances_total').default('0'),
+    deductionsTotal: numeric('deductions_total').default('0'),
+    absenceDeductions: numeric('absence_deductions').default('0'),
+    netSalary: numeric('net_salary').notNull(),
+    isPaid: boolean('is_paid').default(false).notNull(),
+    paidAt: timestamp('paid_at', { withTimezone: true }),
+    notes: text('notes'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+    employeeIdIdx: index('idx_salary_calculations_employee_id').on(table.employeeId),
+    periodStartIdx: index('idx_salary_calculations_period_start').on(table.periodStart),
+    isPaidIdx: index('idx_salary_calculations_is_paid').on(table.isPaid),
 }));

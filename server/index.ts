@@ -502,17 +502,32 @@ app.post('/api/attendance/check-in', async (req, res) => {
             .from(branches)
             .where(eq(branches.id, employee.branchId))
             .limit(1);
-    
+
           if (branch) {
-            const allowedBssids = [branch.bssid_1, branch.bssid_2]
-              .filter(Boolean)
-              .map(b => b.toUpperCase());
-    
-            if (allowedBssids.length > 0) {
+            // Get BSSIDs from both sources: legacy (bssid_1, bssid_2) and new table (branchBssids)
+            const allowedBssids = new Set<string>();
+
+            // Add legacy BSSIDs
+            if (branch.bssid_1) allowedBssids.add(branch.bssid_1.toUpperCase());
+            if (branch.bssid_2) allowedBssids.add(branch.bssid_2.toUpperCase());
+
+            // Add BSSIDs from branchBssids table
+            const bssidRecords = await db
+              .select()
+              .from(branchBssids)
+              .where(eq(branchBssids.branchId, employee.branchId));
+
+            bssidRecords.forEach(record => {
+              if (record.bssidAddress) {
+                allowedBssids.add(record.bssidAddress.toUpperCase());
+              }
+            });
+
+            if (allowedBssids.size > 0) {
               const currentBssid = wifi_bssid ? String(wifi_bssid).toUpperCase() : null;
-    
-              if (!currentBssid || !allowedBssids.includes(currentBssid)) {
-                console.log(`[Check-In] ❌ REJECTED - Invalid BSSID (${currentBssid}) for branch ${employee.branchId}. Allowed: [${allowedBssids.join(', ')}]`);
+
+              if (!currentBssid || !allowedBssids.has(currentBssid)) {
+                console.log(`[Check-In] ❌ REJECTED - Invalid BSSID (${currentBssid}) for branch ${employee.branchId}. Allowed: [${Array.from(allowedBssids).join(', ')}]`);
                 return res.status(403).json({
                   error: 'أنت غير متصل بشبكة الواي فاي المعتمدة للفرع.',
                   message: `الشبكة الحالية: ${currentBssid || 'غير معروف'}. يرجى الاتصال بالشبكة الصحيحة.`,
@@ -3367,6 +3382,134 @@ app.put('/api/owner/branches/:branchId/bssid', async (req, res) => {
   }
 });
 
+// Get all BSSIDs for a branch (using branchBssids table + legacy bssid_1/bssid_2)
+app.get('/api/owner/branches/:branchId/bssids', async (req, res) => {
+  const branchId = req.params.branchId;
+
+  try {
+    // Get BSSIDs from branchBssids table
+    const bssidRecords = await db
+      .select()
+      .from(branchBssids)
+      .where(eq(branchBssids.branchId, branchId));
+
+    // Also get legacy bssid_1 and bssid_2 from branches table
+    const [branch] = await db
+      .select()
+      .from(branches)
+      .where(eq(branches.id, branchId))
+      .limit(1);
+
+    const allBssids = new Set<string>();
+
+    // Add from branchBssids table
+    bssidRecords.forEach(record => {
+      if (record.bssidAddress) {
+        allBssids.add(record.bssidAddress.toUpperCase());
+      }
+    });
+
+    // Add legacy BSSIDs if they exist
+    if (branch?.bssid_1) allBssids.add(branch.bssid_1.toUpperCase());
+    if (branch?.bssid_2) allBssids.add(branch.bssid_2.toUpperCase());
+
+    res.json({
+      success: true,
+      bssids: Array.from(allBssids),
+    });
+  } catch (error) {
+    console.error("Error fetching branch BSSIDs:", error);
+    res.status(500).json({ message: "حدث خطأ أثناء تحميل BSSIDs." });
+  }
+});
+
+// Add a new BSSID to a branch
+app.post('/api/owner/branches/:branchId/bssids', async (req, res) => {
+  const branchId = req.params.branchId;
+  const { bssid, owner_id } = req.body;
+
+  // Verify owner permissions
+  if (!owner_id) {
+    return res.status(400).json({ error: 'owner_id is required' });
+  }
+  const ownerRecord = await getOwnerRecord(owner_id as string);
+  if (!ownerRecord) {
+    return res.status(403).json({ error: 'لا توجد صلاحيات للوصول إلى بيانات الفروع' });
+  }
+
+  // Validate BSSID format
+  if (!bssid || !isValidBssid(bssid)) {
+    return res.status(400).json({ message: 'صيغة BSSID غير صحيحة.' });
+  }
+
+  const formattedBssid = bssid.toUpperCase().replace(/-/g, ':');
+
+  try {
+    // Check if BSSID already exists for this branch
+    const existing = await db
+      .select()
+      .from(branchBssids)
+      .where(
+        and(
+          eq(branchBssids.branchId, branchId),
+          eq(branchBssids.bssidAddress, formattedBssid)
+        )
+      )
+      .limit(1);
+
+    if (existing.length > 0) {
+      return res.status(400).json({ message: 'هذا الـ BSSID موجود بالفعل' });
+    }
+
+    // Insert new BSSID
+    await db.insert(branchBssids).values({
+      branchId: branchId,
+      bssidAddress: formattedBssid,
+      createdAt: new Date(),
+    });
+
+    res.json({
+      success: true,
+      message: 'تم إضافة BSSID بنجاح',
+      bssid: formattedBssid,
+    });
+  } catch (error) {
+    console.error("Error adding branch BSSID:", error);
+    res.status(500).json({ message: "حدث خطأ أثناء إضافة BSSID." });
+  }
+});
+
+// Remove a BSSID from a branch
+app.delete('/api/owner/branches/:branchId/bssids/:bssid', async (req, res) => {
+  const branchId = req.params.branchId;
+  const bssid = req.params.bssid.toUpperCase().replace(/-/g, ':');
+
+  try {
+    // Delete from branchBssids table
+    const deleted = await db
+      .delete(branchBssids)
+      .where(
+        and(
+          eq(branchBssids.branchId, branchId),
+          eq(branchBssids.bssidAddress, bssid)
+        )
+      )
+      .returning();
+
+    if (deleted.length === 0) {
+      return res.status(404).json({ message: 'BSSID غير موجود' });
+    }
+
+    res.json({
+      success: true,
+      message: 'تم حذف BSSID بنجاح',
+    });
+  } catch (error) {
+    console.error("Error removing branch BSSID:", error);
+    res.status(500).json({ message: "حدث خطأ أثناء حذف BSSID." });
+  }
+});
+
 // قائمة الموظفين للمالك
 app.get('/api/owner/employees', async (req, res) => {
   try {
@@ -4670,21 +4813,39 @@ app.post('/api/pulses', async (req, res) => {
     // Determine geofence validity
     geofenceValid = distance <= geofenceRadius;
 
-    // Determine wifi validity: check against branches table
+    // Determine wifi validity: check against branches table AND branchBssids table
         if (employee.branchId) {
           const [branch] = await db
             .select()
             .from(branches)
             .where(eq(branches.id, employee.branchId))
             .limit(1);
-    
+
           if (branch) {
-            const allowedBssids = [branch.bssid_1, branch.bssid_2].filter(Boolean);
-            if (allowedBssids.length > 0) {
+            // Get BSSIDs from both sources: legacy (bssid_1, bssid_2) and new table (branchBssids)
+            const allowedBssids = new Set<string>();
+
+            // Add legacy BSSIDs
+            if (branch.bssid_1) allowedBssids.add(branch.bssid_1.toUpperCase());
+            if (branch.bssid_2) allowedBssids.add(branch.bssid_2.toUpperCase());
+
+            // Add BSSIDs from branchBssids table
+            const bssidRecords = await db
+              .select()
+              .from(branchBssids)
+              .where(eq(branchBssids.branchId, employee.branchId));
+
+            bssidRecords.forEach(record => {
+              if (record.bssidAddress) {
+                allowedBssids.add(record.bssidAddress.toUpperCase());
+              }
+            });
+
+            if (allowedBssids.size > 0) {
               if (!wifi_bssid) {
                 wifiValid = false;
               } else {
-                wifiValid = allowedBssids.some(b => b.toUpperCase() === String(wifi_bssid).toUpperCase());
+                wifiValid = allowedBssids.has(String(wifi_bssid).toUpperCase());
               }
             } else {
               wifiValid = true; // No BSSIDs set, allow any
