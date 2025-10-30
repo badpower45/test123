@@ -3,19 +3,45 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import bcrypt from 'bcrypt';
+import cron from 'node-cron';
 import { db } from './db.js';
-import { employees, attendance, attendanceRequests, leaveRequests, advances, deductions, absenceNotifications, pulses, branches, breaks } from '../shared/schema.js';
-import { eq, and, gte, lte, lt, desc, sql, inArray } from 'drizzle-orm';
+import { employees, attendance, attendanceRequests, leaveRequests, advances, deductions, absenceNotifications, pulses, branches, branchBssids, branchManagers, breaks, deviceSessions, notifications, salaryCalculations, geofenceViolations } from '../shared/schema.js';
+import { eq, and, gte, lte, lt, desc, sql, inArray, isNull } from 'drizzle-orm';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = Number(process.env.PORT) || 5000;
+// Debug logs for environment
+console.log('[DEBUG] Server starting...');
+console.log('[DEBUG] PORT:', PORT);
+console.log('[DEBUG] NODE_ENV:', process.env.NODE_ENV);
+console.log('[DEBUG] DATABASE_URL present:', !!process.env.DATABASE_URL);
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, '../public')));
 // =============================================================================
 // UTILITY FUNCTIONS
+/**
+ * Helper function to get date string in YYYY-MM-DD format
+ */
+function getDateString(date) {
+    if (typeof date === 'string') {
+        return date;
+    }
+    return date.toISOString().split('T')[0];
+}
+/**
+ * Helper function to validate BSSID format
+ * BSSID should be 6 pairs of hex digits separated by colons or dashes
+ */
+function isValidBssid(bssid) {
+    if (!bssid)
+        return false;
+    // Regex to match 6 pairs of hex digits (0-9, A-F, a-f) separated by : or -
+    const bssidRegex = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
+    return bssidRegex.test(bssid);
+}
 // =============================================================================
 /**
  * Convert string numbers to actual numbers in objects
@@ -63,6 +89,44 @@ async function getOwnerRecord(ownerId) {
         return null;
     }
     return owner;
+}
+/**
+ * Send notification to user
+ */
+async function sendNotification(recipientId, type, title, message, senderId, relatedId) {
+    try {
+        await db.insert(notifications).values({
+            recipientId,
+            senderId: senderId || null,
+            type: type,
+            title,
+            message,
+            relatedId: relatedId || null,
+        });
+    }
+    catch (error) {
+        console.error('Send notification error:', error);
+    }
+}
+/**
+ * Get owner employee ID
+ */
+async function getOwnerId() {
+    try {
+        const owners = await db
+            .select()
+            .from(employees)
+            .where(eq(employees.role, 'owner'))
+            .limit(1);
+        if (owners.length > 0) {
+            return owners[0].id;
+        }
+        return null;
+    }
+    catch (error) {
+        console.error('Get owner ID error:', error);
+        return null;
+    }
 }
 // Force JSON-only API errors (avoid HTML bodies that cause Flutter FormatException)
 // Set JSON content-type for API routes only
@@ -325,7 +389,16 @@ app.post('/api/auth/login', async (req, res) => {
             });
             return res.status(401).json({ error: 'Invalid credentials' });
         }
-        const isValidPin = await bcrypt.compare(providedPin, storedPinHash);
+        // Check if PIN is valid (handle both bcrypt hashes and plain text PINs)
+        let isValidPin = false;
+        if (storedPinHash.startsWith('$2b$') || storedPinHash.startsWith('$2a$')) {
+            // It's a bcrypt hash, use bcrypt comparison
+            isValidPin = await bcrypt.compare(providedPin, storedPinHash);
+        }
+        else {
+            // It's plain text, do direct comparison
+            isValidPin = providedPin === storedPinHash;
+        }
         if (!isValidPin) {
             console.warn('[auth/login] Invalid PIN attempt', {
                 employeeId: normalizedEmployeeId,
@@ -358,9 +431,115 @@ app.post('/api/auth/login', async (req, res) => {
 // Check In
 app.post('/api/attendance/check-in', async (req, res) => {
     try {
-        const { employee_id, latitude, longitude } = req.body;
+        const { employee_id, latitude, longitude, wifi_bssid } = req.body;
         if (!employee_id) {
             return res.status(400).json({ error: 'Employee ID is required' });
+        }
+        // Fetch employee to check shift times
+        const [employee] = await db
+            .select()
+            .from(employees)
+            .where(eq(employees.id, employee_id))
+            .limit(1);
+        if (!employee) {
+            return res.status(404).json({ error: 'Employee not found' });
+        }
+        // --- START WIFI BSSID VERIFICATION ---
+        if (employee.branchId) {
+            const [branch] = await db
+                .select()
+                .from(branches)
+                .where(eq(branches.id, employee.branchId))
+                .limit(1);
+            if (branch) {
+                // Get BSSIDs from both sources: legacy (bssid_1, bssid_2) and new table (branchBssids)
+                const allowedBssids = new Set();
+                // Add legacy BSSIDs
+                if (branch.bssid_1)
+                    allowedBssids.add(branch.bssid_1.toUpperCase());
+                if (branch.bssid_2)
+                    allowedBssids.add(branch.bssid_2.toUpperCase());
+                // Add BSSIDs from branchBssids table
+                const bssidRecords = await db
+                    .select()
+                    .from(branchBssids)
+                    .where(eq(branchBssids.branchId, employee.branchId));
+                bssidRecords.forEach(record => {
+                    if (record.bssidAddress) {
+                        allowedBssids.add(record.bssidAddress.toUpperCase());
+                    }
+                });
+                if (allowedBssids.size > 0) {
+                    const currentBssid = wifi_bssid ? String(wifi_bssid).toUpperCase() : null;
+                    if (!currentBssid || !allowedBssids.has(currentBssid)) {
+                        console.log(`[Check-In] ❌ REJECTED - Invalid BSSID (${currentBssid}) for branch ${employee.branchId}. Allowed: [${Array.from(allowedBssids).join(', ')}]`);
+                        return res.status(403).json({
+                            error: 'أنت غير متصل بشبكة الواي فاي المعتمدة للفرع.',
+                            message: `الشبكة الحالية: ${currentBssid || 'غير معروف'}. يرجى الاتصال بالشبكة الصحيحة.`,
+                            code: 'INVALID_WIFI_BSSID',
+                        });
+                    }
+                    console.log(`[Check-In] ✅ APPROVED - Valid BSSID (${currentBssid})`);
+                }
+                else {
+                    // No BSSIDs registered, allow through
+                    console.log(`[Check-In] WiFi check skipped: No BSSIDs registered for branch ${employee.branchId}`);
+                }
+            }
+        }
+        // --- END WIFI BSSID VERIFICATION ---
+        // --- START DEBUG LOG ---
+        console.log(`[Check-In Debug] Employee: ${employee_id}, Shift Start: ${employee.shiftStartTime}, Shift End: ${employee.shiftEndTime}`);
+        // Get Egypt/Cairo time
+        const cairoTime = new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' });
+        const cairoDate = new Date(cairoTime);
+        console.log(`[Check-In Debug] Server Time (UTC): ${new Date().toISOString()}`);
+        console.log(`[Check-In Debug] Cairo Time: ${cairoTime}`);
+        console.log(`[Check-In Debug] Cairo Time (Date Object): ${cairoDate.toISOString()}`);
+        // --- END DEBUG LOG ---
+        // Validate shift time using Cairo timezone
+        if (employee.shiftStartTime && employee.shiftEndTime) {
+            // Use Cairo time for validation
+            const currentHour = cairoDate.getHours();
+            const currentMinute = cairoDate.getMinutes();
+            const currentTime = currentHour * 60 + currentMinute; // Convert to minutes since midnight
+            console.log(`[Check-In Debug] Cairo Current Time: ${currentHour}:${currentMinute.toString().padStart(2, '0')} (${currentTime} minutes)`);
+            // Parse shift times (format: "HH:mm")
+            const [startHour, startMinute] = employee.shiftStartTime.split(':').map(Number);
+            const [endHour, endMinute] = employee.shiftEndTime.split(':').map(Number);
+            const shiftStart = startHour * 60 + startMinute;
+            const shiftEnd = endHour * 60 + endMinute;
+            console.log(`[Check-In Debug] Shift Window: ${employee.shiftStartTime} (${shiftStart} min) to ${employee.shiftEndTime} (${shiftEnd} min)`);
+            // Check if current time is within shift window
+            let isWithinShift = false;
+            if (shiftEnd > shiftStart) {
+                // Normal shift (e.g., 9:00 - 17:00)
+                isWithinShift = currentTime >= shiftStart && currentTime <= shiftEnd;
+                console.log(`[Check-In Debug] Normal shift check: ${currentTime} >= ${shiftStart} && ${currentTime} <= ${shiftEnd} = ${isWithinShift}`);
+            }
+            else {
+                // Night shift crossing midnight (e.g., 21:00 - 05:00)
+                isWithinShift = currentTime >= shiftStart || currentTime <= shiftEnd;
+                console.log(`[Check-In Debug] Night shift check: ${currentTime} >= ${shiftStart} || ${currentTime} <= ${shiftEnd} = ${isWithinShift}`);
+            }
+            if (!isWithinShift) {
+                const formatTime = (minutes) => {
+                    const h = Math.floor(minutes / 60);
+                    const m = minutes % 60;
+                    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+                };
+                console.log(`[Check-In Debug] ❌ REJECTED - Outside shift time`);
+                return res.status(400).json({
+                    error: 'لا يمكنك تسجيل الحضور خارج وقت الشيفت المحدد',
+                    message: `وقت الشيفت الخاص بك من ${employee.shiftStartTime} إلى ${employee.shiftEndTime}. الوقت الحالي: ${formatTime(currentTime)}`,
+                    shiftStartTime: employee.shiftStartTime,
+                    shiftEndTime: employee.shiftEndTime,
+                    currentTime: formatTime(currentTime),
+                    cairoTime: cairoTime,
+                    code: 'OUTSIDE_SHIFT_TIME',
+                });
+            }
+            console.log(`[Check-In Debug] ✅ APPROVED - Within shift time`);
         }
         const today = new Date().toISOString().split('T')[0];
         // Check if already checked in today
@@ -375,30 +554,99 @@ app.post('/api/attendance/check-in', async (req, res) => {
                 attendance: existing
             });
         }
-        // Create new attendance record
-        const insertResult = await db
-            .insert(attendance)
-            .values({
-            employeeId: employee_id,
-            checkInTime: new Date(),
-            date: today,
-            status: 'active',
-        })
-            .returning();
-        const newAttendance = extractFirstRow(insertResult);
-        // Create pulse for location tracking
-        if (latitude && longitude) {
-            await db.insert(pulses).values({
-                employeeId: employee_id,
-                latitude,
-                longitude,
-                timestamp: new Date(),
-            });
+        // Validate geofence if employee has branchId
+        if (employee.branchId && latitude && longitude) {
+            const [branch] = await db
+                .select()
+                .from(branches)
+                .where(eq(branches.id, employee.branchId))
+                .limit(1);
+            if (branch) {
+                const branchLat = branch.latitude ? Number(branch.latitude) : null;
+                const branchLng = branch.longitude ? Number(branch.longitude) : null;
+                const radius = branch.geofenceRadius || 500; // Increased default to 500 meters
+                console.log(`Geofence data: branchLat=${branchLat}, branchLng=${branchLng}, radius=${radius}`);
+                console.log(`Employee location: lat=${latitude}, lng=${longitude}`);
+                if (branchLat && branchLng) {
+                    // Calculate distance using Haversine formula
+                    const R = 6371e3; // Earth radius in meters
+                    const φ1 = (branchLat * Math.PI) / 180;
+                    const φ2 = (latitude * Math.PI) / 180;
+                    const Δφ = ((latitude - branchLat) * Math.PI) / 180;
+                    const Δλ = ((longitude - branchLng) * Math.PI) / 180;
+                    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+                        Math.cos(φ1) * Math.cos(φ2) *
+                            Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+                    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                    const distance = R * c;
+                    console.log(`Geofence check: distance=${distance.toFixed(2)}m, radius=${radius}m, allowed=${distance <= radius}`);
+                    if (distance > radius) {
+                        return res.status(403).json({
+                            error: 'أنت خارج نطاق الموقع المسموح. يجب أن تكون داخل الفرع لتسجيل الحضور.',
+                            distance: Math.round(distance),
+                            allowedRadius: radius,
+                            branchLocation: { lat: branchLat, lng: branchLng },
+                            yourLocation: { lat: latitude, lng: longitude },
+                        });
+                    }
+                }
+                else {
+                    console.log(`Warning: Branch ${employee.branchId} has no location set`);
+                }
+            }
+            else {
+                console.log(`Warning: Branch ${employee.branchId} not found`);
+            }
         }
-        res.json({
+        else {
+            console.log(`Geofence check skipped: branchId=${employee.branchId}, lat=${latitude}, lng=${longitude}`);
+        }
+        // Use transaction to ensure atomicity
+        const result = await db.transaction(async (tx) => {
+            // Create new attendance record
+            const insertResult = await tx
+                .insert(attendance)
+                .values({
+                employeeId: employee_id,
+                checkInTime: new Date(),
+                date: today,
+                status: 'active',
+            })
+                .returning();
+            const newAttendance = extractFirstRow(insertResult);
+            // Create pulse for location tracking
+            if (latitude && longitude && employee.branchId) {
+                await tx.insert(pulses).values({
+                    employeeId: employee_id,
+                    branchId: employee.branchId,
+                    latitude,
+                    longitude,
+                    isWithinGeofence: true,
+                });
+            }
+            return newAttendance;
+        });
+        // Send notification to owner
+        const ownerId = await getOwnerId();
+        if (ownerId) {
+            const checkInTime = new Date().toLocaleTimeString('ar-EG', {
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+            await sendNotification(ownerId, 'CHECK_IN', 'تسجيل حضور جديد', `${employee.fullName} سجل حضوره في ${checkInTime}`, employee_id, result?.id);
+        }
+        res.status(201).json({
             success: true,
             message: 'تم تسجيل الحضور بنجاح',
-            attendance: newAttendance,
+            attendance: {
+                id: result?.id,
+                employeeId: employee_id,
+                date: today,
+                checkInTime: result?.checkInTime,
+                checkOutTime: null,
+                workHours: '0.00',
+                status: 'active',
+            },
         });
     }
     catch (error) {
@@ -409,7 +657,7 @@ app.post('/api/attendance/check-in', async (req, res) => {
 // Check Out
 app.post('/api/attendance/check-out', async (req, res) => {
     try {
-        const { employee_id, latitude, longitude } = req.body;
+        const { employee_id, latitude, longitude, wifi_bssid } = req.body;
         if (!employee_id) {
             return res.status(400).json({ error: 'Employee ID is required' });
         }
@@ -423,35 +671,108 @@ app.post('/api/attendance/check-out', async (req, res) => {
         if (!activeAttendance) {
             return res.status(400).json({ error: 'No active check-in found for today' });
         }
+        // Validate geofence for check-out
+        const [employee] = await db
+            .select()
+            .from(employees)
+            .where(eq(employees.id, employee_id))
+            .limit(1);
+        // --- START WIFI BSSID VERIFICATION ---
+        if (employee && employee.branchId) {
+            const [branch] = await db
+                .select()
+                .from(branches)
+                .where(eq(branches.id, employee.branchId))
+                .limit(1);
+            if (branch) {
+                const allowedBssids = [branch.bssid_1, branch.bssid_2]
+                    .filter(Boolean)
+                    .map(b => b.toUpperCase());
+                if (allowedBssids.length > 0) {
+                    const currentBssid = wifi_bssid ? String(wifi_bssid).toUpperCase() : null;
+                    if (!currentBssid || !allowedBssids.includes(currentBssid)) {
+                        console.log(`[Check-Out] ❌ REJECTED - Invalid BSSID (${currentBssid}) for branch ${employee.branchId}. Allowed: [${allowedBssids.join(', ')}]`);
+                        return res.status(403).json({
+                            error: 'أنت غير متصل بشبكة الواي فاي المعتمدة للفرع.',
+                            message: `الشبكة الحالية: ${currentBssid || 'غير معروف'}. يرجى الاتصال بالشبكة الصحيحة.`,
+                            code: 'INVALID_WIFI_BSSID',
+                        });
+                    }
+                    console.log(`[Check-Out] ✅ APPROVED - Valid BSSID (${currentBssid})`);
+                }
+                else {
+                    // No BSSIDs registered, allow through
+                    console.log(`[Check-Out] WiFi check skipped: No BSSIDs registered for branch ${employee.branchId}`);
+                }
+            }
+        }
+        // --- END WIFI BSSID VERIFICATION ---
+        if (employee && employee.branchId && latitude && longitude) {
+            const [branch] = await db
+                .select()
+                .from(branches)
+                .where(eq(branches.id, employee.branchId))
+                .limit(1);
+            if (branch) {
+                const branchLat = branch.latitude ? Number(branch.latitude) : null;
+                const branchLng = branch.longitude ? Number(branch.longitude) : null;
+                const radius = branch.geofenceRadius || 100;
+                if (branchLat && branchLng) {
+                    const R = 6371e3;
+                    const φ1 = (branchLat * Math.PI) / 180;
+                    const φ2 = (latitude * Math.PI) / 180;
+                    const Δφ = ((latitude - branchLat) * Math.PI) / 180;
+                    const Δλ = ((longitude - branchLng) * Math.PI) / 180;
+                    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+                        Math.cos(φ1) * Math.cos(φ2) *
+                            Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+                    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                    const distance = R * c;
+                    if (distance > radius) {
+                        return res.status(403).json({
+                            error: 'أنت خارج نطاق الموقع المسموح. يجب أن تكون داخل الفرع لتسجيل الانصراف.',
+                            distance: Math.round(distance),
+                            allowedRadius: radius,
+                        });
+                    }
+                }
+            }
+        }
         // Calculate work hours
         const checkOutTime = new Date();
         const checkInTime = new Date(activeAttendance.checkInTime);
         const workHours = (checkOutTime.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
-        // Update attendance record
-        const updateResult = await db
-            .update(attendance)
-            .set({
-            checkOutTime,
-            workHours: workHours.toFixed(2),
-            status: 'completed',
-            updatedAt: new Date(),
-        })
-            .where(eq(attendance.id, activeAttendance.id))
-            .returning();
-        const updated = extractFirstRow(updateResult);
-        // Create pulse for location tracking
-        if (latitude && longitude) {
-            await db.insert(pulses).values({
-                employeeId: employee_id,
-                latitude,
-                longitude,
-                timestamp: new Date(),
-            });
-        }
+        // Use transaction to ensure atomicity
+        const result = await db.transaction(async (tx) => {
+            // Update attendance record
+            const updateResult = await tx
+                .update(attendance)
+                .set({
+                checkOutTime,
+                workHours: workHours.toFixed(2),
+                status: 'completed',
+                updatedAt: new Date(),
+            })
+                .where(eq(attendance.id, activeAttendance.id))
+                .returning();
+            const updated = extractFirstRow(updateResult);
+            // Create pulse for location tracking
+            if (latitude && longitude && employee && employee.branchId) {
+                await tx.insert(pulses).values({
+                    employeeId: employee_id,
+                    branchId: employee.branchId,
+                    latitude,
+                    longitude,
+                    status: 'IN',
+                    createdAt: new Date(),
+                });
+            }
+            return updated;
+        });
         res.json({
             success: true,
             message: 'تم تسجيل الانصراف بنجاح',
-            attendance: updated,
+            attendance: result,
             workHours: parseFloat(workHours.toFixed(2)),
         });
     }
@@ -481,10 +802,16 @@ app.get('/api/pulses/active/:employeeId', async (req, res) => {
         const result = await db
             .select({ count: sql `count(*)` })
             .from(pulses)
-            .where(and(eq(pulses.employeeId, employeeId), eq(pulses.isWithinGeofence, true), gte(pulses.timestamp, startTs), lte(pulses.timestamp, now)));
+            .where(and(eq(pulses.employeeId, employeeId), eq(pulses.isWithinGeofence, true), gte(pulses.createdAt, startTs), lte(pulses.createdAt, now)));
         const validPulseCount = Number(result[0]?.count) || 0;
-        const HOURLY_RATE = 40;
-        const pulseValue = (HOURLY_RATE / 3600) * 30; // قيمة كل نبضة
+        // Fetch employee to get their hourly rate (fallback to 40 if not set)
+        const [employeeRecord] = await db
+            .select()
+            .from(employees)
+            .where(eq(employees.id, employeeId))
+            .limit(1);
+        const hourlyRate = employeeRecord && employeeRecord.hourlyRate ? Number(employeeRecord.hourlyRate) : 40;
+        const pulseValue = (hourlyRate / 3600) * 30; // قيمة كل نبضة (30 ثانية)
         const earnings = validPulseCount * pulseValue;
         res.json({
             success: true,
@@ -512,7 +839,7 @@ app.get('/api/pulses/period/:employeeId', async (req, res) => {
         const result = await db
             .select({ count: sql `count(*)` })
             .from(pulses)
-            .where(and(eq(pulses.employeeId, employeeId), eq(pulses.isWithinGeofence, true), gte(pulses.timestamp, startTs), lte(pulses.timestamp, endTs)));
+            .where(and(eq(pulses.employeeId, employeeId), eq(pulses.isWithinGeofence, true), gte(pulses.createdAt, startTs), lte(pulses.createdAt, endTs)));
         const validPulseCount = Number(result[0]?.count) || 0;
         const HOURLY_RATE = 40;
         const pulseValue = (HOURLY_RATE / 3600) * 30;
@@ -608,12 +935,14 @@ app.post('/api/attendance/request-checkout', async (req, res) => {
 // Get pending requests (for manager)
 app.get('/api/attendance/requests', async (req, res) => {
     try {
-        const { status = 'pending' } = req.query;
-        const requests = await db
+        const { status = 'pending', manager_id } = req.query;
+        let query = db
             .select({
             id: attendanceRequests.id,
             employeeId: attendanceRequests.employeeId,
             employeeName: employees.fullName,
+            employeeBranch: employees.branch,
+            employeeBranchId: employees.branchId,
             requestType: attendanceRequests.requestType,
             requestedTime: attendanceRequests.requestedTime,
             reason: attendanceRequests.reason,
@@ -622,8 +951,35 @@ app.get('/api/attendance/requests', async (req, res) => {
         })
             .from(attendanceRequests)
             .innerJoin(employees, eq(attendanceRequests.employeeId, employees.id))
-            .where(eq(attendanceRequests.status, status))
-            .orderBy(desc(attendanceRequests.createdAt));
+            .$dynamic();
+        // أول فلترة (دي لازم تكون موجودة دايماً)
+        query = query.where(eq(attendanceRequests.status, status));
+        // If manager_id provided, filter by employees in that manager's branch
+        if (manager_id && typeof manager_id === 'string') {
+            // Get manager's branch
+            const [manager] = await db
+                .select()
+                .from(employees)
+                .where(eq(employees.id, manager_id))
+                .limit(1);
+            if (manager && manager.branchId) {
+                // Find branches where this manager is assigned
+                const managerBranches = await db
+                    .select()
+                    .from(branches)
+                    .where(eq(branches.managerId, manager_id));
+                const branchIds = managerBranches.map(b => b.id);
+                if (branchIds.length > 0) {
+                    // Filter requests to only employees in manager's branches
+                    query = query.where(sql `${employees.branchId} = ANY(${branchIds})`);
+                }
+                else {
+                    // Manager has no branches, return empty
+                    return res.json({ requests: [] });
+                }
+            }
+        }
+        const requests = await query.orderBy(desc(attendanceRequests.createdAt));
         res.json({ requests });
     }
     catch (error) {
@@ -788,12 +1144,14 @@ app.post('/api/leave/request', async (req, res) => {
 // Get leave requests
 app.get('/api/leave/requests', async (req, res) => {
     try {
-        const { employee_id, status } = req.query;
+        const { employee_id, status, manager_id } = req.query;
         let query = db
             .select({
             id: leaveRequests.id,
             employeeId: leaveRequests.employeeId,
             employeeName: employees.fullName,
+            employeeBranch: employees.branch,
+            employeeBranchId: employees.branchId,
             startDate: leaveRequests.startDate,
             endDate: leaveRequests.endDate,
             leaveType: leaveRequests.leaveType,
@@ -811,6 +1169,21 @@ app.get('/api/leave/requests', async (req, res) => {
         }
         if (status) {
             query = query.where(eq(leaveRequests.status, status));
+        }
+        // If manager_id provided, filter by employees in that manager's branch
+        if (manager_id && typeof manager_id === 'string' && !employee_id) {
+            const managerBranches = await db
+                .select()
+                .from(branches)
+                .where(eq(branches.managerId, manager_id));
+            const branchIds = managerBranches.map(b => b.id);
+            if (branchIds.length > 0) {
+                query = query.where(sql `${employees.branchId} = ANY(${branchIds})`);
+            }
+            else {
+                // Manager has no branches, return empty
+                return res.json({ requests: [] });
+            }
         }
         const requests = await query.orderBy(desc(leaveRequests.createdAt));
         res.json({
@@ -853,6 +1226,172 @@ app.post('/api/leave/requests/:requestId/review', async (req, res) => {
     }
 });
 // =============================================================================
+// LEAVE REQUEST ENHANCEMENTS - تحسينات نظام طلبات الإجازات
+// =============================================================================
+// دالة مساعدة للحصول على كل التواريخ بين تاريخين
+function getDatesInRange(startDateStr, endDateStr) {
+    const dates = [];
+    // معالجة التواريخ لضمان عدم الوقوع في مشاكل التوقيت المحلي (Timezone)
+    const start = new Date(startDateStr + 'T00:00:00Z');
+    const end = new Date(endDateStr + 'T00:00:00Z');
+    let current = new Date(start.getTime());
+    while (current <= end) {
+        dates.push(new Date(current.getTime())); // إضافة نسخة من التاريخ
+        current.setDate(current.getDate() + 1); // الانتقال لليوم التالي
+    }
+    return dates;
+}
+/**
+ * دالة لجلب طلبات الإجازة المعلقة مع تفاصيل الموظف والفرع للأونر
+ */
+export async function getDetailedPendingLeaveRequestsForOwner() {
+    const detailedRequests = await db.select({
+        // --- من جدول leaveRequests ---
+        requestId: leaveRequests.id,
+        startDate: leaveRequests.startDate,
+        endDate: leaveRequests.endDate,
+        leaveType: leaveRequests.leaveType,
+        reason: leaveRequests.reason,
+        status: leaveRequests.status,
+        daysCount: leaveRequests.daysCount,
+        allowanceAmount: leaveRequests.allowanceAmount,
+        createdAt: leaveRequests.createdAt,
+        // --- من جدول employees ---
+        employeeId: employees.id,
+        employeeName: employees.fullName,
+        employeeRole: employees.role,
+        employeeSalary: employees.monthlySalary,
+        // --- من جدول branches ---
+        branchName: branches.name,
+    })
+        .from(leaveRequests)
+        .leftJoin(employees, eq(leaveRequests.employeeId, employees.id))
+        .leftJoin(branches, eq(employees.branchId, branches.id))
+        .where(and(eq(leaveRequests.status, 'pending')))
+        .orderBy(desc(leaveRequests.createdAt));
+    return detailedRequests;
+}
+/**
+ * دالة لموافقة الأونر على طلب إجازة + تسجيله آلياً في جدول الحضور
+ * @param leaveRequestId - ID طلب الإجازة للموافقة عليه
+ * @param ownerUserId - ID الأونر الذي قام بالموافقة (من جدول 'users')
+ */
+export async function approveLeaveRequestAndLogAttendance(leaveRequestId, ownerUserId // نفترض أنه UUID حسب الـ schema
+) {
+    // نستخدم Transaction لضمان تنفيذ العمليتين معاً أو فشلهما معاً
+    const result = await db.transaction(async (tx) => {
+        // 1. تحديث حالة طلب الإجازة إلى "approved"
+        const updatedLeaves = await tx
+            .update(leaveRequests)
+            .set({
+            status: 'approved',
+            reviewedBy: ownerUserId, // reviewedBy هو UUID حسب الـ schema
+            reviewedAt: new Date(),
+        })
+            .where(and(eq(leaveRequests.id, leaveRequestId), eq(leaveRequests.status, 'pending') // ضمان الموافقة مرة واحدة فقط
+        ))
+            .returning({
+            employeeId: leaveRequests.employeeId,
+            startDate: leaveRequests.startDate,
+            endDate: leaveRequests.endDate
+        });
+        if (updatedLeaves.length === 0) {
+            throw new Error('لم يتم العثور على الطلب أو تم مراجعته من قبل.');
+        }
+        const leave = updatedLeaves[0];
+        // 2. الحصول على قائمة الأيام الخاصة بالإجازة
+        // (الـ Schema تشير إلى أن startDate/endDate من نوع 'date')
+        const datesToLog = getDatesInRange(leave.startDate, leave.endDate);
+        if (datesToLog.length === 0) {
+            throw new Error('نطاق التواريخ غير صحيح.');
+        }
+        const datesAsStrings = datesToLog.map(d => d.toISOString().split('T')[0]); // 'YYYY-MM-DD'
+        // 3. (مهم جداً) حذف أي سجلات حضور موجودة لهذا الموظف في هذه الأيام
+        // هذا يضمن أن سجل "الإجازة" يحل محل أي سجل "غياب آلي"
+        await tx
+            .delete(attendance)
+            .where(and(eq(attendance.employeeId, leave.employeeId), inArray(attendance.date, datesAsStrings)));
+        // 4. تجهيز سجلات الحضور الجديدة (يوم لكل تاريخ)
+        const attendanceRecordsToInsert = datesAsStrings.map(dateStr => ({
+            // 'id' سيتم إنشاؤه آلياً (defaultRandom)
+            employeeId: leave.employeeId,
+            date: dateStr, // تاريخ اليوم 'YYYY-MM-DD'
+            status: 'ON_LEAVE', // <-- *** الحالة الجديدة التي تميز الإجازة ***
+            checkInTime: null,
+            checkOutTime: null,
+            workHours: '0', // ساعات العمل صفر لأنه إجازة
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        }));
+        // 5. إدخال السجلات الجديدة دفعة واحدة في جدول الحضور
+        if (attendanceRecordsToInsert.length > 0) {
+            await tx
+                .insert(attendance)
+                .values(attendanceRecordsToInsert);
+        }
+        return {
+            success: true,
+            message: 'تمت الموافقة وتسجيل الإجازة في الحضور',
+            employeeId: leave.employeeId,
+            daysLogged: datesToLog.length
+        };
+    });
+    return result;
+}
+// New API endpoint for owner to get detailed pending leave requests
+app.get('/api/owner/leaves/pending', async (req, res) => {
+    try {
+        const ownerId = req.query.owner_id;
+        if (!ownerId) {
+            return res.status(400).json({ error: 'owner_id is required' });
+        }
+        const ownerRecord = await getOwnerRecord(ownerId);
+        if (!ownerRecord) {
+            return res.status(403).json({ error: 'لا توجد صلاحيات للوصول إلى طلبات الإجازات' });
+        }
+        const detailedRequests = await getDetailedPendingLeaveRequestsForOwner();
+        // Normalize numeric fields
+        const normalizedRequests = detailedRequests.map(request => ({
+            ...request,
+            daysCount: request.daysCount ? Number(request.daysCount) : 0,
+            allowanceAmount: request.allowanceAmount ? Number(request.allowanceAmount) : 0,
+            employeeSalary: request.employeeSalary ? Number(request.employeeSalary) : 0,
+        }));
+        res.json({
+            success: true,
+            requests: normalizedRequests,
+        });
+    }
+    catch (error) {
+        console.error('Get detailed pending leave requests error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// New API endpoint for owner to approve leave request and log attendance
+app.post('/api/owner/leaves/approve', async (req, res) => {
+    try {
+        const { leave_request_id, owner_user_id } = req.body;
+        if (!leave_request_id || !owner_user_id) {
+            return res.status(400).json({ error: 'leave_request_id and owner_user_id are required' });
+        }
+        // Verify owner permissions
+        const ownerRecord = await getOwnerRecord(owner_user_id);
+        if (!ownerRecord) {
+            return res.status(403).json({ error: 'لا توجد صلاحيات للموافقة على طلبات الإجازات' });
+        }
+        const result = await approveLeaveRequestAndLogAttendance(leave_request_id, owner_user_id);
+        res.json(result);
+    }
+    catch (error) {
+        console.error('Approve leave and log attendance error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Internal server error',
+            message: error?.message
+        });
+    }
+});
+// =============================================================================
 // SALARY ADVANCES - السلف
 // =============================================================================
 // Request salary advance
@@ -892,7 +1431,7 @@ app.post('/api/advances/request', async (req, res) => {
         const validPulsesResult = await db
             .select({ count: sql `count(*)` })
             .from(pulses)
-            .where(and(eq(pulses.employeeId, employee_id), eq(pulses.isWithinGeofence, true), gte(pulses.timestamp, periodStart), lte(pulses.timestamp, now)));
+            .where(and(eq(pulses.employeeId, employee_id), eq(pulses.isWithinGeofence, true), gte(pulses.createdAt, periodStart), lte(pulses.createdAt, now)));
         const validPulseCount = validPulsesResult[0]?.count || 0;
         // Calculate earnings (40 EGP/hour, pulse every 30 seconds = 0.333 EGP per pulse)
         const HOURLY_RATE = 40;
@@ -978,22 +1517,11 @@ app.post('/api/advances/:advanceId/review', async (req, res) => {
             reviewedAt: new Date(),
         })
             .where(eq(advances.id, advanceId))
-            .returning({ id: advances.id, employeeId: advances.employeeId, amount: advances.amount, eligibleAmount: advances.eligibleAmount, currentSalary: advances.currentSalary, status: advances.status, reviewedBy: advances.reviewedBy, reviewedAt: advances.reviewedAt });
+            .returning();
         const updated = extractFirstRow(updateResult);
-        // If approved, deduct the advance amount from salary by creating a deduction record
-        if (action === 'approve' && updated) {
-            await db.insert(deductions).values({
-                employeeId: updated.employeeId,
-                amount: String(updated.amount),
-                reason: 'سلفة معتمدة من المدير',
-                deductionDate: new Date().toISOString().split('T')[0],
-                deductionType: 'advance',
-                appliedBy: reviewer_id,
-            });
-        }
         res.json({
             success: true,
-            message: action === 'approve' ? 'تم الموافقة على السلفة وخصمها من الراتب' : 'تم رفض السلفة',
+            message: action === 'approve' ? 'تم الموافقة على السلفة وسيتم خصمها في الراتب القادم' : 'تم رفض السلفة',
             advance: updated,
         });
     }
@@ -1045,15 +1573,53 @@ app.post('/api/absence/:notificationId/review', async (req, res) => {
             return res.status(404).json({ error: 'Notification not found' });
         }
         let deductionAmount = '0';
-        // If rejected → apply 2 days deduction (غياب بدون إذن)
-        // حسب السيستم الإداري: الغياب مرة واحدة بدون إذن = خصم يومين كاملين
+        // If rejected → apply 2 days deduction based on employee's shift hours
         if (action === 'reject') {
-            deductionAmount = '400'; // 2 days * 200 EGP/day (خصم يومين)
+            // Get employee to calculate shift-based deduction
+            const [employee] = await db
+                .select()
+                .from(employees)
+                .where(eq(employees.id, notification.employeeId))
+                .limit(1);
+            if (employee && employee.shiftStartTime && employee.shiftEndTime) {
+                // Parse shift times
+                const [startHour, startMinute] = employee.shiftStartTime.split(':').map(Number);
+                const [endHour, endMinute] = employee.shiftEndTime.split(':').map(Number);
+                // Calculate shift duration in hours
+                let shiftDurationMinutes;
+                const startTimeMinutes = startHour * 60 + startMinute;
+                const endTimeMinutes = endHour * 60 + endMinute;
+                if (endTimeMinutes > startTimeMinutes) {
+                    // Normal shift (e.g., 9:00 - 17:00)
+                    shiftDurationMinutes = endTimeMinutes - startTimeMinutes;
+                }
+                else {
+                    // Night shift crossing midnight (e.g., 21:00 - 05:00)
+                    shiftDurationMinutes = (24 * 60 - startTimeMinutes) + endTimeMinutes;
+                }
+                const shiftDurationHours = shiftDurationMinutes / 60;
+                const hourlyRate = parseFloat(employee.hourlyRate?.toString() || '40'); // Default 40 EGP/hour
+                // Calculate: (shift hours × hourly rate) × 2 days
+                const oneDayDeduction = shiftDurationHours * hourlyRate;
+                const twoDaysDeduction = oneDayDeduction * 2;
+                deductionAmount = Math.round(twoDaysDeduction).toString();
+                console.log(`[Absence Review] Employee: ${employee.fullName}`);
+                console.log(`[Absence Review] Shift: ${employee.shiftStartTime} - ${employee.shiftEndTime}`);
+                console.log(`[Absence Review] Duration: ${shiftDurationHours.toFixed(2)} hours`);
+                console.log(`[Absence Review] Hourly Rate: ${hourlyRate} EGP`);
+                console.log(`[Absence Review] 1 Day = ${oneDayDeduction.toFixed(2)} EGP`);
+                console.log(`[Absence Review] 2 Days Deduction = ${deductionAmount} EGP`);
+            }
+            else {
+                // Fallback: if no shift info, use default 400 EGP (8 hours × 40 EGP/hour × 2 days)
+                deductionAmount = '400';
+                console.log(`[Absence Review] No shift info, using default deduction: ${deductionAmount} EGP`);
+            }
             // Create deduction record
             await db.insert(deductions).values({
                 employeeId: notification.employeeId,
                 amount: deductionAmount,
-                reason: notes || 'غياب بدون إذن - خصم يومين كاملين',
+                reason: notes || `غياب بدون إذن - خصم يومين (${deductionAmount} جنيه)`,
                 deductionDate: notification.absenceDate,
                 deductionType: 'absence',
                 appliedBy: reviewer_id,
@@ -1076,7 +1642,7 @@ app.post('/api/absence/:notificationId/review', async (req, res) => {
             success: true,
             message: action === 'approve'
                 ? 'تم الموافقة على الغياب - غياب بإذن'
-                : 'تم رفض الغياب - تم تطبيق خصم يومين',
+                : `تم رفض الغياب - تم تطبيق خصم يومين (${deductionAmount} جنيه)`,
             notification: updated,
             deductionAmount: action === 'reject' ? deductionAmount : '0',
         });
@@ -1147,16 +1713,6 @@ app.get('/api/reports/comprehensive/:employeeId', async (req, res) => {
     try {
         const { employeeId } = req.params;
         const { start_date, end_date, skip_date_check } = req.query;
-        // Check if it's 1st or 16th (skip for managers/admins)
-        // التقارير متاحة فقط يوم 1 (للفترة من 16-31) ويوم 16 (للفترة من 1-15)
-        if (!skip_date_check) {
-            const today = new Date().getDate();
-            if (today !== 1 && today !== 16) {
-                return res.status(403).json({
-                    error: 'التقارير متاحة فقط يوم 1 و 16 من كل شهر - يتجدد حافز الغياب كل 15 يوم'
-                });
-            }
-        }
         // Get employee info
         const [employee] = await db
             .select()
@@ -1176,7 +1732,7 @@ app.get('/api/reports/comprehensive/:employeeId', async (req, res) => {
         const validPulsesResult = await db
             .select({ count: sql `count(*)` })
             .from(pulses)
-            .where(and(eq(pulses.employeeId, employeeId), eq(pulses.isWithinGeofence, true), gte(pulses.timestamp, new Date(start_date)), lte(pulses.timestamp, new Date(end_date))));
+            .where(and(eq(pulses.employeeId, employeeId), eq(pulses.isWithinGeofence, true), gte(pulses.createdAt, new Date(start_date)), lte(pulses.createdAt, new Date(end_date))));
         const validPulseCount = validPulsesResult[0]?.count || 0;
         // Calculate salary from pulses (40 EGP/hour, pulse every 30 seconds)
         const HOURLY_RATE = 40;
@@ -1363,7 +1919,7 @@ app.get('/api/employees/:id/current-earnings', async (req, res) => {
         const validPulsesResult = await db
             .select({ count: sql `count(*)` })
             .from(pulses)
-            .where(and(eq(pulses.employeeId, id), eq(pulses.isWithinGeofence, true), gte(pulses.timestamp, periodStart), lte(pulses.timestamp, now)));
+            .where(and(eq(pulses.employeeId, id), eq(pulses.isWithinGeofence, true), gte(pulses.createdAt, periodStart), lte(pulses.createdAt, now)));
         const validPulseCount = Number(validPulsesResult[0]?.count) || 0;
         // Calculate earnings (40 EGP/hour, pulse every 30 seconds = 0.333 EGP per pulse)
         const HOURLY_RATE = 40;
@@ -1400,6 +1956,10 @@ app.post('/api/employees', async (req, res) => {
             ? req.body.pin
             : req.body.pinCode;
         const pin = typeof pinSource === 'string' ? pinSource.trim() : '';
+        // Get branchId (UUID) from request
+        const branchIdInput = typeof req.body.branchId === 'string' ? req.body.branchId.trim() : undefined;
+        const branchId = branchIdInput && branchIdInput !== '' ? branchIdInput : null;
+        // Optional: Keep branch name for backward compatibility
         const branchInput = typeof req.body.branch === 'string' ? req.body.branch.trim() : undefined;
         const branch = branchInput ? branchInput : null;
         const roleInput = typeof req.body.role === 'string' ? req.body.role.trim().toLowerCase() : undefined;
@@ -1424,16 +1984,30 @@ app.post('/api/employees', async (req, res) => {
             return res.status(400).json({ error: 'id, fullName, and pin are required' });
         }
         const pinHash = await bcrypt.hash(pin, 10);
+        // Get shift times from request
+        const shiftStartTime = typeof req.body.shiftStartTime === 'string' ? req.body.shiftStartTime.trim() : undefined;
+        const shiftEndTime = typeof req.body.shiftEndTime === 'string' ? req.body.shiftEndTime.trim() : undefined;
+        const shiftType = typeof req.body.shiftType === 'string' ? req.body.shiftType.trim() : undefined;
         const insertData = {
             id,
             fullName,
             pinHash,
             role,
             branch,
+            branchId, // Save branchId (UUID) for geofencing
             active,
         };
         if (hourlyRate !== undefined) {
             insertData.hourlyRate = hourlyRate;
+        }
+        if (shiftStartTime) {
+            insertData.shiftStartTime = shiftStartTime;
+        }
+        if (shiftEndTime) {
+            insertData.shiftEndTime = shiftEndTime;
+        }
+        if (shiftType) {
+            insertData.shiftType = shiftType;
         }
         const [newEmployee] = await db
             .insert(employees)
@@ -1443,6 +2017,7 @@ app.post('/api/employees', async (req, res) => {
             fullName: employees.fullName,
             role: employees.role,
             branch: employees.branch,
+            branchId: employees.branchId,
             hourlyRate: employees.hourlyRate,
             active: employees.active,
             createdAt: employees.createdAt,
@@ -1451,6 +2026,7 @@ app.post('/api/employees', async (req, res) => {
         if (!newEmployee) {
             return res.status(500).json({ error: 'فشل إنشاء الموظف: استجابة غير متوقعة من قاعدة البيانات' });
         }
+        console.log(`[Employee Created] ID: ${id}, Name: ${fullName}, Branch ID: ${branchId || 'null'}, Branch: ${branch || 'null'}`);
         res.status(201).json({
             success: true,
             message: 'تم إضافة الموظف بنجاح',
@@ -1463,6 +2039,158 @@ app.post('/api/employees', async (req, res) => {
         }
         console.error('Create employee error:', error);
         res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// Update employee
+app.put('/api/employees/:id', async (req, res) => {
+    try {
+        const employeeId = req.params.id;
+        const updateData = {};
+        if (req.body.fullName !== undefined) {
+            const fullName = typeof req.body.fullName === 'string' ? req.body.fullName.trim() : '';
+            if (!fullName) {
+                return res.status(400).json({ error: 'fullName cannot be empty' });
+            }
+            updateData.fullName = fullName;
+        }
+        if (req.body.pin !== undefined) {
+            const pin = typeof req.body.pin === 'string' ? req.body.pin.trim() : '';
+            if (!pin) {
+                return res.status(400).json({ error: 'pin cannot be empty' });
+            }
+            updateData.pinHash = await bcrypt.hash(pin, 10);
+        }
+        if (req.body.role !== undefined) {
+            const roleInput = typeof req.body.role === 'string' ? req.body.role.trim().toLowerCase() : '';
+            const allowedRoles = new Set(['owner', 'admin', 'manager', 'hr', 'monitor', 'staff']);
+            if (!allowedRoles.has(roleInput)) {
+                return res.status(400).json({ error: 'Invalid role' });
+            }
+            updateData.role = roleInput;
+        }
+        if (req.body.branch !== undefined) {
+            updateData.branch = req.body.branch ? String(req.body.branch).trim() : null;
+        }
+        if (req.body.branchId !== undefined) {
+            updateData.branchId = req.body.branchId ? String(req.body.branchId).trim() : null;
+        }
+        if (req.body.hourlyRate !== undefined) {
+            const parsed = Number(req.body.hourlyRate);
+            if (!Number.isFinite(parsed) || parsed < 0) {
+                return res.status(400).json({ error: 'hourlyRate must be a positive number' });
+            }
+            updateData.hourlyRate = parsed;
+        }
+        if (req.body.active !== undefined) {
+            updateData.active = Boolean(req.body.active);
+        }
+        if (req.body.shiftStartTime !== undefined) {
+            updateData.shiftStartTime = req.body.shiftStartTime ? String(req.body.shiftStartTime).trim() : null;
+        }
+        if (req.body.shiftEndTime !== undefined) {
+            updateData.shiftEndTime = req.body.shiftEndTime ? String(req.body.shiftEndTime).trim() : null;
+        }
+        if (req.body.shiftType !== undefined) {
+            updateData.shiftType = req.body.shiftType ? String(req.body.shiftType).trim() : null;
+        }
+        if (Object.keys(updateData).length === 0) {
+            return res.status(400).json({ error: 'No fields to update' });
+        }
+        updateData.updatedAt = new Date();
+        const [updatedEmployee] = await db
+            .update(employees)
+            .set(updateData)
+            .where(eq(employees.id, employeeId))
+            .returning({
+            id: employees.id,
+            fullName: employees.fullName,
+            role: employees.role,
+            branch: employees.branch,
+            branchId: employees.branchId,
+            hourlyRate: employees.hourlyRate,
+            active: employees.active,
+            updatedAt: employees.updatedAt,
+        });
+        if (!updatedEmployee) {
+            return res.status(404).json({ error: 'الموظف غير موجود' });
+        }
+        console.log(`[Employee Updated] ID: ${employeeId}, Changes: ${Object.keys(updateData).join(', ')}`);
+        res.json({
+            success: true,
+            message: 'تم تحديث بيانات الموظف بنجاح',
+            employee: normalizeNumericFields(updatedEmployee, ['hourlyRate']),
+        });
+    }
+    catch (error) {
+        console.error('Update employee error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// Delete employee
+app.delete('/api/employees/:id', async (req, res) => {
+    try {
+        const employeeId = req.params.id;
+        // Check if employee exists
+        const [existingEmployee] = await db
+            .select({ id: employees.id, fullName: employees.fullName })
+            .from(employees)
+            .where(eq(employees.id, employeeId))
+            .limit(1);
+        if (!existingEmployee) {
+            return res.status(404).json({ error: 'الموظف غير موجود' });
+        }
+        // Use a transaction to ensure all deletions happen or none do
+        await db.transaction(async (tx) => {
+            // Delete related records from all referencing tables first
+            console.log(`[Delete Employee] Deleting related records for ${employeeId}...`);
+            await tx.delete(attendance).where(eq(attendance.employeeId, employeeId));
+            console.log(`[Delete Employee] Deleted attendance.`);
+            await tx.delete(pulses).where(eq(pulses.employeeId, employeeId));
+            console.log(`[Delete Employee] Deleted pulses.`);
+            await tx.delete(breaks).where(eq(breaks.employeeId, employeeId));
+            console.log(`[Delete Employee] Deleted breaks.`);
+            await tx.delete(deviceSessions).where(eq(deviceSessions.employeeId, employeeId));
+            console.log(`[Delete Employee] Deleted device sessions.`);
+            await tx.delete(notifications).where(eq(notifications.recipientId, employeeId));
+            // Optionally delete notifications sent BY this employee if needed,
+            // but schema might have ON DELETE SET NULL for senderId
+            // await tx.delete(notifications).where(eq(notifications.senderId, employeeId));
+            console.log(`[Delete Employee] Deleted notifications.`);
+            await tx.delete(salaryCalculations).where(eq(salaryCalculations.employeeId, employeeId));
+            console.log(`[Delete Employee] Deleted salary calculations.`);
+            await tx.delete(attendanceRequests).where(eq(attendanceRequests.employeeId, employeeId));
+            console.log(`[Delete Employee] Deleted attendance requests.`);
+            await tx.delete(leaveRequests).where(eq(leaveRequests.employeeId, employeeId));
+            console.log(`[Delete Employee] Deleted leave requests.`);
+            await tx.delete(advances).where(eq(advances.employeeId, employeeId));
+            console.log(`[Delete Employee] Deleted advances.`);
+            await tx.delete(deductions).where(eq(deductions.employeeId, employeeId));
+            console.log(`[Delete Employee] Deleted deductions.`);
+            await tx.delete(absenceNotifications).where(eq(absenceNotifications.employeeId, employeeId));
+            console.log(`[Delete Employee] Deleted absence notifications.`);
+            await tx.delete(branchManagers).where(eq(branchManagers.employeeId, employeeId)); // Handles linking table if used
+            console.log(`[Delete Employee] Deleted branch manager links.`);
+            // Consider userRoles if employees can be users (adjust userId column if needed)
+            // Assuming employee.id might map to a user id elsewhere. Check your user table structure.
+            // await tx.delete(userRoles).where(eq(userRoles.userId, /* potential user UUID linked to employee */));
+            // Unlink manager from branches if this employee was a manager
+            console.log(`[Delete Employee] Unlinking as manager from branches for ${employeeId}`);
+            await tx.update(branches).set({ managerId: null, updatedAt: new Date() }).where(eq(branches.managerId, employeeId));
+            // Finally, delete the employee
+            console.log(`[Delete Employee] Deleting employee record ${employeeId}...`);
+            await tx.delete(employees).where(eq(employees.id, employeeId));
+        });
+        console.log(`[Employee Deleted] ID: ${employeeId}, Name: ${existingEmployee.fullName}`);
+        res.json({
+            success: true,
+            message: 'تم حذف الموظف وجميع سجلاته المرتبطة بنجاح',
+            employeeId,
+        });
+    }
+    catch (error) {
+        console.error('Delete employee error:', error);
+        // Provide more specific error details if possible
+        res.status(500).json({ error: 'Internal server error', message: error.message, stack: error.stack });
     }
 });
 // =============================================================================
@@ -1661,6 +2389,154 @@ app.get('/api/attendance/daily-sheet', async (req, res) => {
 // =============================================================================
 // MANAGER DASHBOARD - لوحة تحكم المدير
 // =============================================================================
+// =============================================================================
+// MANAGER ABSENCE NOTIFICATIONS API - إدارة إشعارات الغياب للمدير
+// =============================================================================
+// Get absence notifications for manager's branch
+app.get('/api/manager/absence-notifications', async (req, res) => {
+    try {
+        const managerId = req.query.manager_id;
+        if (!managerId) {
+            return res.status(400).json({ error: 'manager_id is required' });
+        }
+        // Get manager's branch
+        const [manager] = await db.select().from(employees).where(eq(employees.id, managerId)).limit(1);
+        if (!manager || !manager.branchId) {
+            return res.status(403).json({ error: 'Manager not found or not assigned to a branch' });
+        }
+        // Get pending absence notifications for employees in manager's branch
+        const notifications = await db
+            .select({
+            id: absenceNotifications.id,
+            employeeId: absenceNotifications.employeeId,
+            employeeName: employees.fullName,
+            absenceDate: absenceNotifications.absenceDate,
+            status: absenceNotifications.status,
+            notifiedAt: absenceNotifications.notifiedAt,
+            deductionApplied: absenceNotifications.deductionApplied,
+            deductionAmount: absenceNotifications.deductionAmount,
+        })
+            .from(absenceNotifications)
+            .innerJoin(employees, eq(absenceNotifications.employeeId, employees.id))
+            .where(and(eq(employees.branchId, manager.branchId), eq(absenceNotifications.status, 'pending')))
+            .orderBy(desc(absenceNotifications.absenceDate));
+        res.json({
+            success: true,
+            notifications: notifications.map(n => normalizeNumericFields(n, ['deductionAmount']))
+        });
+    }
+    catch (error) {
+        console.error('Get manager absence notifications error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// Apply deduction for absence notification
+app.post('/api/manager/absence-notifications/:id/apply-deduction', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { managerId, deductionAmount, reason } = req.body;
+        if (!managerId) {
+            return res.status(400).json({ error: 'managerId is required' });
+        }
+        if (!deductionAmount || isNaN(parseFloat(deductionAmount))) {
+            return res.status(400).json({ error: 'Valid deductionAmount is required' });
+        }
+        // Get the absence notification
+        const [notification] = await db
+            .select()
+            .from(absenceNotifications)
+            .where(and(eq(absenceNotifications.id, id), eq(absenceNotifications.status, 'pending')))
+            .limit(1);
+        if (!notification) {
+            return res.status(404).json({ error: 'Absence notification not found or already reviewed' });
+        }
+        // Verify manager has access to this employee's branch
+        const [employee] = await db.select().from(employees).where(eq(employees.id, notification.employeeId)).limit(1);
+        const [manager] = await db.select().from(employees).where(eq(employees.id, managerId)).limit(1);
+        if (!employee || !manager || employee.branchId !== manager.branchId) {
+            return res.status(403).json({ error: 'Access denied: Manager can only review notifications for their branch employees' });
+        }
+        const deductionValue = parseFloat(deductionAmount);
+        // Use transaction to update notification and create deduction
+        const result = await db.transaction(async (tx) => {
+            // Update absence notification
+            await tx
+                .update(absenceNotifications)
+                .set({
+                status: 'approved',
+                deductionApplied: true,
+                deductionAmount: deductionValue.toString(),
+                reviewedBy: managerId,
+                reviewedAt: new Date(),
+            })
+                .where(eq(absenceNotifications.id, id));
+            // Create deduction record
+            await tx.insert(deductions).values({
+                employeeId: notification.employeeId,
+                amount: deductionValue.toString(),
+                reason: reason || `خصم غياب يوم ${notification.absenceDate} - ${deductionValue} جنيه`,
+                deductionDate: notification.absenceDate,
+                deductionType: 'absence',
+                appliedBy: managerId,
+            });
+            return notification;
+        });
+        res.json({
+            success: true,
+            message: `تم تطبيق خصم الغياب بنجاح (${deductionValue} جنيه)`,
+            notification: result,
+            deductionAmount: deductionValue
+        });
+    }
+    catch (error) {
+        console.error('Apply deduction error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// Excuse absence (no deduction)
+app.post('/api/manager/absence-notifications/:id/excuse', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { managerId, reason } = req.body;
+        if (!managerId) {
+            return res.status(400).json({ error: 'managerId is required' });
+        }
+        // Get the absence notification
+        const [notification] = await db
+            .select()
+            .from(absenceNotifications)
+            .where(and(eq(absenceNotifications.id, id), eq(absenceNotifications.status, 'pending')))
+            .limit(1);
+        if (!notification) {
+            return res.status(404).json({ error: 'Absence notification not found or already reviewed' });
+        }
+        // Verify manager has access to this employee's branch
+        const [employee] = await db.select().from(employees).where(eq(employees.id, notification.employeeId)).limit(1);
+        const [manager] = await db.select().from(employees).where(eq(employees.id, managerId)).limit(1);
+        if (!employee || !manager || employee.branchId !== manager.branchId) {
+            return res.status(403).json({ error: 'Access denied: Manager can only review notifications for their branch employees' });
+        }
+        // Update absence notification to excused
+        await db
+            .update(absenceNotifications)
+            .set({
+            status: 'approved', // Using 'approved' but with no deduction
+            deductionApplied: false,
+            reviewedBy: managerId,
+            reviewedAt: new Date(),
+        })
+            .where(eq(absenceNotifications.id, id));
+        res.json({
+            success: true,
+            message: 'تم قبول عذر الغياب بدون تطبيق خصم',
+            notification: notification
+        });
+    }
+    catch (error) {
+        console.error('Excuse absence error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
 app.get('/api/manager/dashboard', async (req, res) => {
     try {
         const pendingAttendanceRequests = await db
@@ -1915,6 +2791,156 @@ app.get('/api/owner/dashboard', async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
+// Update branch BSSIDs for owner
+app.put('/api/owner/branches/:branchId/bssid', async (req, res) => {
+    const branchId = req.params.branchId;
+    const { bssid_1, bssid_2, owner_id } = req.body;
+    // Verify owner permissions
+    if (!owner_id) {
+        return res.status(400).json({ error: 'owner_id is required' });
+    }
+    const ownerRecord = await getOwnerRecord(owner_id);
+    if (!ownerRecord) {
+        return res.status(403).json({ error: 'لا توجد صلاحيات للوصول إلى بيانات الفروع' });
+    }
+    // Validate BSSID formats
+    if (!bssid_1 || !isValidBssid(bssid_1)) {
+        return res.status(400).json({ message: 'صيغة BSSID 1 غير صحيحة.' });
+    }
+    if (bssid_2 && !isValidBssid(bssid_2)) {
+        return res.status(400).json({ message: 'صيغة BSSID 2 غير صحيحة.' });
+    }
+    // Standardize BSSID formats
+    const formattedBssid1 = bssid_1.toUpperCase().replace(/-/g, ':');
+    const formattedBssid2 = bssid_2 ? bssid_2.toUpperCase().replace(/-/g, ':') : null;
+    try {
+        // Update branch BSSIDs
+        const updated = await db.update(branches)
+            .set({
+            bssid_1: formattedBssid1,
+            bssid_2: formattedBssid2,
+            updatedAt: new Date(),
+        })
+            .where(eq(branches.id, branchId))
+            .returning();
+        if (updated.length === 0) {
+            return res.status(404).json({ message: 'لم يتم العثور على الفرع.' });
+        }
+        res.json({
+            success: true,
+            message: 'تم تحديث BSSIDs الفرع بنجاح.',
+            branch: updated[0]
+        });
+    }
+    catch (error) {
+        console.error("Error updating branch BSSIDs:", error);
+        res.status(500).json({ message: "حدث خطأ أثناء تحديث BSSIDs." });
+    }
+});
+// Get all BSSIDs for a branch (using branchBssids table + legacy bssid_1/bssid_2)
+app.get('/api/owner/branches/:branchId/bssids', async (req, res) => {
+    const branchId = req.params.branchId;
+    try {
+        // Get BSSIDs from branchBssids table
+        const bssidRecords = await db
+            .select()
+            .from(branchBssids)
+            .where(eq(branchBssids.branchId, branchId));
+        // Also get legacy bssid_1 and bssid_2 from branches table
+        const [branch] = await db
+            .select()
+            .from(branches)
+            .where(eq(branches.id, branchId))
+            .limit(1);
+        const allBssids = new Set();
+        // Add from branchBssids table
+        bssidRecords.forEach(record => {
+            if (record.bssidAddress) {
+                allBssids.add(record.bssidAddress.toUpperCase());
+            }
+        });
+        // Add legacy BSSIDs if they exist
+        if (branch?.bssid_1)
+            allBssids.add(branch.bssid_1.toUpperCase());
+        if (branch?.bssid_2)
+            allBssids.add(branch.bssid_2.toUpperCase());
+        res.json({
+            success: true,
+            bssids: Array.from(allBssids),
+        });
+    }
+    catch (error) {
+        console.error("Error fetching branch BSSIDs:", error);
+        res.status(500).json({ message: "حدث خطأ أثناء تحميل BSSIDs." });
+    }
+});
+// Add a new BSSID to a branch
+app.post('/api/owner/branches/:branchId/bssids', async (req, res) => {
+    const branchId = req.params.branchId;
+    const { bssid, owner_id } = req.body;
+    // Verify owner permissions
+    if (!owner_id) {
+        return res.status(400).json({ error: 'owner_id is required' });
+    }
+    const ownerRecord = await getOwnerRecord(owner_id);
+    if (!ownerRecord) {
+        return res.status(403).json({ error: 'لا توجد صلاحيات للوصول إلى بيانات الفروع' });
+    }
+    // Validate BSSID format
+    if (!bssid || !isValidBssid(bssid)) {
+        return res.status(400).json({ message: 'صيغة BSSID غير صحيحة.' });
+    }
+    const formattedBssid = bssid.toUpperCase().replace(/-/g, ':');
+    try {
+        // Check if BSSID already exists for this branch
+        const existing = await db
+            .select()
+            .from(branchBssids)
+            .where(and(eq(branchBssids.branchId, branchId), eq(branchBssids.bssidAddress, formattedBssid)))
+            .limit(1);
+        if (existing.length > 0) {
+            return res.status(400).json({ message: 'هذا الـ BSSID موجود بالفعل' });
+        }
+        // Insert new BSSID
+        await db.insert(branchBssids).values({
+            branchId: branchId,
+            bssidAddress: formattedBssid,
+            createdAt: new Date(),
+        });
+        res.json({
+            success: true,
+            message: 'تم إضافة BSSID بنجاح',
+            bssid: formattedBssid,
+        });
+    }
+    catch (error) {
+        console.error("Error adding branch BSSID:", error);
+        res.status(500).json({ message: "حدث خطأ أثناء إضافة BSSID." });
+    }
+});
+// Remove a BSSID from a branch
+app.delete('/api/owner/branches/:branchId/bssids/:bssid', async (req, res) => {
+    const branchId = req.params.branchId;
+    const bssid = req.params.bssid.toUpperCase().replace(/-/g, ':');
+    try {
+        // Delete from branchBssids table
+        const deleted = await db
+            .delete(branchBssids)
+            .where(and(eq(branchBssids.branchId, branchId), eq(branchBssids.bssidAddress, bssid)))
+            .returning();
+        if (deleted.length === 0) {
+            return res.status(404).json({ message: 'BSSID غير موجود' });
+        }
+        res.json({
+            success: true,
+            message: 'تم حذف BSSID بنجاح',
+        });
+    }
+    catch (error) {
+        console.error("Error removing branch BSSID:", error);
+        res.status(500).json({ message: "حدث خطأ أثناء حذف BSSID." });
+    }
+});
 // قائمة الموظفين للمالك
 app.get('/api/owner/employees', async (req, res) => {
     try {
@@ -1979,6 +3005,189 @@ app.get('/api/owner/employees', async (req, res) => {
     catch (error) {
         console.error('Owner employees list error:', error);
         res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// =============================================================================
+// OWNER ATTENDANCE REQUESTS API - طلبات الحضور للمالك
+// =============================================================================
+/**
+ * GET /api/owner/pending-attendance-requests
+ * جلب طلبات الحضور المعلقة من المديرين للأونر
+ */
+app.get('/api/owner/pending-attendance-requests', async (req, res) => {
+    try {
+        const ownerId = req.query.owner_id;
+        if (!ownerId) {
+            return res.status(400).json({ error: 'owner_id is required' });
+        }
+        const ownerRecord = await getOwnerRecord(ownerId);
+        if (!ownerRecord) {
+            return res.status(403).json({ error: 'لا توجد صلاحيات للوصول إلى طلبات الحضور' });
+        }
+        // جلب طلبات الحضور المعلقة من المديرين فقط
+        const managerRoles = ['manager', 'hr', 'monitor', 'admin', 'owner'];
+        const detailedRequests = await db.select({
+            // --- من attendanceRequests ---
+            requestId: attendanceRequests.id,
+            requestType: attendanceRequests.requestType,
+            requestedTime: attendanceRequests.requestedTime,
+            reason: attendanceRequests.reason,
+            status: attendanceRequests.status,
+            createdAt: attendanceRequests.createdAt,
+            // --- من employees ---
+            employeeId: employees.id,
+            employeeName: employees.fullName,
+            employeeRole: employees.role,
+            // --- من branches ---
+            branchName: branches.name,
+        })
+            .from(attendanceRequests)
+            .leftJoin(employees, eq(attendanceRequests.employeeId, employees.id))
+            .leftJoin(branches, eq(employees.branchId, branches.id))
+            .where(and(
+        // 1. الطلبات المعلقة فقط
+        eq(attendanceRequests.status, 'pending'), 
+        // 2. من المديرين فقط
+        inArray(employees.role, managerRoles)))
+            .orderBy(desc(attendanceRequests.createdAt));
+        // Normalize numeric fields if needed
+        const normalizedRequests = detailedRequests.map(request => ({
+            ...request,
+            status: String(request.status),
+            requestType: String(request.requestType),
+        }));
+        res.json({
+            success: true,
+            requests: normalizedRequests,
+        });
+    }
+    catch (error) {
+        console.error('Get owner pending attendance requests error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+/**
+ * POST /api/owner/attendance-requests/:id/approve
+ * موافقة الأونر على طلب الحضور وتعديل سجل الحضور
+ */
+app.post('/api/owner/attendance-requests/:id/approve', async (req, res) => {
+    try {
+        const requestId = req.params.id;
+        const { action, owner_user_id } = req.body;
+        if (!action || !['approve', 'reject'].includes(action)) {
+            return res.status(400).json({ error: 'Action must be approve or reject' });
+        }
+        if (!owner_user_id) {
+            return res.status(400).json({ error: 'owner_user_id is required' });
+        }
+        // Verify owner permissions
+        const ownerRecord = await getOwnerRecord(owner_user_id);
+        if (!ownerRecord) {
+            return res.status(403).json({ error: 'لا توجد صلاحيات للموافقة على طلبات الحضور' });
+        }
+        const result = await db.transaction(async (tx) => {
+            // 1. تحديث حالة الطلب نفسه
+            const updatedRequests = await tx
+                .update(attendanceRequests)
+                .set({
+                status: action === 'approve' ? 'approved' : 'rejected',
+                reviewedBy: owner_user_id,
+                reviewedAt: new Date(),
+            })
+                .where(and(eq(attendanceRequests.id, requestId), eq(attendanceRequests.status, 'pending')))
+                .returning();
+            if (updatedRequests.length === 0) {
+                throw new Error('لم يتم العثور على الطلب أو تمت مراجعته.');
+            }
+            const req = updatedRequests[0];
+            // If approved, update attendance record
+            if (action === 'approve') {
+                const requestedDateTime = new Date(req.requestedTime);
+                const requestDate = requestedDateTime.toISOString().split('T')[0];
+                // 2. جلب سجل الحضور الأصلي لهذا اليوم
+                const attendanceRecord = await tx
+                    .select()
+                    .from(attendance)
+                    .where(and(eq(attendance.employeeId, req.employeeId), eq(attendance.date, requestDate)))
+                    .limit(1);
+                if (attendanceRecord.length === 0) {
+                    // إنشاء سجل حضور جديد إذا لم يكن موجوداً
+                    const newAttendanceData = {
+                        employeeId: req.employeeId,
+                        date: requestDate,
+                        status: 'active',
+                        createdAt: new Date(),
+                        updatedAt: new Date(),
+                    };
+                    // تحديد الحقل الذي سيتم تعديله
+                    if (req.requestType === 'check_in') {
+                        newAttendanceData.checkInTime = requestedDateTime;
+                        newAttendanceData.modifiedCheckInTime = requestedDateTime;
+                        newAttendanceData.modifiedBy = owner_user_id;
+                        newAttendanceData.modifiedAt = new Date();
+                        newAttendanceData.modificationReason = `[طلب مُعتمد] ${req.reason}`;
+                    }
+                    else if (req.requestType === 'check_out') {
+                        // للـ check-out، نفترض أنه كان قد سجل حضوراً يدوياً
+                        newAttendanceData.checkOutTime = requestedDateTime;
+                        newAttendanceData.modifiedBy = owner_user_id;
+                        newAttendanceData.modifiedAt = new Date();
+                        newAttendanceData.modificationReason = `[طلب مُعتمد] ${req.reason}`;
+                    }
+                    await tx.insert(attendance).values(newAttendanceData);
+                }
+                else {
+                    // تحديث السجل الموجود
+                    const existingRecord = attendanceRecord[0];
+                    let updatedCheckIn = existingRecord.checkInTime;
+                    let updatedCheckOut = existingRecord.checkOutTime;
+                    const updateData = {
+                        updatedAt: new Date(),
+                    };
+                    // 3. تحديد الحقل الذي سيتم تعديله
+                    if (req.requestType === 'check_in') {
+                        updatedCheckIn = requestedDateTime;
+                        updateData.checkInTime = requestedDateTime;
+                        updateData.modifiedCheckInTime = requestedDateTime;
+                        updateData.modifiedBy = owner_user_id;
+                        updateData.modifiedAt = new Date();
+                        updateData.modificationReason = `[طلب مُعتمد] ${req.reason}`;
+                    }
+                    else if (req.requestType === 'check_out') {
+                        updatedCheckOut = requestedDateTime;
+                        updateData.checkOutTime = requestedDateTime;
+                        updateData.modifiedBy = owner_user_id;
+                        updateData.modifiedAt = new Date();
+                        updateData.modificationReason = `[طلب مُعتمد] ${req.reason}`;
+                    }
+                    // 4. إعادة حساب ساعات العمل
+                    if (updatedCheckIn && updatedCheckOut) {
+                        const checkInTime = new Date(updatedCheckIn);
+                        const checkOutTime = new Date(updatedCheckOut);
+                        const workHours = (checkOutTime.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
+                        updateData.workHours = workHours.toFixed(2);
+                        updateData.status = 'completed';
+                    }
+                    await tx.update(attendance)
+                        .set(updateData)
+                        .where(eq(attendance.id, existingRecord.id));
+                }
+            }
+            return req;
+        });
+        res.json({
+            success: true,
+            message: action === 'approve' ? 'تمت الموافقة وتعديل الحضور.' : 'تم رفض الطلب.',
+            request: result
+        });
+    }
+    catch (error) {
+        console.error('Owner approve attendance request error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Internal server error',
+            message: error.message
+        });
     }
 });
 // تحديث سعر الساعة لموظف بواسطة المالك
@@ -2076,7 +3285,7 @@ app.get('/api/owner/payroll/summary', async (req, res) => {
             totalValidPulses: sql `COALESCE(SUM(CASE WHEN ${pulses.isWithinGeofence} = true THEN 1 ELSE 0 END), 0)`,
         })
             .from(pulses)
-            .where(and(gte(pulses.timestamp, startDateTime), lte(pulses.timestamp, endDateTime)))
+            .where(and(gte(pulses.createdAt, startDateTime), lte(pulses.createdAt, endDateTime)))
             .groupBy(pulses.employeeId);
         const attendanceMap = new Map();
         for (const record of attendanceRecords) {
@@ -2095,13 +3304,29 @@ app.get('/api/owner/payroll/summary', async (req, res) => {
         for (const row of pulsesSummary) {
             pulsesMap.set(row.employeeId, Number(row.totalValidPulses) || 0);
         }
+        // Get advances for all employees in date range
+        const advancesResult = await db
+            .select({
+            employeeId: advances.employeeId,
+            amount: advances.amount,
+        })
+            .from(advances)
+            .where(and(eq(advances.status, 'approved'), gte(advances.requestDate, new Date(startDate)), lte(advances.requestDate, new Date(endDate))));
+        const advancesMap = new Map();
+        for (const adv of advancesResult) {
+            const amount = parseFloat(adv.amount || '0');
+            const existing = advancesMap.get(adv.employeeId) || 0;
+            advancesMap.set(adv.employeeId, existing + amount);
+        }
         const normalizedEmployees = employeeRows.map(row => normalizeNumericFields(row, ['monthlySalary', 'hourlyRate']));
         const payrollDetails = [];
         let totalHourlyPay = 0;
         let totalPulsePay = 0;
+        let totalAdvancesSum = 0;
         for (const employee of normalizedEmployees) {
             const attendanceInfo = attendanceMap.get(employee.id) || { totalWorkHours: 0, attendanceDays: 0 };
             const pulsesCount = pulsesMap.get(employee.id) || 0;
+            const employeeAdvances = advancesMap.get(employee.id) || 0;
             const hourlyRateValue = typeof employee.hourlyRate === 'number' && !isNaN(employee.hourlyRate)
                 ? employee.hourlyRate
                 : null;
@@ -2113,8 +3338,10 @@ app.get('/api/owner/payroll/summary', async (req, res) => {
             const pulseValue = effectiveHourlyRate > 0 ? (effectiveHourlyRate / 3600) * 30 : 0;
             const pulsePay = Math.round(pulsesCount * pulseValue * 100) / 100;
             const totalComputedPay = Math.round((hourlyPay + pulsePay) * 100) / 100;
+            const netSalary = Math.round((totalComputedPay - employeeAdvances) * 100) / 100;
             totalHourlyPay += hourlyPay;
             totalPulsePay += pulsePay;
+            totalAdvancesSum += employeeAdvances;
             payrollDetails.push({
                 id: employee.id,
                 name: employee.fullName,
@@ -2127,7 +3354,9 @@ app.get('/api/owner/payroll/summary', async (req, res) => {
                 totalValidPulses: pulsesCount,
                 hourlyPay,
                 pulsePay,
+                totalAdvances: Math.round(employeeAdvances * 100) / 100,
                 totalComputedPay,
+                netSalary,
                 active: employee.active,
             });
         }
@@ -2146,13 +3375,189 @@ app.get('/api/owner/payroll/summary', async (req, res) => {
                 employeesCount: payrollDetails.length,
                 totalHourlyPay: Math.round(totalHourlyPay * 100) / 100,
                 totalPulsePay: Math.round(totalPulsePay * 100) / 100,
+                totalAdvances: Math.round(totalAdvancesSum * 100) / 100,
                 totalComputedPay: Math.round((totalHourlyPay + totalPulsePay) * 100) / 100,
+                totalNetSalary: Math.round((totalHourlyPay + totalPulsePay - totalAdvancesSum) * 100) / 100,
             },
         });
     }
     catch (error) {
         console.error('Owner payroll summary error:', error);
         res.status(500).json({ error: 'Internal server error' });
+    }
+});
+/**
+ * GET /api/owner/attendance/status
+ * (مُعدّل) جلب قائمة الموظفين وحالة حضورهم ليوم معين وفرع معين
+ * يقبل ?branchId=xxx و ?date=YYYY-MM-DD
+ */
+app.get('/api/owner/attendance/status', async (req, res) => {
+    const branchId = req.query.branchId;
+    // --- التعديل: قراءة التاريخ من الـ query ---
+    const dateQuery = req.query.date;
+    // استخدام التاريخ المطلوب أو تاريخ اليوم الحالي
+    const targetDateStr = dateQuery && /^\d{4}-\d{2}-\d{2}$/.test(dateQuery)
+        ? dateQuery
+        : new Date().toISOString().split('T')[0];
+    try {
+        // 1. جلب الموظفين (مع الفلترة بالفرع)
+        const employeeQuery = db.select({
+            id: employees.id,
+            fullName: employees.fullName,
+            role: employees.role,
+            branchName: branches.name,
+            // photoUrl: employees.photoUrl // (إذا أضفنا حقل للصورة)
+        })
+            .from(employees)
+            .leftJoin(branches, eq(employees.branchId, branches.id))
+            .where(and(eq(employees.active, true), branchId ? eq(employees.branchId, branchId) : undefined))
+            .orderBy(employees.fullName);
+        const employeeList = await employeeQuery;
+        if (employeeList.length === 0) {
+            return res.json({ summary: { present: 0, absent: 0, on_leave: 0, checked_out: 0 }, employees: [] });
+        }
+        // 2. جلب سجلات الحضور لهؤلاء الموظفين للتاريخ المستهدف
+        const employeeIds = employeeList.map(emp => emp.id);
+        const attendanceRecords = await db.select()
+            .from(attendance)
+            .where(and(
+        // --- التعديل: استخدام التاريخ المستهدف ---
+        eq(attendance.date, targetDateStr), inArray(attendance.employeeId, employeeIds)));
+        // 3. دمج البيانات وتحديد الحالة (نفس المنطق السابق)
+        let presentCount = 0, absentCount = 0, onLeaveCount = 0, checkedOutCount = 0;
+        const results = employeeList.map(emp => {
+            const record = attendanceRecords.find(att => att.employeeId === emp.id);
+            let status = 'absent';
+            let checkInTime = null;
+            let checkOutTime = null;
+            let recordId = null;
+            if (record) {
+                recordId = record.id;
+                checkInTime = record.checkInTime ?? record.modifiedCheckInTime;
+                checkOutTime = record.checkOutTime;
+                if (record.status === 'ON_LEAVE') {
+                    status = 'on_leave';
+                    onLeaveCount++;
+                }
+                else if (checkInTime && !checkOutTime) {
+                    status = 'present';
+                    presentCount++;
+                }
+                else if (checkInTime && checkOutTime) {
+                    status = 'checked_out';
+                    checkedOutCount++;
+                }
+                else {
+                    absentCount++; // إذا كان السجل موجود ولكن بدون أوقات (قد لا تحدث)
+                }
+            }
+            else {
+                absentCount++; // لا يوجد سجل = غائب
+            }
+            return {
+                employeeId: emp.id,
+                employeeName: emp.fullName,
+                employeeRole: emp.role,
+                branchName: emp.branchName,
+                // photoUrl: emp.photoUrl,
+                status: status,
+                checkInTime: checkInTime?.toISOString(),
+                checkOutTime: checkOutTime?.toISOString(),
+                attendanceRecordId: recordId,
+            };
+        });
+        // --- إرجاع الملخص مع قائمة الموظفين ---
+        res.json({
+            summary: {
+                present: presentCount,
+                absent: absentCount,
+                on_leave: onLeaveCount,
+                checked_out: checkedOutCount,
+            },
+            employees: results
+        });
+    }
+    catch (error) {
+        console.error("Error fetching employee attendance status:", error);
+        res.status(500).json({ message: "حدث خطأ." });
+    }
+});
+/**
+ * POST /api/owner/attendance/manual-checkin
+ * تسجيل حضور يدوي لموظف بواسطة الأونر
+ */
+app.post('/api/owner/attendance/manual-checkin', async (req, res) => {
+    const { employeeId, reason } = req.body;
+    if (!employeeId) {
+        return res.status(400).json({ message: "معرف الموظف مطلوب." });
+    }
+    try {
+        await db.transaction(async (tx) => {
+            // 1. تحقق إذا كان هناك سجل حضور مفتوح بالفعل لهذا اليوم
+            const existingRecord = await tx.select({ id: attendance.id })
+                .from(attendance)
+                .where(and(eq(attendance.employeeId, employeeId), eq(attendance.date, new Date().toISOString().split('T')[0]), isNull(attendance.checkOutTime) // لا يزال مفتوحاً
+            ))
+                .limit(1);
+            if (existingRecord.length > 0) {
+                throw new Error('الموظف مسجل حضوره بالفعل ولم يسجل انصراف.');
+            }
+            // 2. احذف أي سجل حضور آخر لهذا اليوم (مثل سجل غياب سابق)
+            await tx.delete(attendance)
+                .where(and(eq(attendance.employeeId, employeeId), eq(attendance.date, new Date().toISOString().split('T')[0])));
+            // 3. إنشاء سجل الحضور اليدوي
+            await tx.insert(attendance).values({
+                employeeId: employeeId,
+                date: new Date().toISOString().split('T')[0],
+                checkInTime: new Date(), // وقت الحضور هو الآن
+                // استخدام حقول التعديل لتوضيح أنه يدوي
+                modifiedCheckInTime: new Date(),
+                modifiedBy: 'owner', // سيتم تحديث هذا لاحقاً
+                modifiedAt: new Date(),
+                modificationReason: `[تسجيل يدوي بواسطة الأونر] ${reason || 'لا يوجد سبب'}`,
+                status: 'active', // أو 'present'
+                createdAt: new Date(),
+                updatedAt: new Date(),
+            });
+        });
+        res.json({ success: true, message: 'تم تسجيل الحضور اليدوي بنجاح.' });
+    }
+    catch (error) {
+        console.error("Error manual check-in:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+/**
+ * POST /api/owner/attendance/manual-checkout
+ * تسجيل انصراف يدوي لموظف بواسطة الأونر
+ */
+app.post('/api/owner/attendance/manual-checkout', async (req, res) => {
+    const { employeeId, reason } = req.body;
+    if (!employeeId) {
+        return res.status(400).json({ message: "معرف الموظف مطلوب." });
+    }
+    try {
+        // 1. البحث عن سجل الحضور المفتوح وتحديثه
+        const updated = await db.update(attendance)
+            .set({
+            checkOutTime: new Date(), // وقت الانصراف هو الآن
+            modifiedBy: 'owner', // سيتم تحديث هذا لاحقاً
+            modifiedAt: new Date(),
+            modificationReason: `[انصراف يدوي بواسطة الأونر] ${reason || 'لا يوجد سبب'}`,
+            updatedAt: new Date(),
+            // (يجب إعادة حساب ساعات العمل هنا أيضاً)
+        })
+            .where(and(eq(attendance.employeeId, employeeId), eq(attendance.date, new Date().toISOString().split('T')[0]), isNull(attendance.checkOutTime) // فقط السجلات المفتوحة
+        ))
+            .returning();
+        if (updated.length === 0) {
+            return res.status(404).json({ message: 'لم يتم العثور على سجل حضور مفتوح لهذا الموظف اليوم.' });
+        }
+        res.json({ success: true, message: 'تم تسجيل الانصراف اليدوي بنجاح.' });
+    }
+    catch (error) {
+        console.error("Error manual check-out:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 });
 // Hierarchical approval dashboard (Manager/Owner)
@@ -2330,8 +3735,8 @@ app.post('/api/payroll/calculate', async (req, res) => {
         const validPulses = await db
             .select()
             .from(pulses)
-            .where(and(eq(pulses.employeeId, employee_id), eq(pulses.isWithinGeofence, true), gte(pulses.timestamp, new Date(start_date)), lte(pulses.timestamp, new Date(end_date))))
-            .orderBy(pulses.timestamp);
+            .where(and(eq(pulses.employeeId, employee_id), eq(pulses.isWithinGeofence, true), gte(pulses.createdAt, new Date(start_date)), lte(pulses.createdAt, new Date(end_date))))
+            .orderBy(pulses.createdAt);
         let totalValidPulses = validPulses.length;
         let totalWorkHours = 0;
         const attendanceDetail = [];
@@ -2344,7 +3749,7 @@ app.post('/api/payroll/calculate', async (req, res) => {
             const dayEnd = new Date(record.date);
             dayEnd.setHours(23, 59, 59, 999);
             const dayPulses = validPulses.filter(p => {
-                const pulseTime = new Date(p.timestamp);
+                const pulseTime = new Date(p.createdAt);
                 return pulseTime >= dayStart && pulseTime <= dayEnd;
             });
             attendanceDetail.push({
@@ -2449,13 +3854,13 @@ app.get('/api/employees/:employeeId/status', async (req, res) => {
         const todayPulses = await db
             .select()
             .from(pulses)
-            .where(and(eq(pulses.employeeId, employeeId), sql `DATE(${pulses.timestamp}) = ${today}`));
+            .where(and(eq(pulses.employeeId, employeeId), sql `DATE(${pulses.createdAt}) = ${today}`));
         // Get last 10 pulses
         const recentPulses = await db
             .select()
             .from(pulses)
             .where(eq(pulses.employeeId, employeeId))
-            .orderBy(sql `${pulses.timestamp} DESC`)
+            .orderBy(sql `${pulses.createdAt} DESC`)
             .limit(10);
         // Calculate total pulses count
         const [totalPulsesResult] = await db
@@ -2472,6 +3877,7 @@ app.get('/api/employees/:employeeId/status', async (req, res) => {
                 fullName: employee.fullName,
                 role: employee.role,
                 branch: employee.branch,
+                branchId: employee.branchId,
                 active: employee.active,
             },
             attendance: todayAttendance ? {
@@ -2486,11 +3892,10 @@ app.get('/api/employees/:employeeId/status', async (req, res) => {
                 todayValid: validTodayPulses,
                 recent: recentPulses.map(p => ({
                     id: p.id,
-                    timestamp: p.timestamp,
+                    timestamp: p.createdAt,
                     latitude: p.latitude,
                     longitude: p.longitude,
                     isWithinGeofence: p.isWithinGeofence,
-                    isFake: p.isFake,
                 })),
             },
         });
@@ -2591,13 +3996,45 @@ app.post('/api/pulses', async (req, res) => {
         }
         // Determine geofence validity
         geofenceValid = distance <= geofenceRadius;
-        // Determine wifi validity: if branch specifies a wifiBssid, require match; otherwise treat as valid
-        if (branchWifi) {
-            if (!wifi_bssid) {
-                wifiValid = false;
+        // Determine wifi validity: check against branches table AND branchBssids table
+        if (employee.branchId) {
+            const [branch] = await db
+                .select()
+                .from(branches)
+                .where(eq(branches.id, employee.branchId))
+                .limit(1);
+            if (branch) {
+                // Get BSSIDs from both sources: legacy (bssid_1, bssid_2) and new table (branchBssids)
+                const allowedBssids = new Set();
+                // Add legacy BSSIDs
+                if (branch.bssid_1)
+                    allowedBssids.add(branch.bssid_1.toUpperCase());
+                if (branch.bssid_2)
+                    allowedBssids.add(branch.bssid_2.toUpperCase());
+                // Add BSSIDs from branchBssids table
+                const bssidRecords = await db
+                    .select()
+                    .from(branchBssids)
+                    .where(eq(branchBssids.branchId, employee.branchId));
+                bssidRecords.forEach(record => {
+                    if (record.bssidAddress) {
+                        allowedBssids.add(record.bssidAddress.toUpperCase());
+                    }
+                });
+                if (allowedBssids.size > 0) {
+                    if (!wifi_bssid) {
+                        wifiValid = false;
+                    }
+                    else {
+                        wifiValid = allowedBssids.has(String(wifi_bssid).toUpperCase());
+                    }
+                }
+                else {
+                    wifiValid = true; // No BSSIDs set, allow any
+                }
             }
             else {
-                wifiValid = String(wifi_bssid).toUpperCase() === branchWifi;
+                wifiValid = true;
             }
         }
         else {
@@ -2616,15 +4053,17 @@ app.post('/api/pulses', async (req, res) => {
             .insert(pulses)
             .values({
             employeeId: employee_id,
+            branchId: employee.branchId,
             latitude,
             longitude,
-            isWithinGeofence: activeBreak ? false : isWithinGeofence,
-            timestamp: timestamp ? new Date(timestamp) : new Date(),
-            sentFromDevice: true,
+            bssidAddress: wifi_bssid,
+            isWithinGeofence: isWithinGeofence,
+            status: 'IN', // Default status
+            createdAt: timestamp ? new Date(timestamp) : new Date(),
         })
-            .returning({ id: pulses.id, employeeId: pulses.employeeId, latitude: pulses.latitude, longitude: pulses.longitude, isWithinGeofence: pulses.isWithinGeofence, timestamp: pulses.timestamp, sentFromDevice: pulses.sentFromDevice });
+            .returning({ id: pulses.id, employeeId: pulses.employeeId, branchId: pulses.branchId, latitude: pulses.latitude, longitude: pulses.longitude, bssidAddress: pulses.bssidAddress, isWithinGeofence: pulses.isWithinGeofence, status: pulses.status, createdAt: pulses.createdAt });
         const pulse = extractFirstRow(insertPulseResult);
-        const overallValid = activeBreak ? false : (wifiValid && geofenceValid);
+        const overallValid = (wifiValid && geofenceValid);
         res.json({
             success: true,
             pulse: {
@@ -2652,18 +4091,39 @@ app.post('/api/branches', async (req, res) => {
         if (!name) {
             return res.status(400).json({ error: 'Branch name is required' });
         }
-        await db
+        // Insert the branch and get the new branch ID
+        const result = await db
             .insert(branches)
             .values({
             name,
-            wifiBssid: wifi_bssid,
             latitude: latitude ? latitude.toString() : null,
             longitude: longitude ? longitude.toString() : null,
             geofenceRadius: geofence_radius || 100,
-        });
+            wifiBssid: wifi_bssid || null,
+        })
+            .returning();
+        const newBranch = extractFirstRow(result);
+        if (!newBranch) {
+            return res.status(500).json({ error: 'Failed to create branch' });
+        }
+        // If wifi_bssid is provided, insert it into branchBssids table
+        const branchId = String(newBranch.id || '');
+        if (wifi_bssid && wifi_bssid.trim() !== '' && branchId) {
+            await db
+                .insert(branchBssids)
+                .values({
+                branchId: branchId,
+                bssidAddress: wifi_bssid.trim().toUpperCase(),
+            });
+            console.log(`[Branch Created] Branch ID: ${branchId}, Name: ${name}, BSSID: ${wifi_bssid.trim().toUpperCase()}`);
+        }
+        else {
+            console.log(`[Branch Created] Branch ID: ${branchId || 'null'}, Name: ${name}, No BSSID provided`);
+        }
         res.json({
             success: true,
             message: 'تم إنشاء الفرع بنجاح',
+            branchId: branchId,
         });
     }
     catch (error) {
@@ -2682,6 +4142,36 @@ app.get('/api/branches', async (req, res) => {
     }
     catch (error) {
         console.error('Get branches error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// Get single branch with BSSIDs
+app.get('/api/branches/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const [branch] = await db
+            .select()
+            .from(branches)
+            .where(eq(branches.id, id))
+            .limit(1);
+        if (!branch) {
+            return res.status(404).json({ error: 'Branch not found' });
+        }
+        // Get associated BSSIDs
+        const bssids = await db
+            .select({ bssidAddress: branchBssids.bssidAddress })
+            .from(branchBssids)
+            .where(eq(branchBssids.branchId, id));
+        // Convert to uppercase
+        const bssidList = bssids.map(b => b.bssidAddress.toUpperCase());
+        res.json({
+            success: true,
+            branch: normalizeNumericFields(branch, ['latitude', 'longitude', 'geofenceRadius']),
+            allowedBssids: bssidList,
+        });
+    }
+    catch (error) {
+        console.error('Get single branch error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
@@ -2711,6 +4201,111 @@ app.post('/api/branches/:branchId/assign-manager', async (req, res) => {
     }
     catch (error) {
         console.error('Assign manager error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// Delete branch
+app.delete('/api/branches/:id', async (req, res) => {
+    try {
+        const branchId = req.params.id;
+        // Check if branch exists
+        const [existingBranch] = await db
+            .select({ id: branches.id, name: branches.name })
+            .from(branches)
+            .where(eq(branches.id, branchId))
+            .limit(1);
+        if (!existingBranch) {
+            return res.status(404).json({ error: 'الفرع غير موجود' });
+        }
+        // Use transaction to ensure atomicity
+        await db.transaction(async (tx) => {
+            // Delete related BSSIDs first
+            console.log(`[Delete Branch] Deleting BSSIDs for branch ${branchId}`);
+            await tx.delete(branchBssids).where(eq(branchBssids.branchId, branchId));
+            // Unlink employees from this branch (set branchId and branch name to null)
+            console.log(`[Delete Branch] Unlinking employees from branch ${branchId}`);
+            await tx
+                .update(employees)
+                .set({ branchId: null, branch: null, updatedAt: new Date() }) // Also update 'branch' name column if used
+                .where(eq(employees.branchId, branchId));
+            // Unlink any managers directly linked via branchManagers table (if this table is actively used)
+            console.log(`[Delete Branch] Deleting links from branch_managers for branch ${branchId}`);
+            await tx.delete(branchManagers).where(eq(branchManagers.branchId, branchId));
+            // Finally, delete the branch itself
+            console.log(`[Delete Branch] Deleting branch record ${branchId}`);
+            await tx.delete(branches).where(eq(branches.id, branchId));
+        });
+        console.log(`[Branch Deleted] ID: ${branchId}, Name: ${existingBranch.name}`);
+        res.json({
+            success: true,
+            message: 'تم حذف الفرع بنجاح، وتم فك ارتباط الموظفين به.',
+            branchId,
+        });
+    }
+    catch (error) {
+        console.error('Delete branch error:', error);
+        res.status(500).json({ error: 'Internal server error', message: error.message });
+    }
+});
+// Update branch
+app.put('/api/branches/:id', async (req, res) => {
+    try {
+        const branchId = req.params.id;
+        const { name, wifi_bssid, latitude, longitude, geofence_radius } = req.body;
+        const updateData = {};
+        if (name !== undefined) {
+            const trimmedName = typeof name === 'string' ? name.trim() : '';
+            if (!trimmedName) {
+                return res.status(400).json({ error: 'Branch name cannot be empty' });
+            }
+            updateData.name = trimmedName;
+        }
+        if (latitude !== undefined) {
+            updateData.latitude = latitude ? latitude.toString() : null;
+        }
+        if (longitude !== undefined) {
+            updateData.longitude = longitude ? longitude.toString() : null;
+        }
+        if (geofence_radius !== undefined) {
+            updateData.geofenceRadius = geofence_radius || 100;
+        }
+        if (wifi_bssid !== undefined) {
+            updateData.wifiBssid = wifi_bssid || null;
+            // Update branchBssids table
+            if (wifi_bssid && wifi_bssid.trim() !== '') {
+                // Delete old BSSIDs for this branch
+                await db.delete(branchBssids).where(eq(branchBssids.branchId, branchId));
+                // Insert new BSSID
+                await db.insert(branchBssids).values({
+                    branchId,
+                    bssidAddress: wifi_bssid.trim().toUpperCase(),
+                });
+            }
+            else {
+                // If wifi_bssid is null/empty, delete all BSSIDs for this branch
+                await db.delete(branchBssids).where(eq(branchBssids.branchId, branchId));
+            }
+        }
+        if (Object.keys(updateData).length === 0) {
+            return res.status(400).json({ error: 'No fields to update' });
+        }
+        const [updatedBranch] = await db
+            .update(branches)
+            .set(updateData)
+            .where(eq(branches.id, branchId))
+            .returning();
+        if (!updatedBranch) {
+            return res.status(404).json({ error: 'الفرع غير موجود' });
+        }
+        console.log(`[Branch Updated] ID: ${branchId}, Changes: ${Object.keys(updateData).join(', ')}`);
+        res.json({
+            success: true,
+            message: 'تم تحديث بيانات الفرع بنجاح',
+            branch: updatedBranch,
+        });
+    }
+    catch (error) {
+        console.error('Update branch error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
@@ -2785,9 +4380,23 @@ app.post('/api/breaks/request', async (req, res) => {
         if (!employee_id || !duration_minutes) {
             return res.status(400).json({ error: 'employee_id and duration_minutes are required' });
         }
-        // Prevent duplicate break requests for the same day
+        // Check if employee has checked in today
         const today = new Date();
         today.setHours(0, 0, 0, 0);
+        const todayString = today.toISOString().split('T')[0];
+        const [todayAttendance] = await db
+            .select()
+            .from(attendance)
+            .where(and(eq(attendance.employeeId, employee_id), eq(attendance.date, todayString), isNull(attendance.checkOutTime) // Still checked in
+        ))
+            .limit(1);
+        if (!todayAttendance) {
+            return res.status(400).json({
+                error: 'يجب تسجيل الحضور أولاً قبل طلب الاستراحة',
+                code: 'NOT_CHECKED_IN'
+            });
+        }
+        // Prevent duplicate break requests for the same day
         const tomorrow = new Date(today);
         tomorrow.setDate(today.getDate() + 1);
         const existingBreak = await db
@@ -2977,6 +4586,822 @@ app.post('/api/breaks/:breakId/end', async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
+// ============ Geofence Violations (النسخة المحدثة) ============
+app.post('/api/alerts/geofence-violation', async (req, res) => {
+    try {
+        const { employeeId, timestamp, latitude, longitude, action } = req.body;
+        // (الـ 'action' يأتي من المكتبة الجديدة: "ENTER" أو "EXIT")
+        if (!employeeId || !timestamp || !action) {
+            return res.status(400).json({ error: 'Missing required fields (employeeId, timestamp, action)' });
+        }
+        const [employee] = await db
+            .select()
+            .from(employees)
+            .where(eq(employees.id, employeeId))
+            .limit(1);
+        if (!employee) {
+            return res.status(404).json({ error: 'Employee not found' });
+        }
+        const eventTime = new Date(timestamp);
+        if (action === 'EXIT') {
+            // الموظف خرج - سجل مخالفة جديدة بوقت خروج
+            await db.insert(geofenceViolations).values({
+                employeeId: employeeId,
+                branchId: employee.branchId,
+                exitTime: eventTime,
+                latitude: latitude,
+                longitude: longitude,
+            });
+            console.log(`[Geofence] VIOLATION (EXIT) logged for ${employeeId}`);
+            // (يمكن إرسال تنبيه للمدير هنا)
+        }
+        else if (action === 'ENTER') {
+            // الموظف عاد - ابحث عن آخر مخالفة (EXIT) لنفس الموظف لم يُسجل لها دخول
+            const [lastViolation] = await db
+                .select()
+                .from(geofenceViolations)
+                .where(and(eq(geofenceViolations.employeeId, employeeId), isNull(geofenceViolations.enterTime) // لم يسجل دخول
+            ))
+                .orderBy(desc(geofenceViolations.exitTime))
+                .limit(1);
+            if (lastViolation) {
+                // وجدنا مخالفة مفتوحة، قم بتحديثها
+                const enterTime = eventTime;
+                const exitTime = new Date(lastViolation.exitTime);
+                const durationSeconds = Math.round((enterTime.getTime() - exitTime.getTime()) / 1000);
+                await db
+                    .update(geofenceViolations)
+                    .set({
+                    enterTime: enterTime,
+                    durationSeconds: durationSeconds,
+                })
+                    .where(eq(geofenceViolations.id, lastViolation.id));
+                console.log(`[Geofence] VIOLATION (ENTER) logged for ${employeeId}. Duration: ${durationSeconds}s`);
+            }
+            else {
+                // الموظف دخل النطاق (ربما كان التطبيق مغلقاً عند الخروج) - تجاهل
+                console.log(`[Geofence] (ENTER) event for ${employeeId} without matching EXIT, ignoring.`);
+            }
+        }
+        res.json({
+            success: true,
+            message: `Geofence action ${action} logged.`,
+        });
+    }
+    catch (error) {
+        console.error('Geofence violation error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// =============================================================================
+// NEW FEATURES - Device Sessions, Notifications, Salary Management
+// =============================================================================
+// ============ Device Sessions - Single Device Login ============
+// Check/Register device session on login
+app.post('/api/device/register', async (req, res) => {
+    try {
+        const { employeeId, deviceId, deviceName, deviceModel, osVersion, appVersion } = req.body;
+        if (!employeeId || !deviceId) {
+            return res.status(400).json({ error: 'Employee ID and Device ID are required' });
+        }
+        // Check if there's an active session for this employee on a different device
+        const activeSessions = await db
+            .select()
+            .from(deviceSessions)
+            .where(and(eq(deviceSessions.employeeId, employeeId), eq(deviceSessions.isActive, true)));
+        // If there's an active session on a different device, deactivate it
+        for (const session of activeSessions) {
+            if (session.deviceId !== deviceId) {
+                await db
+                    .update(deviceSessions)
+                    .set({ isActive: false })
+                    .where(eq(deviceSessions.id, session.id));
+            }
+        }
+        // Check if this device already has a session
+        const existingSession = await db
+            .select()
+            .from(deviceSessions)
+            .where(and(eq(deviceSessions.employeeId, employeeId), eq(deviceSessions.deviceId, deviceId)))
+            .limit(1);
+        if (existingSession.length > 0) {
+            // Update existing session
+            const updateResult = await db
+                .update(deviceSessions)
+                .set({
+                isActive: true,
+                lastActiveAt: new Date(),
+                deviceName,
+                deviceModel,
+                osVersion,
+                appVersion,
+            })
+                .where(eq(deviceSessions.id, existingSession[0].id))
+                .returning();
+            const updated = extractFirstRow(updateResult);
+            res.json({
+                success: true,
+                message: 'تم تسجيل الدخول بنجاح',
+                session: updated,
+                wasLoggedOutFromOtherDevice: activeSessions.length > 1,
+            });
+        }
+        else {
+            // Create new session
+            const insertResult = await db
+                .insert(deviceSessions)
+                .values({
+                employeeId,
+                deviceId,
+                deviceName,
+                deviceModel,
+                osVersion,
+                appVersion,
+                isActive: true,
+            })
+                .returning();
+            const newSession = extractFirstRow(insertResult);
+            res.json({
+                success: true,
+                message: 'تم تسجيل الدخول بنجاح',
+                session: newSession,
+                wasLoggedOutFromOtherDevice: activeSessions.length > 0,
+            });
+        }
+    }
+    catch (error) {
+        console.error('Device registration error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// ============ Notifications ============
+// Get notifications for an employee
+app.get('/api/notifications/:employeeId', async (req, res) => {
+    try {
+        const { employeeId } = req.params;
+        const { unreadOnly } = req.query;
+        let query = db
+            .select()
+            .from(notifications)
+            .where(eq(notifications.recipientId, employeeId))
+            .orderBy(desc(notifications.createdAt));
+        if (unreadOnly === 'true') {
+            query = db
+                .select()
+                .from(notifications)
+                .where(and(eq(notifications.recipientId, employeeId), eq(notifications.isRead, false)))
+                .orderBy(desc(notifications.createdAt));
+        }
+        const result = await query;
+        res.json({
+            success: true,
+            notifications: result,
+            unreadCount: result.filter((n) => !n.isRead).length,
+        });
+    }
+    catch (error) {
+        console.error('Get notifications error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// Mark notification as read
+app.post('/api/notifications/:notificationId/read', async (req, res) => {
+    try {
+        const { notificationId } = req.params;
+        const updateResult = await db
+            .update(notifications)
+            .set({
+            isRead: true,
+            readAt: new Date(),
+        })
+            .where(eq(notifications.id, notificationId))
+            .returning();
+        const updated = extractFirstRow(updateResult);
+        res.json({
+            success: true,
+            notification: updated,
+        });
+    }
+    catch (error) {
+        console.error('Mark notification read error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// Send notification (helper endpoint - usually called internally)
+app.post('/api/notifications/send', async (req, res) => {
+    try {
+        const { recipientId, senderId, type, title, message, relatedId } = req.body;
+        if (!recipientId || !type || !title || !message) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+        const insertResult = await db
+            .insert(notifications)
+            .values({
+            recipientId,
+            senderId: senderId || null,
+            type,
+            title,
+            message,
+            relatedId: relatedId || null,
+        })
+            .returning();
+        const notification = extractFirstRow(insertResult);
+        res.json({
+            success: true,
+            notification,
+        });
+    }
+    catch (error) {
+        console.error('Send notification error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// ============ Attendance Time Modification ============
+// Modify check-in time
+app.post('/api/attendance/:attendanceId/modify-time', async (req, res) => {
+    try {
+        const { attendanceId } = req.params;
+        const { modifiedCheckInTime, modifiedBy, modificationReason } = req.body;
+        if (!modifiedCheckInTime || !modifiedBy) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+        // Get the attendance record
+        const attendanceRecords = await db
+            .select()
+            .from(attendance)
+            .where(eq(attendance.id, attendanceId))
+            .limit(1);
+        if (attendanceRecords.length === 0) {
+            return res.status(404).json({ error: 'Attendance record not found' });
+        }
+        const attendanceRecord = attendanceRecords[0];
+        // Store actual check-in time if not already stored
+        const actualCheckInTime = attendanceRecord.actualCheckInTime || attendanceRecord.checkInTime;
+        // Calculate new work hours if check-out exists
+        let newWorkHours = attendanceRecord.workHours;
+        if (attendanceRecord.checkOutTime) {
+            const modifiedIn = new Date(modifiedCheckInTime);
+            const checkOut = new Date(attendanceRecord.checkOutTime);
+            newWorkHours = ((checkOut.getTime() - modifiedIn.getTime()) / (1000 * 60 * 60)).toFixed(2);
+        }
+        // Update attendance record
+        const updateResult = await db
+            .update(attendance)
+            .set({
+            checkInTime: new Date(modifiedCheckInTime),
+            actualCheckInTime,
+            modifiedCheckInTime: new Date(modifiedCheckInTime),
+            modifiedBy,
+            modifiedAt: new Date(),
+            modificationReason,
+            workHours: newWorkHours,
+            updatedAt: new Date(),
+        })
+            .where(eq(attendance.id, attendanceId))
+            .returning();
+        const updated = extractFirstRow(updateResult);
+        res.json({
+            success: true,
+            message: 'تم تعديل وقت الحضور بنجاح',
+            attendance: updated,
+        });
+    }
+    catch (error) {
+        console.error('Modify attendance time error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// ============ Salary Calculations ============
+// Calculate salary for employee for a period
+app.post('/api/salary/calculate', async (req, res) => {
+    try {
+        const { employeeId, periodStart, periodEnd } = req.body;
+        if (!employeeId || !periodStart || !periodEnd) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+        // Get employee info
+        const employeeResult = await db
+            .select()
+            .from(employees)
+            .where(eq(employees.id, employeeId))
+            .limit(1);
+        if (employeeResult.length === 0) {
+            return res.status(404).json({ error: 'Employee not found' });
+        }
+        const employee = employeeResult[0];
+        const baseSalary = parseFloat(employee.monthlySalary || '0');
+        const hourlyRate = parseFloat(employee.hourlyRate || '0');
+        // Get attendance records for the period
+        const attendanceRecords = await db
+            .select()
+            .from(attendance)
+            .where(and(eq(attendance.employeeId, employeeId), gte(attendance.date, periodStart), lte(attendance.date, periodEnd)));
+        // Calculate total work hours and days
+        let totalWorkHours = 0;
+        const workDays = new Set();
+        for (const record of attendanceRecords) {
+            if (record.workHours) {
+                totalWorkHours += parseFloat(record.workHours);
+                workDays.add(record.date);
+            }
+        }
+        const totalWorkDays = workDays.size;
+        // Get advances for the period (previously deducted ones are excluded)
+        const advancesResult = await db
+            .select()
+            .from(advances)
+            .where(and(eq(advances.employeeId, employeeId), eq(advances.status, 'approved'), isNull(advances.deductedAt), // Check if deductedAt is null instead of isDeducted
+        gte(advances.requestDate, new Date(periodStart)), // Convert string to Date
+        lte(advances.requestDate, new Date(periodEnd)) // Convert string to Date
+        ));
+        const advancesTotal = advancesResult.reduce((sum, adv) => sum + parseFloat(adv.amount || '0'), 0); // Ensure amount is parsed correctly
+        // Get deductions for the period
+        const deductionsResult = await db
+            .select()
+            .from(deductions)
+            .where(and(eq(deductions.employeeId, employeeId), gte(deductions.deductionDate, periodStart), lte(deductions.deductionDate, periodEnd)));
+        const deductionsTotal = deductionsResult.reduce((sum, ded) => sum + parseFloat(ded.amount), 0);
+        // Get absence deductions
+        const absenceResult = await db
+            .select()
+            .from(absenceNotifications)
+            .where(and(eq(absenceNotifications.employeeId, employeeId), eq(absenceNotifications.deductionApplied, true), gte(absenceNotifications.absenceDate, periodStart), lte(absenceNotifications.absenceDate, periodEnd)));
+        const absenceDeductions = absenceResult.reduce((sum, abs) => sum + parseFloat(abs.deductionAmount || '0'), 0);
+        // Calculate net salary
+        const grossSalary = baseSalary + (totalWorkHours * hourlyRate);
+        const netSalary = grossSalary - advancesTotal - deductionsTotal - absenceDeductions;
+        // Save calculation
+        const insertResult = await db
+            .insert(salaryCalculations)
+            .values({
+            employeeId,
+            periodStart,
+            periodEnd,
+            baseSalary: baseSalary.toString(),
+            totalWorkHours: totalWorkHours.toString(),
+            totalWorkDays,
+            advancesTotal: advancesTotal.toString(),
+            deductionsTotal: deductionsTotal.toString(),
+            absenceDeductions: absenceDeductions.toString(),
+            netSalary: netSalary.toString(),
+        })
+            .returning();
+        const calculation = extractFirstRow(insertResult);
+        // Mark advances as deducted (Remove isDeducted)
+        if (advancesResult.length > 0) {
+            await db
+                .update(advances)
+                .set({ deductedAt: new Date() }) // Only set deductedAt
+                .where(inArray(advances.id, advancesResult.map(a => a.id)));
+        }
+        res.json({
+            success: true,
+            calculation,
+            breakdown: {
+                baseSalary,
+                totalWorkHours,
+                totalWorkDays,
+                hourlyRate,
+                hourlyEarnings: totalWorkHours * hourlyRate,
+                grossSalary,
+                advancesTotal,
+                deductionsTotal,
+                absenceDeductions,
+                netSalary,
+            },
+        });
+    }
+    catch (error) {
+        console.error('Calculate salary error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// Get salary calculations for employee
+app.get('/api/salary/:employeeId', async (req, res) => {
+    try {
+        const { employeeId } = req.params;
+        const calculations = await db
+            .select()
+            .from(salaryCalculations)
+            .where(eq(salaryCalculations.employeeId, employeeId))
+            .orderBy(desc(salaryCalculations.periodStart));
+        res.json({
+            success: true,
+            calculations,
+        });
+    }
+    catch (error) {
+        console.error('Get salary calculations error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// ============ Attendance Statistics ============
+// Get attendance statistics for employee
+app.get('/api/attendance/stats/:employeeId', async (req, res) => {
+    try {
+        const { employeeId } = req.params;
+        const { startDate, endDate } = req.query;
+        if (!startDate || !endDate) {
+            return res.status(400).json({ error: 'Start date and end date are required' });
+        }
+        // Get attendance records
+        const attendanceRecords = await db
+            .select()
+            .from(attendance)
+            .where(and(eq(attendance.employeeId, employeeId), gte(attendance.date, startDate), lte(attendance.date, endDate)));
+        // Calculate statistics
+        let totalWorkHours = 0;
+        const workDays = new Set();
+        let completedDays = 0;
+        for (const record of attendanceRecords) {
+            if (record.workHours) {
+                totalWorkHours += parseFloat(record.workHours);
+            }
+            workDays.add(record.date);
+            if (record.status === 'completed') {
+                completedDays++;
+            }
+        }
+        const totalWorkDays = workDays.size;
+        res.json({
+            success: true,
+            stats: {
+                totalWorkDays,
+                completedDays,
+                totalWorkHours: totalWorkHours.toFixed(2),
+                averageHoursPerDay: totalWorkDays > 0 ? (totalWorkHours / totalWorkDays).toFixed(2) : '0',
+            },
+            records: attendanceRecords,
+        });
+    }
+    catch (error) {
+        console.error('Get attendance stats error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// ============ Owner: Get Employee Attendance Table ============
+// Get employee attendance table (same view as employee sees)
+app.get('/api/owner/employee-attendance/:employeeId', async (req, res) => {
+    try {
+        const { employeeId } = req.params;
+        const { startDate, endDate } = req.query;
+        if (!startDate || !endDate) {
+            return res.status(400).json({ error: 'Start date and end date are required' });
+        }
+        // Get employee info
+        const employeeResult = await db
+            .select()
+            .from(employees)
+            .where(eq(employees.id, employeeId))
+            .limit(1);
+        if (employeeResult.length === 0) {
+            return res.status(404).json({ error: 'Employee not found' });
+        }
+        const employee = employeeResult[0];
+        // Get attendance records with JOIN to get leave requests
+        const attendanceRecords = await db
+            .select({
+            attendance: attendance,
+            leaveRequest: leaveRequests
+        })
+            .from(attendance)
+            .leftJoin(leaveRequests, and(eq(leaveRequests.employeeId, employeeId), gte(attendance.date, leaveRequests.startDate), lte(attendance.date, leaveRequests.endDate), eq(leaveRequests.status, 'approved')))
+            .where(and(eq(attendance.employeeId, employeeId), gte(attendance.date, startDate), lte(attendance.date, endDate)))
+            .orderBy(desc(attendance.date));
+        // Get all advances for this employee in date range
+        // Convert startDate and endDate to Date objects for comparison
+        const advancesResult = await db
+            .select()
+            .from(advances)
+            .where(and(eq(advances.employeeId, employeeId), gte(advances.requestDate, new Date(startDate)), // Convert to Date
+        lte(advances.requestDate, new Date(endDate)) // Convert to Date
+        ))
+            .orderBy(desc(advances.requestDate));
+        // Get all deductions for this employee in date range
+        const deductionsResult = await db
+            .select()
+            .from(deductions)
+            .where(and(eq(deductions.employeeId, employeeId), gte(deductions.deductionDate, startDate), lte(deductions.deductionDate, endDate)))
+            .orderBy(desc(deductions.deductionDate));
+        // Build attendance table rows
+        const tableRows = attendanceRecords.map(record => {
+            const att = record.attendance;
+            const leave = record.leaveRequest;
+            // Get advances for this date (Compare YYYY-MM-DD strings)
+            const attDateString = att.date; // Already YYYY-MM-DD
+            const dayAdvances = advancesResult.filter(
+            // Convert adv.requestDate to YYYY-MM-DD string for comparison
+            adv => getDateString(adv.requestDate) === attDateString && adv.status === 'approved');
+            const advancesAmount = dayAdvances.reduce((sum, adv) => sum + parseFloat(adv.amount || '0'), 0);
+            // Get deductions for this date
+            const dayDeductions = deductionsResult.filter(ded => ded.deductionDate === att.date);
+            const deductionsAmount = dayDeductions.reduce((sum, ded) => sum + parseFloat(ded.amount || '0'), 0);
+            return {
+                date: att.date,
+                checkIn: att.checkInTime || '--',
+                checkOut: att.checkOutTime || '--',
+                workHours: att.workHours ? parseFloat(att.workHours).toFixed(2) : '0.00',
+                advances: advancesAmount.toFixed(2),
+                // Use leave.allowanceAmount instead of leave.amount
+                leaveAllowance: leave ? parseFloat(leave.allowanceAmount || '0').toFixed(2) : '0.00',
+                hasLeave: !!leave,
+                deductions: deductionsAmount.toFixed(2),
+                advancesList: dayAdvances.map(a => normalizeNumericFields(a, ['amount', 'eligibleAmount', 'currentSalary'])), // Normalize fields
+                deductionsList: dayDeductions.map(d => normalizeNumericFields(d, ['amount'])) // Normalize fields
+            };
+        });
+        // Calculate totals
+        let totalWorkHours = 0;
+        let totalAdvances = 0;
+        let totalLeaveAllowances = 0;
+        let totalDeductions = 0;
+        const workDays = new Set();
+        for (const row of tableRows) {
+            totalWorkHours += parseFloat(row.workHours);
+            totalAdvances += parseFloat(row.advances);
+            totalLeaveAllowances += parseFloat(row.leaveAllowance);
+            totalDeductions += parseFloat(row.deductions);
+            if (parseFloat(row.workHours) > 0) {
+                workDays.add(row.date);
+            }
+        }
+        // Calculate net (after deducting advances from total)
+        const grossAmount = (employee.monthlySalary ? parseFloat(employee.monthlySalary) : 0);
+        const netAfterAdvances = grossAmount - totalAdvances;
+        res.json({
+            success: true,
+            employee: {
+                id: employee.id,
+                fullName: employee.fullName,
+                role: employee.role,
+                monthlySalary: employee.monthlySalary,
+                hourlyRate: employee.hourlyRate,
+            },
+            tableRows: tableRows,
+            summary: {
+                totalWorkDays: workDays.size,
+                totalWorkHours: totalWorkHours.toFixed(2),
+                totalAdvances: totalAdvances.toFixed(2),
+                totalLeaveAllowances: totalLeaveAllowances.toFixed(2),
+                totalDeductions: totalDeductions.toFixed(2),
+                grossSalary: grossAmount.toFixed(2),
+                netAfterAdvances: netAfterAdvances.toFixed(2),
+            },
+        });
+    }
+    catch (error) {
+        console.error('Get employee attendance table error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// ============ Attendance Presence Dashboard ============
+// Get current presence status (who is checked in/out)
+app.get('/api/attendance/presence', async (req, res) => {
+    try {
+        const { branchId } = req.query;
+        const today = new Date().toISOString().split('T')[0];
+        // Build query based on branch filter
+        let attendanceQuery;
+        if (branchId) {
+            // Get employees from specific branch
+            const branchEmployees = await db
+                .select()
+                .from(employees)
+                .where(and(eq(employees.branchId, branchId), eq(employees.active, true)));
+            const employeeIds = branchEmployees.map(e => e.id);
+            if (employeeIds.length === 0) {
+                return res.json({
+                    success: true,
+                    present: [],
+                    absent: [],
+                    summary: { present: 0, absent: 0, total: 0 },
+                });
+            }
+            attendanceQuery = db
+                .select()
+                .from(attendance)
+                .where(and(inArray(attendance.employeeId, employeeIds), eq(attendance.date, today)));
+        }
+        else {
+            // Get all attendance for today
+            attendanceQuery = db
+                .select()
+                .from(attendance)
+                .where(eq(attendance.date, today));
+        }
+        const todayAttendance = await attendanceQuery;
+        // Get all active employees
+        let allEmployeesQuery = db
+            .select()
+            .from(employees)
+            .where(eq(employees.active, true));
+        if (branchId) {
+            allEmployeesQuery = db
+                .select()
+                .from(employees)
+                .where(and(eq(employees.branchId, branchId), eq(employees.active, true)));
+        }
+        const allEmployees = await allEmployeesQuery;
+        // Build presence map
+        const presentEmployees = [];
+        const absentEmployees = [];
+        for (const employee of allEmployees) {
+            const employeeAttendance = todayAttendance.find(a => a.employeeId === employee.id);
+            if (employeeAttendance) {
+                presentEmployees.push({
+                    ...employee,
+                    attendance: employeeAttendance,
+                    status: employeeAttendance.status,
+                    checkInTime: employeeAttendance.checkInTime,
+                    checkOutTime: employeeAttendance.checkOutTime,
+                });
+            }
+            else {
+                absentEmployees.push(employee);
+            }
+        }
+        res.json({
+            success: true,
+            present: presentEmployees,
+            absent: absentEmployees,
+            summary: {
+                present: presentEmployees.length,
+                absent: absentEmployees.length,
+                total: allEmployees.length,
+            },
+        });
+    }
+    catch (error) {
+        console.error('Get presence status error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// =============================================================================
+// CRON JOB - Daily Absence Check and Late Employee Check
+// =============================================================================
+// Daily absence check - runs at 2:00 AM Cairo time
+cron.schedule('0 2 * * *', async () => {
+    try {
+        console.log('[CRON] Running daily absence check...');
+        // Get yesterday's date in Cairo timezone
+        const cairoTimeString = new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' });
+        const cairoDate = new Date(cairoTimeString);
+        cairoDate.setDate(cairoDate.getDate() - 1); // Yesterday
+        const yesterdayDateStr = cairoDate.toISOString().split('T')[0];
+        console.log(`[CRON] Checking absences for date: ${yesterdayDateStr}`);
+        // 1. Get all active employees
+        const activeEmployees = await db.select({
+            id: employees.id,
+            fullName: employees.fullName,
+            branchId: employees.branchId,
+        })
+            .from(employees)
+            .where(eq(employees.active, true));
+        if (activeEmployees.length === 0) {
+            console.log('[CRON] No active employees found.');
+            return;
+        }
+        const employeeIds = activeEmployees.map(e => e.id);
+        // 2. Get attendance records for yesterday
+        const attendanceRecords = await db.select({
+            employeeId: attendance.employeeId,
+            status: attendance.status, // For leave status
+            checkInTime: attendance.checkInTime,
+            modifiedCheckInTime: attendance.modifiedCheckInTime,
+        })
+            .from(attendance)
+            .where(and(eq(attendance.date, yesterdayDateStr), inArray(attendance.employeeId, employeeIds)));
+        // 3. Identify absent employees (no check-in AND not on leave)
+        const absentEmployees = activeEmployees.filter(emp => {
+            const record = attendanceRecords.find(att => att.employeeId === emp.id);
+            // Consider absent if:
+            // - No attendance record at all, OR
+            // - Has record but no check-in times and not on leave
+            return !record ||
+                ((!record.checkInTime || record.checkInTime === null) &&
+                    (!record.modifiedCheckInTime || record.modifiedCheckInTime === null) &&
+                    record.status !== 'ON_LEAVE');
+        });
+        if (absentEmployees.length === 0) {
+            console.log('[CRON] No absent employees found for', yesterdayDateStr);
+            return;
+        }
+        console.log(`[CRON] Found ${absentEmployees.length} absent employees for ${yesterdayDateStr}`);
+        // 4. Check for existing notifications to avoid duplicates
+        const existingNotifications = await db.select({ employeeId: absenceNotifications.employeeId })
+            .from(absenceNotifications)
+            .where(and(eq(absenceNotifications.absenceDate, yesterdayDateStr), inArray(absenceNotifications.employeeId, absentEmployees.map(e => e.id))));
+        const notifiedEmployeeIds = existingNotifications.map(n => n.employeeId);
+        // 5. Create new absence notifications
+        const notificationsToInsert = absentEmployees
+            .filter(emp => !notifiedEmployeeIds.includes(emp.id))
+            .map(emp => ({
+            employeeId: emp.id,
+            absenceDate: yesterdayDateStr,
+            status: 'pending',
+            createdAt: new Date(),
+            notifiedAt: new Date(),
+        }));
+        if (notificationsToInsert.length > 0) {
+            const insertedNotifications = await db.insert(absenceNotifications).values(notificationsToInsert).returning();
+            console.log(`[CRON] Inserted ${insertedNotifications.length} new absence notifications.`);
+            // 6. Send notifications to branch managers
+            for (const notification of insertedNotifications) {
+                const employee = absentEmployees.find(e => e.id === notification.employeeId);
+                if (employee && employee.branchId) {
+                    // Find manager for this branch
+                    const [branch] = await db.select({ managerId: branches.managerId })
+                        .from(branches)
+                        .where(eq(branches.id, employee.branchId))
+                        .limit(1);
+                    if (branch?.managerId) {
+                        await sendNotification(branch.managerId, 'ABSENCE_ALERT', 'غياب موظف', `تنبيه: الموظف ${employee.fullName} غائب يوم ${yesterdayDateStr}. يرجى مراجعة الغياب واتخاذ الإجراء المناسب.`, employee.id, notification.id);
+                        console.log(`[CRON] Sent absence notification for ${employee.fullName} to manager ${branch.managerId}`);
+                    }
+                }
+            }
+        }
+        else {
+            console.log('[CRON] No new notifications to insert (already notified).');
+        }
+    }
+    catch (error) {
+        console.error('[CRON] Error during daily absence check:', error);
+    }
+});
+// Late employee check - runs every 30 minutes
+cron.schedule('*/30 * * * *', async () => {
+    try {
+        console.log('[CRON] Checking for late employees...');
+        // Get Egypt/Cairo time
+        const cairoTimeString = new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' });
+        const cairoDate = new Date(cairoTimeString);
+        const today = cairoDate.toISOString().split('T')[0];
+        const currentHour = cairoDate.getHours();
+        const currentMinute = cairoDate.getMinutes();
+        const currentTime = currentHour * 60 + currentMinute;
+        console.log(`[CRON] Cairo Time: ${cairoTimeString}, Current Time: ${currentHour}:${currentMinute.toString().padStart(2, '0')}`);
+        // Get all active employees with shift times
+        const allEmployees = await db
+            .select()
+            .from(employees)
+            .where(and(eq(employees.active, true), sql `${employees.shiftStartTime} IS NOT NULL`));
+        for (const employee of allEmployees) {
+            if (!employee.shiftStartTime)
+                continue;
+            // Parse shift start time
+            const [startHour, startMinute] = employee.shiftStartTime.split(':').map(Number);
+            const shiftStart = startHour * 60 + startMinute;
+            const twoHoursAfterStart = shiftStart + 120; // 2 hours = 120 minutes
+            // Check if it's been 2+ hours since shift start
+            if (currentTime < twoHoursAfterStart)
+                continue;
+            // Check if employee has checked in today
+            const [todayAttendance] = await db
+                .select()
+                .from(attendance)
+                .where(and(eq(attendance.employeeId, employee.id), eq(attendance.date, today)))
+                .limit(1);
+            if (todayAttendance)
+                continue; // Employee already checked in
+            // Check if we already sent notification today
+            const todayStart = new Date(cairoTimeString);
+            todayStart.setHours(0, 0, 0, 0);
+            const [existingNotification] = await db
+                .select()
+                .from(notifications)
+                .where(and(eq(notifications.type, 'ABSENCE_ALERT'), eq(notifications.relatedId, employee.id), gte(notifications.createdAt, todayStart)))
+                .limit(1);
+            if (existingNotification)
+                continue; // Already notified
+            // Find manager for this employee's branch
+            let managerId = null;
+            if (employee.branchId) {
+                const [branch] = await db
+                    .select()
+                    .from(branches)
+                    .where(eq(branches.id, employee.branchId))
+                    .limit(1);
+                if (branch?.managerId) {
+                    managerId = branch.managerId;
+                }
+            }
+            // If no branch manager, send to owner
+            if (!managerId) {
+                managerId = await getOwnerId();
+            }
+            if (managerId) {
+                // Send notification to manager
+                await sendNotification(managerId, 'ABSENCE_ALERT', 'تأخير موظف', `تنبيه: الموظف ${employee.fullName} تأخر لمدة ساعتين عن شيفت اليوم (${employee.shiftStartTime}). هل ترغب بتطبيق خصم؟`, employee.id, employee.id);
+                console.log(`[CRON] Sent late notification for employee ${employee.fullName} to manager ${managerId}`);
+            }
+        }
+        console.log('[CRON] Late employee check completed');
+    }
+    catch (error) {
+        console.error('[CRON] Error checking late employees:', error);
+    }
+});
 // Listen on 0.0.0.0 to accept connections from all interfaces (including IPv4)
 console.log(`[DEBUG] About to call app.listen on port ${PORT}...`);
 const server = app.listen(PORT, '0.0.0.0', () => {
@@ -3019,6 +5444,90 @@ server.on('error', (error) => {
 setInterval(() => {
     console.log('[DEBUG] Process still alive, server listening:', server.listening);
 }, 10000);
+// =============================================================================
+// DEVELOPMENT - Seed Database
+// =============================================================================
+app.get('/api/dev/seed', async (req, res) => {
+    try {
+        console.log('🌱 Seeding database...');
+        // Check if already seeded
+        const existingEmployees = await db.select().from(employees).limit(1);
+        if (existingEmployees.length > 0) {
+            return res.json({
+                success: true,
+                message: 'Database already seeded',
+                note: 'Delete employees table data if you want to re-seed'
+            });
+        }
+        // Hash PINs using bcrypt
+        const defaultPinHash = await bcrypt.hash('1234', 10);
+        const emp002PinHash = await bcrypt.hash('5555', 10);
+        const mgrPinHash = await bcrypt.hash('8888', 10);
+        // Seed employees
+        const employeesToInsert = [
+            {
+                id: 'OWNER001',
+                fullName: 'Ahmed Owner',
+                role: 'owner',
+                branch: 'MAIN',
+                branchId: null,
+                pinHash: defaultPinHash,
+                monthlySalary: '0',
+                hourlyRate: '0',
+                active: true,
+            },
+            {
+                id: 'EMP001',
+                fullName: 'Ahmed Mohamed',
+                role: 'staff',
+                branch: 'MAADI',
+                branchId: null,
+                pinHash: defaultPinHash,
+                monthlySalary: '3000',
+                hourlyRate: '40',
+                active: true,
+            },
+            {
+                id: 'EMP_MAADI',
+                fullName: 'Mohamed Ali',
+                role: 'staff',
+                branch: 'MAADI',
+                branchId: null,
+                pinHash: emp002PinHash,
+                monthlySalary: '3500',
+                hourlyRate: '40',
+                active: true,
+            },
+            {
+                id: 'MGR_MAADI',
+                fullName: 'Sara Manager',
+                role: 'manager',
+                branch: 'MAADI',
+                branchId: null,
+                pinHash: mgrPinHash,
+                monthlySalary: '5000',
+                hourlyRate: '50',
+                active: true,
+            },
+        ];
+        await db.insert(employees).values(employeesToInsert);
+        console.log('✅ Seeded employees');
+        res.json({
+            success: true,
+            message: 'Database seeded successfully',
+            employees: [
+                { id: 'OWNER001', pin: '1234', role: 'owner' },
+                { id: 'EMP001', pin: '1234', role: 'staff' },
+                { id: 'EMP_MAADI', pin: '5555', role: 'staff' },
+                { id: 'MGR_MAADI', pin: '8888', role: 'manager' },
+            ]
+        });
+    }
+    catch (error) {
+        console.error('Seed error:', error);
+        res.status(500).json({ error: 'Seed failed', message: error?.message });
+    }
+});
 // 404 handler (JSON)
 app.use((req, res) => {
     res.status(404).json({ error: 'Not Found', path: req.path });
