@@ -5,6 +5,7 @@ import 'package:geolocator/geolocator.dart';
 
 import '../../constants/restaurant_config.dart';
 import '../../models/attendance_request.dart';
+import '../../models/employee.dart';
 import '../../services/attendance_api_service.dart';
 import '../../services/branch_api_service.dart';
 import '../../services/location_service.dart';

@@ -10,6 +10,7 @@ import 'manager_home_page.dart';
 import 'manager_requests_page.dart';
 import 'manager_report_page.dart';
 import 'manager_profile_page.dart';
+import 'manager_absence_notifications_screen.dart';
 
 class ManagerMainScreen extends StatefulWidget {
   const ManagerMainScreen({
@@ -35,7 +36,7 @@ class _ManagerMainScreenState extends State<ManagerMainScreen> {
   @override
   void initState() {
     super.initState();
-    _tabKeys = List.generate(4, (_) => GlobalKey<RefreshableTabState>());
+    _tabKeys = List.generate(5, (_) => GlobalKey<RefreshableTabState>());
     _pages = [
       RefreshableTab(
         key: _tabKeys[0],
@@ -47,10 +48,14 @@ class _ManagerMainScreenState extends State<ManagerMainScreen> {
       ),
       RefreshableTab(
         key: _tabKeys[2],
-        builder: (context) => ManagerReportPage(managerId: widget.managerId, branch: widget.branch),
+        builder: (context) => ManagerAbsenceNotificationsScreen(managerId: widget.managerId),
       ),
       RefreshableTab(
         key: _tabKeys[3],
+        builder: (context) => ManagerReportPage(managerId: widget.managerId, branch: widget.branch),
+      ),
+      RefreshableTab(
+        key: _tabKeys[4],
         builder: (context) => ManagerProfilePage(managerId: widget.managerId),
       ),
     ];
@@ -184,6 +189,13 @@ class _ManagerMainScreenState extends State<ManagerMainScreen> {
                 size: 28,
               ),
               label: 'الطلبات',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(
+                Icons.notifications_active,
+                size: 28,
+              ),
+              label: 'الغياب',
             ),
             BottomNavigationBarItem(
               icon: Icon(

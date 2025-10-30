@@ -1720,10 +1720,9 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
 
   Future<void> _getCurrentWifiBssid() async {
     try {
-      final wifiService = WiFiService.instance;
-      final wifiBSSID = await wifiService.getWifiBSSID();
+      final wifiBSSID = await WiFiService.getCurrentWifiBssidValidated();
       
-      if (wifiBSSID != null && wifiBSSID.isNotEmpty) {
+      if (wifiBSSID.isNotEmpty) {
         setState(() {
           _wifiNameController.text = wifiBSSID;
         });

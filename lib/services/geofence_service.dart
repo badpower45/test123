@@ -142,9 +142,8 @@ class GeofenceService {
       bool isCorrectWifi = true;
       if (_requiredBssids.isNotEmpty) {
         try {
-          final wifiService = WiFiService.instance;
-          final wifiBSSID = await wifiService.getWifiBSSID();
-          isCorrectWifi = wifiBSSID != null && _requiredBssids.contains(wifiBSSID.toUpperCase());
+          final wifiBSSID = await WiFiService.getCurrentWifiBssidValidated();
+          isCorrectWifi = _requiredBssids.contains(wifiBSSID.toUpperCase());
           print('[GeofenceService] WiFi check: BSSID=$wifiBSSID, isCorrect=$isCorrectWifi');
         } catch (e) {
           print('[GeofenceService] Failed to check WiFi: $e');
@@ -223,9 +222,8 @@ class GeofenceService {
       // Check WiFi if required
       if (requiredBssids != null && requiredBssids.isNotEmpty) {
         try {
-          final wifiService = WiFiService.instance;
-          final wifiBSSID = await wifiService.getWifiBSSID();
-          return isWithinGeofence && wifiBSSID != null && requiredBssids.contains(wifiBSSID.toUpperCase());
+          final wifiBSSID = await WiFiService.getCurrentWifiBssidValidated();
+          return isWithinGeofence && requiredBssids.contains(wifiBSSID.toUpperCase());
         } catch (e) {
           print('[GeofenceService] WiFi check failed: $e');
           return false;
@@ -280,8 +278,10 @@ class GeofenceService {
     }
 
     // 2. Validate WiFi BSSID (required for check-in)
-    final bssid = await WiFiService.instance.getWifiBSSID();
-    if (bssid == null) {
+    String? bssid;
+    try {
+      bssid = await WiFiService.getCurrentWifiBssidValidated();
+    } catch (e) {
       return GeofenceValidationResult(
         isValid: false,
         message: 'يرجى الاتصال بشبكة الواي فاي الخاصة بالفرع',

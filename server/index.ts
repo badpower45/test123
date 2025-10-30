@@ -2831,6 +2831,185 @@ app.get('/api/attendance/daily-sheet', async (req, res) => {
 // =============================================================================
 // MANAGER DASHBOARD - لوحة تحكم المدير
 // =============================================================================
+// =============================================================================
+// MANAGER ABSENCE NOTIFICATIONS API - إدارة إشعارات الغياب للمدير
+// =============================================================================
+
+// Get absence notifications for manager's branch
+app.get('/api/manager/absence-notifications', async (req, res) => {
+  try {
+    const managerId = req.query.manager_id as string;
+
+    if (!managerId) {
+      return res.status(400).json({ error: 'manager_id is required' });
+    }
+
+    // Get manager's branch
+    const [manager] = await db.select().from(employees).where(eq(employees.id, managerId)).limit(1);
+    if (!manager || !manager.branchId) {
+      return res.status(403).json({ error: 'Manager not found or not assigned to a branch' });
+    }
+
+    // Get pending absence notifications for employees in manager's branch
+    const notifications = await db
+      .select({
+        id: absenceNotifications.id,
+        employeeId: absenceNotifications.employeeId,
+        employeeName: employees.fullName,
+        absenceDate: absenceNotifications.absenceDate,
+        status: absenceNotifications.status,
+        notifiedAt: absenceNotifications.notifiedAt,
+        deductionApplied: absenceNotifications.deductionApplied,
+        deductionAmount: absenceNotifications.deductionAmount,
+      })
+      .from(absenceNotifications)
+      .innerJoin(employees, eq(absenceNotifications.employeeId, employees.id))
+      .where(and(
+        eq(employees.branchId, manager.branchId),
+        eq(absenceNotifications.status, 'pending')
+      ))
+      .orderBy(desc(absenceNotifications.absenceDate));
+
+    res.json({
+      success: true,
+      notifications: notifications.map(n => normalizeNumericFields(n, ['deductionAmount']))
+    });
+  } catch (error) {
+    console.error('Get manager absence notifications error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Apply deduction for absence notification
+app.post('/api/manager/absence-notifications/:id/apply-deduction', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { managerId, deductionAmount, reason } = req.body;
+
+    if (!managerId) {
+      return res.status(400).json({ error: 'managerId is required' });
+    }
+
+    if (!deductionAmount || isNaN(parseFloat(deductionAmount))) {
+      return res.status(400).json({ error: 'Valid deductionAmount is required' });
+    }
+
+    // Get the absence notification
+    const [notification] = await db
+      .select()
+      .from(absenceNotifications)
+      .where(and(
+        eq(absenceNotifications.id, id),
+        eq(absenceNotifications.status, 'pending')
+      ))
+      .limit(1);
+
+    if (!notification) {
+      return res.status(404).json({ error: 'Absence notification not found or already reviewed' });
+    }
+
+    // Verify manager has access to this employee's branch
+    const [employee] = await db.select().from(employees).where(eq(employees.id, notification.employeeId)).limit(1);
+    const [manager] = await db.select().from(employees).where(eq(employees.id, managerId)).limit(1);
+
+    if (!employee || !manager || employee.branchId !== manager.branchId) {
+      return res.status(403).json({ error: 'Access denied: Manager can only review notifications for their branch employees' });
+    }
+
+    const deductionValue = parseFloat(deductionAmount);
+
+    // Use transaction to update notification and create deduction
+    const result = await db.transaction(async (tx) => {
+      // Update absence notification
+      await tx
+        .update(absenceNotifications)
+        .set({
+          status: 'approved',
+          deductionApplied: true,
+          deductionAmount: deductionValue.toString(),
+          reviewedBy: managerId,
+          reviewedAt: new Date(),
+        })
+        .where(eq(absenceNotifications.id, id));
+
+      // Create deduction record
+      await tx.insert(deductions).values({
+        employeeId: notification.employeeId,
+        amount: deductionValue.toString(),
+        reason: reason || `خصم غياب يوم ${notification.absenceDate} - ${deductionValue} جنيه`,
+        deductionDate: notification.absenceDate,
+        deductionType: 'absence',
+        appliedBy: managerId,
+      });
+
+      return notification;
+    });
+
+    res.json({
+      success: true,
+      message: `تم تطبيق خصم الغياب بنجاح (${deductionValue} جنيه)`,
+      notification: result,
+      deductionAmount: deductionValue
+    });
+  } catch (error) {
+    console.error('Apply deduction error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Excuse absence (no deduction)
+app.post('/api/manager/absence-notifications/:id/excuse', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { managerId, reason } = req.body;
+
+    if (!managerId) {
+      return res.status(400).json({ error: 'managerId is required' });
+    }
+
+    // Get the absence notification
+    const [notification] = await db
+      .select()
+      .from(absenceNotifications)
+      .where(and(
+        eq(absenceNotifications.id, id),
+        eq(absenceNotifications.status, 'pending')
+      ))
+      .limit(1);
+
+    if (!notification) {
+      return res.status(404).json({ error: 'Absence notification not found or already reviewed' });
+    }
+
+    // Verify manager has access to this employee's branch
+    const [employee] = await db.select().from(employees).where(eq(employees.id, notification.employeeId)).limit(1);
+    const [manager] = await db.select().from(employees).where(eq(employees.id, managerId)).limit(1);
+
+    if (!employee || !manager || employee.branchId !== manager.branchId) {
+      return res.status(403).json({ error: 'Access denied: Manager can only review notifications for their branch employees' });
+    }
+
+    // Update absence notification to excused
+    await db
+      .update(absenceNotifications)
+      .set({
+        status: 'approved', // Using 'approved' but with no deduction
+        deductionApplied: false,
+        reviewedBy: managerId,
+        reviewedAt: new Date(),
+      })
+      .where(eq(absenceNotifications.id, id));
+
+    res.json({
+      success: true,
+      message: 'تم قبول عذر الغياب بدون تطبيق خصم',
+      notification: notification
+    });
+  } catch (error) {
+    console.error('Excuse absence error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 app.get('/api/manager/dashboard', async (req, res) => {
   try {
@@ -5934,14 +6113,131 @@ app.get('/api/attendance/presence', async (req, res) => {
 });
 
 // =============================================================================
-// CRON JOB - Check for late employees (2 hours after shift start)
+// CRON JOB - Daily Absence Check and Late Employee Check
 // =============================================================================
 
-// Run every 30 minutes
+// Daily absence check - runs at 2:00 AM Cairo time
+cron.schedule('0 2 * * *', async () => {
+  try {
+    console.log('[CRON] Running daily absence check...');
+
+    // Get yesterday's date in Cairo timezone
+    const cairoTimeString = new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' });
+    const cairoDate = new Date(cairoTimeString);
+    cairoDate.setDate(cairoDate.getDate() - 1); // Yesterday
+    const yesterdayDateStr = cairoDate.toISOString().split('T')[0];
+
+    console.log(`[CRON] Checking absences for date: ${yesterdayDateStr}`);
+
+    // 1. Get all active employees
+    const activeEmployees = await db.select({
+        id: employees.id,
+        fullName: employees.fullName,
+        branchId: employees.branchId,
+      })
+      .from(employees)
+      .where(eq(employees.active, true));
+
+    if (activeEmployees.length === 0) {
+       console.log('[CRON] No active employees found.');
+       return;
+    }
+
+    const employeeIds = activeEmployees.map(e => e.id);
+
+    // 2. Get attendance records for yesterday
+    const attendanceRecords = await db.select({
+        employeeId: attendance.employeeId,
+        status: attendance.status, // For leave status
+        checkInTime: attendance.checkInTime,
+        modifiedCheckInTime: attendance.modifiedCheckInTime,
+      })
+      .from(attendance)
+      .where(and(
+        eq(attendance.date, yesterdayDateStr),
+        inArray(attendance.employeeId, employeeIds)
+      ));
+
+    // 3. Identify absent employees (no check-in AND not on leave)
+    const absentEmployees = activeEmployees.filter(emp => {
+      const record = attendanceRecords.find(att => att.employeeId === emp.id);
+      // Consider absent if:
+      // - No attendance record at all, OR
+      // - Has record but no check-in times and not on leave
+      return !record ||
+             ((!record.checkInTime || record.checkInTime === null) &&
+              (!record.modifiedCheckInTime || record.modifiedCheckInTime === null) &&
+              record.status !== 'ON_LEAVE');
+    });
+
+    if (absentEmployees.length === 0) {
+      console.log('[CRON] No absent employees found for', yesterdayDateStr);
+      return;
+    }
+
+    console.log(`[CRON] Found ${absentEmployees.length} absent employees for ${yesterdayDateStr}`);
+
+    // 4. Check for existing notifications to avoid duplicates
+    const existingNotifications = await db.select({employeeId: absenceNotifications.employeeId})
+        .from(absenceNotifications)
+        .where(and(
+            eq(absenceNotifications.absenceDate, yesterdayDateStr),
+            inArray(absenceNotifications.employeeId, absentEmployees.map(e => e.id))
+        ));
+    const notifiedEmployeeIds = existingNotifications.map(n => n.employeeId);
+
+    // 5. Create new absence notifications
+    const notificationsToInsert = absentEmployees
+        .filter(emp => !notifiedEmployeeIds.includes(emp.id))
+        .map(emp => ({
+          employeeId: emp.id,
+          absenceDate: yesterdayDateStr,
+          status: 'pending' as const,
+          createdAt: new Date(),
+          notifiedAt: new Date(),
+        }));
+
+    if (notificationsToInsert.length > 0) {
+      const insertedNotifications = await db.insert(absenceNotifications).values(notificationsToInsert).returning();
+      console.log(`[CRON] Inserted ${insertedNotifications.length} new absence notifications.`);
+
+      // 6. Send notifications to branch managers
+      for (const notification of insertedNotifications) {
+         const employee = absentEmployees.find(e => e.id === notification.employeeId);
+         if (employee && employee.branchId) {
+            // Find manager for this branch
+            const [branch] = await db.select({managerId: branches.managerId})
+                .from(branches)
+                .where(eq(branches.id, employee.branchId))
+                .limit(1);
+
+            if (branch?.managerId) {
+              await sendNotification(
+                branch.managerId,
+                'ABSENCE_ALERT',
+                'غياب موظف',
+                `تنبيه: الموظف ${employee.fullName} غائب يوم ${yesterdayDateStr}. يرجى مراجعة الغياب واتخاذ الإجراء المناسب.`,
+                employee.id,
+                notification.id
+              );
+              console.log(`[CRON] Sent absence notification for ${employee.fullName} to manager ${branch.managerId}`);
+            }
+         }
+      }
+    } else {
+        console.log('[CRON] No new notifications to insert (already notified).');
+    }
+
+  } catch (error) {
+    console.error('[CRON] Error during daily absence check:', error);
+  }
+});
+
+// Late employee check - runs every 30 minutes
 cron.schedule('*/30 * * * *', async () => {
   try {
     console.log('[CRON] Checking for late employees...');
-    
+
     // Get Egypt/Cairo time
     const cairoTimeString = new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' });
     const cairoDate = new Date(cairoTimeString);
@@ -5949,7 +6245,7 @@ cron.schedule('*/30 * * * *', async () => {
     const currentHour = cairoDate.getHours();
     const currentMinute = cairoDate.getMinutes();
     const currentTime = currentHour * 60 + currentMinute;
-    
+
     console.log(`[CRON] Cairo Time: ${cairoTimeString}, Current Time: ${currentHour}:${currentMinute.toString().padStart(2, '0')}`);
 
     // Get all active employees with shift times
@@ -5987,7 +6283,7 @@ cron.schedule('*/30 * * * *', async () => {
       // Check if we already sent notification today
       const todayStart = new Date(cairoTimeString);
       todayStart.setHours(0, 0, 0, 0);
-      
+
       const [existingNotification] = await db
         .select()
         .from(notifications)
@@ -6003,14 +6299,14 @@ cron.schedule('*/30 * * * *', async () => {
       // Find manager for this employee's branch
       let managerId = null;
       if (employee.branchId) {
-        const [branchManager] = await db
+        const [branch] = await db
           .select()
-          .from(branchManagers)
-          .where(eq(branchManagers.branchId, employee.branchId))
+          .from(branches)
+          .where(eq(branches.id, employee.branchId))
           .limit(1);
-        
-        if (branchManager) {
-          managerId = branchManager.employeeId;
+
+        if (branch?.managerId) {
+          managerId = branch.managerId;
         }
       }
 

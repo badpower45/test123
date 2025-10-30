@@ -1,7 +1,7 @@
 import 'package:network_info_plus/network_info_plus.dart';
 import 'package:flutter/services.dart';
 
-class WifiService {
+class WiFiService {
   static final NetworkInfo _networkInfo = NetworkInfo();
 
   /// Helper function to validate BSSID format

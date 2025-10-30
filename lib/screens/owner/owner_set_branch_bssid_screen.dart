@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:heartbeat/services/owner_api_service.dart';
-import 'package:heartbeat/services/wifi_service.dart';
-import 'package:heartbeat/theme/app_colors.dart';
+import '../../services/owner_api_service.dart';
+import '../../services/wifi_service.dart';
+import '../../theme/app_colors.dart';
 
 class OwnerSetBranchBssidScreen extends StatefulWidget {
   final String branchId;
@@ -30,8 +30,8 @@ class _OwnerSetBranchBssidScreenState extends State<OwnerSetBranchBssidScreen> {
       _scanError = null;
     });
     try {
-      // Use the new WifiService to get validated BSSID
-      final bssid = await WifiService.getCurrentWifiBssidValidated();
+      // Use the WiFiService to get validated BSSID
+      final bssid = await WiFiService.getCurrentWifiBssidValidated();
       setState(() {
         _scannedBssid = bssid;
       });

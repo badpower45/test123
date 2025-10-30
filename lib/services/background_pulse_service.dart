@@ -136,8 +136,7 @@ class BackgroundPulseService {
 
       String? wifiBssid;
       try {
-        final wifiService = WiFiService.instance;
-        wifiBssid = await wifiService.getWifiBSSID();
+        wifiBssid = await WiFiService.getCurrentWifiBssidValidated();
       } catch (_) {
         wifiBssid = null;
       }

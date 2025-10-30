@@ -111,15 +111,14 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
       
       // استخدام الخدمات المحسّنة مع التنفيذ المتوازي
       final locationService = LocationService();
-      final wifiService = WiFiService.instance;
       
-      final results = await Future.wait([
-        locationService.tryGetPosition(),
-        wifiService.getWifiBSSID(),
-      ]);
-      
-      final position = results[0] as Position?;
-      final wifiBSSID = results[1] as String?;
+      final position = await locationService.tryGetPosition();
+      String? wifiBSSID;
+      try {
+        wifiBSSID = await WiFiService.getCurrentWifiBssidValidated();
+      } catch (e) {
+        print('⚠️ WiFi error: $e');
+      }
 
       print('📍 Position: ${position?.latitude}, ${position?.longitude} (accuracy: ${position?.accuracy}m)');
       print('📶 WiFi BSSID: $wifiBSSID');
@@ -251,15 +250,14 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
       
       // استخدام الخدمات المحسّنة
       final locationService = LocationService();
-      final wifiService = WiFiService.instance;
       
-      final results = await Future.wait([
-        locationService.tryGetPosition(),
-        wifiService.getWifiBSSID(),
-      ]);
-      
-      final position = results[0] as Position?;
-      final wifiBSSID = results[1] as String?;
+      final position = await locationService.tryGetPosition();
+      String? wifiBSSID;
+      try {
+        wifiBSSID = await WiFiService.getCurrentWifiBssidValidated();
+      } catch (e) {
+        print('⚠️ WiFi error: $e');
+      }
       
       print('  Position: ${position != null ? "(${position.latitude}, ${position.longitude})" : "null"}');
       print('  Accuracy: ${position?.accuracy.toStringAsFixed(1) ?? "N/A"}m');
