@@ -112,6 +112,74 @@ async function getOwnerRecord(ownerId?: string) {
 }
 
 /**
+ * Check if reviewer can approve a request from an employee
+ * Rules:
+ * - If employee is a MANAGER, only OWNER can approve
+ * - If employee is STAFF, MANAGER or OWNER can approve
+ */
+async function canApproveRequest(reviewerId: string, employeeId: string): Promise<{ canApprove: boolean; reason?: string }> {
+  try {
+    // Get reviewer info
+    const [reviewer] = await db
+      .select()
+      .from(employees)
+      .where(eq(employees.id, reviewerId))
+      .limit(1);
+
+    if (!reviewer) {
+      return { canApprove: false, reason: 'Reviewer not found' };
+    }
+
+    // Get employee info
+    const [employee] = await db
+      .select()
+      .from(employees)
+      .where(eq(employees.id, employeeId))
+      .limit(1);
+
+    if (!employee) {
+      return { canApprove: false, reason: 'Employee not found' };
+    }
+
+    const reviewerRole = reviewer.role as string;
+    const employeeRole = employee.role as string;
+
+    // Owner can approve anything
+    if (reviewerRole === 'owner') {
+      return { canApprove: true };
+    }
+
+    // If employee is a manager, only owner can approve
+    if (employeeRole === 'manager') {
+      return {
+        canApprove: false,
+        reason: 'Only owner can approve requests from managers. Manager requests must be reviewed by owner.'
+      };
+    }
+
+    // If employee is staff and reviewer is manager, check if they're in same branch
+    if (reviewerRole === 'manager' && (employeeRole === 'staff' || employeeRole === 'monitor' || employeeRole === 'hr')) {
+      // Check if they're in the same branch
+      if (reviewer.branchId && employee.branchId && reviewer.branchId === employee.branchId) {
+        return { canApprove: true };
+      }
+      return {
+        canApprove: false,
+        reason: 'Manager can only approve requests from employees in their branch'
+      };
+    }
+
+    return {
+      canApprove: false,
+      reason: 'Insufficient permissions to approve this request'
+    };
+  } catch (error) {
+    console.error('Error checking approval permissions:', error);
+    return { canApprove: false, reason: 'Error checking permissions' };
+  }
+}
+
+/**
  * Send notification to user
  */
 async function sendNotification(
@@ -244,6 +312,44 @@ app.post('/api/branch/request/:type/:id/:action', async (req, res) => {
   const validActions = ['approve', 'reject', 'postpone'];
     if (!validTypes.includes(type) || !validActions.includes(action)) {
       return res.status(400).json({ error: 'Invalid type or action' });
+    }
+
+    const reviewerId = req.body?.reviewer_id || req.body?.manager_id;
+    if (!reviewerId) {
+      return res.status(400).json({ error: 'reviewer_id or manager_id is required' });
+    }
+
+    // Get the employee ID from the request based on type
+    let employeeId: string;
+    if (type === 'break') {
+      const [breakRecord] = await db.select().from(breaks).where(eq(breaks.id, id)).limit(1);
+      if (!breakRecord) {
+        return res.status(404).json({ error: 'Break request not found' });
+      }
+      employeeId = breakRecord.employeeId;
+    } else {
+      let table;
+      switch (type) {
+        case 'leave': table = leaveRequests; break;
+        case 'advance': table = advances; break;
+        case 'attendance': table = attendanceRequests; break;
+        case 'absence': table = absenceNotifications; break;
+        default: return res.status(400).json({ error: 'Invalid request type' });
+      }
+      const [record] = await db.select().from(table).where(eq(table.id, id)).limit(1);
+      if (!record) {
+        return res.status(404).json({ error: 'Request not found' });
+      }
+      employeeId = (record as any).employeeId;
+    }
+
+    // Check if reviewer can approve this request
+    const approvalCheck = await canApproveRequest(reviewerId, employeeId);
+    if (!approvalCheck.canApprove) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: approvalCheck.reason || 'You do not have permission to approve this request'
+      });
     }
     if (type === 'break') {
       const statusUpdate = action === 'approve' ? 'APPROVED' : action === 'reject' ? 'REJECTED' : 'POSTPONED';
@@ -1135,6 +1241,10 @@ app.post('/api/attendance/requests/:requestId/review', async (req, res) => {
       return res.status(400).json({ error: 'Action must be approve or reject' });
     }
 
+    if (!reviewer_id) {
+      return res.status(400).json({ error: 'reviewer_id is required' });
+    }
+
     // Get request details
     const [request] = await db
       .select()
@@ -1144,6 +1254,15 @@ app.post('/api/attendance/requests/:requestId/review', async (req, res) => {
 
     if (!request) {
       return res.status(404).json({ error: 'Request not found' });
+    }
+
+    // Check if reviewer can approve this request
+    const approvalCheck = await canApproveRequest(reviewer_id, request.employeeId);
+    if (!approvalCheck.canApprove) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: approvalCheck.reason || 'You do not have permission to approve this request'
+      });
     }
 
     // Update request status
@@ -1372,6 +1491,30 @@ app.post('/api/leave/requests/:requestId/review', async (req, res) => {
 
     if (!action || !['approve', 'reject'].includes(action)) {
       return res.status(400).json({ error: 'Action must be approve or reject' });
+    }
+
+    if (!reviewer_id) {
+      return res.status(400).json({ error: 'reviewer_id is required' });
+    }
+
+    // Get request details
+    const [request] = await db
+      .select()
+      .from(leaveRequests)
+      .where(eq(leaveRequests.id, requestId))
+      .limit(1);
+
+    if (!request) {
+      return res.status(404).json({ error: 'Request not found' });
+    }
+
+    // Check if reviewer can approve this request
+    const approvalCheck = await canApproveRequest(reviewer_id, request.employeeId);
+    if (!approvalCheck.canApprove) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: approvalCheck.reason || 'You do not have permission to approve this request'
+      });
     }
 
     const updateResult = await db
@@ -1755,6 +1898,30 @@ app.post('/api/advances/:advanceId/review', async (req, res) => {
       return res.status(400).json({ error: 'Action must be approve or reject' });
     }
 
+    if (!reviewer_id) {
+      return res.status(400).json({ error: 'reviewer_id is required' });
+    }
+
+    // Get advance details
+    const [advance] = await db
+      .select()
+      .from(advances)
+      .where(eq(advances.id, advanceId))
+      .limit(1);
+
+    if (!advance) {
+      return res.status(404).json({ error: 'Advance request not found' });
+    }
+
+    // Check if reviewer can approve this request
+    const approvalCheck = await canApproveRequest(reviewer_id, advance.employeeId);
+    if (!approvalCheck.canApprove) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: approvalCheck.reason || 'You do not have permission to approve this request'
+      });
+    }
+
     // Update advance status
     const updateResult = await db
       .update(advances)
@@ -1816,6 +1983,10 @@ app.post('/api/absence/:notificationId/review', async (req, res) => {
       return res.status(400).json({ error: 'Action must be approve or reject' });
     }
 
+    if (!reviewer_id) {
+      return res.status(400).json({ error: 'reviewer_id is required' });
+    }
+
     // Get notification
     const [notification] = await db
       .select()
@@ -1825,6 +1996,15 @@ app.post('/api/absence/:notificationId/review', async (req, res) => {
 
     if (!notification) {
       return res.status(404).json({ error: 'Notification not found' });
+    }
+
+    // Check if reviewer can approve this request
+    const approvalCheck = await canApproveRequest(reviewer_id, notification.employeeId);
+    if (!approvalCheck.canApprove) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: approvalCheck.reason || 'You do not have permission to approve this request'
+      });
     }
 
     let deductionAmount = '0';
@@ -2918,12 +3098,13 @@ app.post('/api/manager/absence-notifications/:id/apply-deduction', async (req, r
       return res.status(404).json({ error: 'Absence notification not found or already reviewed' });
     }
 
-    // Verify manager has access to this employee's branch
-    const [employee] = await db.select().from(employees).where(eq(employees.id, notification.employeeId)).limit(1);
-    const [manager] = await db.select().from(employees).where(eq(employees.id, managerId)).limit(1);
-
-    if (!employee || !manager || employee.branchId !== manager.branchId) {
-      return res.status(403).json({ error: 'Access denied: Manager can only review notifications for their branch employees' });
+    // Check if manager can approve this absence notification
+    const approvalCheck = await canApproveRequest(managerId, notification.employeeId);
+    if (!approvalCheck.canApprove) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: approvalCheck.reason || 'You do not have permission to apply deduction for this employee'
+      });
     }
 
     const deductionValue = parseFloat(deductionAmount);
@@ -2991,12 +3172,13 @@ app.post('/api/manager/absence-notifications/:id/excuse', async (req, res) => {
       return res.status(404).json({ error: 'Absence notification not found or already reviewed' });
     }
 
-    // Verify manager has access to this employee's branch
-    const [employee] = await db.select().from(employees).where(eq(employees.id, notification.employeeId)).limit(1);
-    const [manager] = await db.select().from(employees).where(eq(employees.id, managerId)).limit(1);
-
-    if (!employee || !manager || employee.branchId !== manager.branchId) {
-      return res.status(403).json({ error: 'Access denied: Manager can only review notifications for their branch employees' });
+    // Check if manager can excuse this absence notification
+    const approvalCheck = await canApproveRequest(managerId, notification.employeeId);
+    if (!approvalCheck.canApprove) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: approvalCheck.reason || 'You do not have permission to excuse this employee'
+      });
     }
 
     // Update absence notification to excused
@@ -3023,6 +3205,28 @@ app.post('/api/manager/absence-notifications/:id/excuse', async (req, res) => {
 
 app.get('/api/manager/dashboard', async (req, res) => {
   try {
+    const managerId = req.query.manager_id as string;
+
+    if (!managerId) {
+      return res.status(400).json({ error: 'manager_id is required' });
+    }
+
+    // Get manager details
+    const [manager] = await db
+      .select()
+      .from(employees)
+      .where(eq(employees.id, managerId))
+      .limit(1);
+
+    if (!manager) {
+      return res.status(404).json({ error: 'Manager not found' });
+    }
+
+    if (!manager.branchId) {
+      return res.status(400).json({ error: 'Manager is not assigned to any branch' });
+    }
+
+    // Only show pending requests from NON-MANAGER employees in the same branch
     const pendingAttendanceRequests = await db
       .select({
         id: attendanceRequests.id,
@@ -3036,7 +3240,15 @@ app.get('/api/manager/dashboard', async (req, res) => {
       })
       .from(attendanceRequests)
       .innerJoin(employees, eq(attendanceRequests.employeeId, employees.id))
-      .where(eq(attendanceRequests.status, 'pending'))
+      .where(and(
+        eq(attendanceRequests.status, 'pending'),
+        eq(employees.branchId, manager.branchId),
+        or(
+          eq(employees.role, 'staff'),
+          eq(employees.role, 'hr'),
+          eq(employees.role, 'monitor')
+        )
+      ))
       .orderBy(desc(attendanceRequests.createdAt));
 
     // Ensure status and requestType are sent as strings
@@ -3062,7 +3274,15 @@ app.get('/api/manager/dashboard', async (req, res) => {
       })
       .from(leaveRequests)
       .innerJoin(employees, eq(leaveRequests.employeeId, employees.id))
-      .where(eq(leaveRequests.status, 'pending'))
+      .where(and(
+        eq(leaveRequests.status, 'pending'),
+        eq(employees.branchId, manager.branchId),
+        or(
+          eq(employees.role, 'staff'),
+          eq(employees.role, 'hr'),
+          eq(employees.role, 'monitor')
+        )
+      ))
       .orderBy(desc(leaveRequests.createdAt));
 
     const pendingAdvances = await db
@@ -3078,7 +3298,15 @@ app.get('/api/manager/dashboard', async (req, res) => {
       })
       .from(advances)
       .innerJoin(employees, eq(advances.employeeId, employees.id))
-      .where(eq(advances.status, 'pending'))
+      .where(and(
+        eq(advances.status, 'pending'),
+        eq(employees.branchId, manager.branchId),
+        or(
+          eq(employees.role, 'staff'),
+          eq(employees.role, 'hr'),
+          eq(employees.role, 'monitor')
+        )
+      ))
       .orderBy(desc(advances.requestDate));
 
     const pendingAbsences = await db
@@ -3093,7 +3321,15 @@ app.get('/api/manager/dashboard', async (req, res) => {
       })
       .from(absenceNotifications)
       .innerJoin(employees, eq(absenceNotifications.employeeId, employees.id))
-      .where(eq(absenceNotifications.status, 'pending'))
+      .where(and(
+        eq(absenceNotifications.status, 'pending'),
+        eq(employees.branchId, manager.branchId),
+        or(
+          eq(employees.role, 'staff'),
+          eq(employees.role, 'hr'),
+          eq(employees.role, 'monitor')
+        )
+      ))
       .orderBy(desc(absenceNotifications.notifiedAt));
 
     const pendingBreaks = await db
@@ -3107,7 +3343,15 @@ app.get('/api/manager/dashboard', async (req, res) => {
       })
       .from(breaks)
       .innerJoin(employees, eq(breaks.employeeId, employees.id))
-      .where(eq(breaks.status, 'PENDING'))
+      .where(and(
+        eq(breaks.status, 'PENDING'),
+        eq(employees.branchId, manager.branchId),
+        or(
+          eq(employees.role, 'staff'),
+          eq(employees.role, 'hr'),
+          eq(employees.role, 'monitor')
+        )
+      ))
       .orderBy(desc(breaks.createdAt));
 
     // Ensure status is sent as string
@@ -5197,6 +5441,30 @@ app.post('/api/breaks/:breakId/review', async (req, res) => {
 
     if (!action || !['approve', 'reject', 'postpone'].includes(action)) {
       return res.status(400).json({ error: 'Action must be approve, reject or postpone' });
+    }
+
+    if (!manager_id) {
+      return res.status(400).json({ error: 'manager_id is required' });
+    }
+
+    // Get break details
+    const [breakRecord] = await db
+      .select()
+      .from(breaks)
+      .where(eq(breaks.id, breakId))
+      .limit(1);
+
+    if (!breakRecord) {
+      return res.status(404).json({ error: 'Break request not found' });
+    }
+
+    // Check if reviewer can approve this request
+    const approvalCheck = await canApproveRequest(manager_id, breakRecord.employeeId);
+    if (!approvalCheck.canApprove) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: approvalCheck.reason || 'You do not have permission to approve this request'
+      });
     }
 
     let setData: any = {
