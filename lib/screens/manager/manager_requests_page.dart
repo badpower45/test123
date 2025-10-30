@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../theme/app_colors.dart';
-import '../employee/requests/advance_requests_tab.dart';
-import '../employee/requests/leave_requests_tab.dart';
+import 'manager_advance_requests_tab.dart';
+import 'manager_attendance_requests_tab.dart';
+import 'manager_leave_requests_tab.dart';
 
 class ManagerRequestsPage extends StatefulWidget {
   const ManagerRequestsPage({
@@ -23,7 +24,7 @@ class _ManagerRequestsPageState extends State<ManagerRequestsPage>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
   }
 
   @override
@@ -37,11 +38,13 @@ class _ManagerRequestsPageState extends State<ManagerRequestsPage>
     final tabs = <Tab>[
       const Tab(icon: Icon(Icons.event_available), text: 'الإجازات'),
       const Tab(icon: Icon(Icons.payments), text: 'السلف'),
+      const Tab(icon: Icon(Icons.access_time), text: 'الحضور'),
     ];
 
     final views = <Widget>[
-      LeaveRequestsTab(employeeId: widget.managerId),
-      AdvanceRequestsTab(employeeId: widget.managerId),
+      ManagerLeaveRequestsTab(managerId: widget.managerId),
+      ManagerAdvanceRequestsTab(managerId: widget.managerId),
+      ManagerAttendanceRequestsTab(managerId: widget.managerId),
     ];
 
     return Scaffold(
