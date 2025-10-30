@@ -7,6 +7,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 
 import '../../constants/api_endpoints.dart';
+import '../../models/employee_attendance_status.dart';
 import '../../services/branch_manager_api_service.dart';
 import '../../services/owner_api_service.dart';
 import '../../services/branch_api_service.dart';
@@ -338,6 +339,7 @@ class _OwnerDashboardTabState extends State<_OwnerDashboardTab> {
           final leaveRequests = _asRequestList(dashboard['leaveRequests']);
           final advanceRequests = _asRequestList(dashboard['advances']);
           final absenceNotifications = _asRequestList(dashboard['absences']);
+          final breakRequests = _asRequestList(dashboard['breakRequests']);
           return ListView(
             physics: const AlwaysScrollableScrollPhysics(),
             children: [
@@ -345,6 +347,7 @@ class _OwnerDashboardTabState extends State<_OwnerDashboardTab> {
               _buildSummary(summary),
               _buildRequestsSection(title: 'طلبات الإجازة من المديرين', type: 'leave', requests: leaveRequests),
               _buildRequestsSection(title: 'طلبات السلف من المديرين', type: 'advance', requests: advanceRequests),
+              _buildRequestsSection(title: 'طلبات الاستراحة (البريك)', type: 'break', requests: breakRequests),
               _buildRequestsSection(title: 'تنبيهات الغياب للمديرين', type: 'absence', requests: absenceNotifications),
               const SizedBox(height: 24),
             ],
@@ -385,7 +388,7 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
   Future<void> _editEmployee(Map<String, dynamic> employee) async {
     final nameController = TextEditingController(text: employee['fullName']?.toString() ?? '');
     final hourlyRateController = TextEditingController(text: employee['hourlyRate']?.toString() ?? '');
-    
+
     // Parse existing shift times
     TimeOfDay? shiftStart;
     TimeOfDay? shiftEnd;
@@ -402,10 +405,11 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
       }
     }
     String shiftType = employee['shiftType']?.toString() ?? 'AM';
-    
+
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (context) => _EditEmployeeDialog(
+        ownerId: widget.ownerId,
         employee: employee,
         nameController: nameController,
         hourlyRateController: hourlyRateController,
@@ -414,9 +418,9 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
         initialShiftType: shiftType,
       ),
     );
-    
+
     if (result == null) return;
-    
+
     try {
       await OwnerApiService.updateEmployee(
         employeeId: '${employee['id']}',
@@ -425,6 +429,7 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
         shiftStartTime: result['shiftStartTime'],
         shiftEndTime: result['shiftEndTime'],
         shiftType: result['shiftType'],
+        branchId: result['branchId'],
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -777,9 +782,9 @@ class _OwnerPresenceTab extends StatefulWidget {
 }
 
 class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
-  late Future<Map<String, dynamic>> _presenceFuture;
-  String? _selectedBranch;
-  String? _selectedStatus;
+  late Future<EmployeeStatusResult> _presenceFuture;
+  String? _selectedBranchId;
+  DateTime? _selectedDate;
 
   @override
   void initState() {
@@ -787,44 +792,14 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
     _presenceFuture = _loadPresenceData();
   }
 
-  Future<Map<String, dynamic>> _loadPresenceData() async {
+  Future<EmployeeStatusResult> _loadPresenceData() async {
     try {
-      // Fetch presence status from API
-      final response = await http.get(
-        Uri.parse('${rootBaseUrl}/api/attendance/presence${_selectedBranch != null ? '?branchId=$_selectedBranch' : ''}'),
+      return await OwnerApiService.getEmployeeAttendanceStatus(
+        branchId: _selectedBranchId,
+        date: _selectedDate,
       );
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        
-        // Filter by status if selected
-        List<dynamic> presentEmployees = data['present'] ?? [];
-        List<dynamic> absentEmployees = data['absent'] ?? [];
-        
-        if (_selectedStatus == 'present') {
-          absentEmployees = [];
-        } else if (_selectedStatus == 'absent') {
-          presentEmployees = [];
-        }
-        
-        // Fetch branches for filter
-        final branches = await BranchApiService.getBranches();
-        final branchNames = branches.map((branch) => branch['name'] as String).toList();
-        
-        return {
-          'present': presentEmployees,
-          'absent': absentEmployees,
-          'offline': [],
-          'branches': branchNames,
-          'totalEmployees': presentEmployees.length + absentEmployees.length,
-          'presentCount': presentEmployees.length,
-          'absentCount': absentEmployees.length,
-        };
-      } else {
-        throw Exception('Failed to load presence data');
-      }
     } catch (error) {
-      throw Exception('Failed to load presence data: $error');
+      throw Exception('فشل تحميل بيانات الحضور: $error');
     }
   }
 
@@ -835,11 +810,133 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
     await _presenceFuture;
   }
 
+  Future<void> _manualCheckOut(String employeeId, String employeeName) async {
+    final reason = await _showReasonDialog('تسجيل انصراف يدوي', employeeName);
+    if (reason == null) return;
+
+    try {
+      await OwnerApiService.manualCheckOut(employeeId, reason: reason);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('تم تسجيل الانصراف لـ $employeeName'),
+          backgroundColor: AppColors.success,
+        ),
+      );
+      await _refresh();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('فشل تسجيل الانصراف: $error'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    }
+  }
+
+  Future<void> _manualCheckIn(String employeeId, String employeeName) async {
+    final reason = await _showReasonDialog('تسجيل حضور يدوي', employeeName);
+    if (reason == null) return;
+
+    try {
+      await OwnerApiService.manualCheckIn(employeeId, reason: reason);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('تم تسجيل الحضور لـ $employeeName'),
+          backgroundColor: AppColors.success,
+        ),
+      );
+      await _refresh();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('فشل تسجيل الحضور: $error'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    }
+  }
+
+  Future<String?> _showReasonDialog(String title, String employeeName) async {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('الموظف: $employeeName'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: controller,
+              decoration: const InputDecoration(
+                labelText: 'سبب التعديل (اختياري)',
+                border: OutlineInputBorder(),
+              ),
+              maxLines: 3,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('إلغاء'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim().isEmpty ? '' : controller.text.trim()),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryOrange),
+            child: const Text('تأكيد'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _getStatusText(String status) {
+    switch (status) {
+      case 'present':
+        return 'حاضر';
+      case 'absent':
+        return 'غائب';
+      case 'checked_out':
+        return 'انصرف';
+      case 'on_leave':
+        return 'إجازة';
+      default:
+        return status;
+    }
+  }
+
+  Color _getStatusColor(String status) {
+    switch (status) {
+      case 'present':
+        return AppColors.success;
+      case 'absent':
+        return AppColors.error;
+      case 'checked_out':
+        return Colors.grey.shade600;
+      case 'on_leave':
+        return Colors.blue;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  String _formatTime(DateTime? time) {
+    if (time == null) return '--:--';
+    return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+  }
+
   @override
   Widget build(BuildContext context) {
     return RefreshIndicator(
       onRefresh: _refresh,
-      child: FutureBuilder<Map<String, dynamic>>(
+      child: FutureBuilder<EmployeeStatusResult>(
         future: _presenceFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
@@ -856,61 +953,19 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
               ],
             );
           }
-          final data = snapshot.data ?? {};
-          final branches = data['branches'] as List<String>? ?? [];
-          final presentCount = data['presentCount'] as int? ?? 0;
-          final absentCount = data['absentCount'] as int? ?? 0;
-          final totalEmployees = data['totalEmployees'] as int? ?? 0;
+          final result = snapshot.data;
+          if (result == null) {
+            return const Center(child: Text('لا توجد بيانات'));
+          }
+
+          final employees = result.employees;
+          final presentCount = employees.where((e) => e.isPresent).length;
+          final absentCount = employees.where((e) => e.isAbsent).length;
 
           return ListView(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.all(16),
             children: [
-              // Filter Section
-              Card(
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('فلترة الحضور', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                      const SizedBox(height: 16),
-                      if (branches.isNotEmpty) ...[
-                        DropdownButtonFormField<String?>(
-                          value: _selectedBranch,
-                          decoration: const InputDecoration(
-                            labelText: 'الفرع',
-                            border: OutlineInputBorder(),
-                          ),
-                          items: [
-                            const DropdownMenuItem<String?>(value: null, child: Text('جميع الفروع')),
-                            ...branches.map((branch) => DropdownMenuItem<String?>(value: branch, child: Text(branch))),
-                          ],
-                          onChanged: (value) => setState(() => _selectedBranch = value),
-                        ),
-                        const SizedBox(height: 16),
-                      ],
-                      DropdownButtonFormField<String?>(
-                        value: _selectedStatus,
-                        decoration: const InputDecoration(
-                          labelText: 'حالة الحضور',
-                          border: OutlineInputBorder(),
-                        ),
-                        items: const [
-                          DropdownMenuItem<String?>(value: null, child: Text('الكل')),
-                          DropdownMenuItem<String?>(value: 'present', child: Text('موجود')),
-                          DropdownMenuItem<String?>(value: 'absent', child: Text('غائب')),
-                          DropdownMenuItem<String?>(value: 'offline', child: Text('غير متصل')),
-                        ],
-                        onChanged: (value) => setState(() => _selectedStatus = value),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-
               // Summary Cards
               Row(
                 children: [
@@ -935,7 +990,7 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
                   Expanded(
                     child: _PresenceSummaryCard(
                       title: 'إجمالي',
-                      count: totalEmployees,
+                      count: employees.length,
                       color: Colors.blue,
                       icon: Icons.people,
                     ),
@@ -947,8 +1002,139 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
               // Employee List
               const Text('قائمة الموظفين', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               const SizedBox(height: 12),
-              // Employee list would go here when API is implemented
 
+              ...employees.map((employee) {
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    employee.employeeName,
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '${employee.employeeRole}${employee.branchName != null ? ' • ${employee.branchName}' : ''}',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: Colors.grey.shade600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: _getStatusColor(employee.status).withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: Text(
+                                _getStatusText(employee.status),
+                                style: TextStyle(
+                                  color: _getStatusColor(employee.status),
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'الحضور',
+                                    style: TextStyle(
+                                      color: Colors.grey.shade600,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    _formatTime(employee.checkInTime),
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'الانصراف',
+                                    style: TextStyle(
+                                      color: Colors.grey.shade600,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    _formatTime(employee.checkOutTime),
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            if (employee.isAbsent || employee.isCheckedOut)
+                              Expanded(
+                                child: ElevatedButton.icon(
+                                  onPressed: () => _manualCheckIn(employee.employeeId, employee.employeeName),
+                                  icon: const Icon(Icons.login),
+                                  label: const Text('تسجيل حضور'),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: AppColors.success,
+                                    foregroundColor: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            if (employee.isPresent)
+                              Expanded(
+                                child: ElevatedButton.icon(
+                                  onPressed: () => _manualCheckOut(employee.employeeId, employee.employeeName),
+                                  icon: const Icon(Icons.logout),
+                                  label: const Text('تسجيل انصراف'),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: AppColors.error,
+                                    foregroundColor: Colors.white,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }),
               const SizedBox(height: 24),
             ],
           );
@@ -2252,6 +2438,7 @@ class _BranchCardState extends State<_BranchCard> {
 
 class _EditEmployeeDialog extends StatefulWidget {
   const _EditEmployeeDialog({
+    required this.ownerId,
     required this.employee,
     required this.nameController,
     required this.hourlyRateController,
@@ -2260,6 +2447,7 @@ class _EditEmployeeDialog extends StatefulWidget {
     required this.initialShiftType,
   });
 
+  final String ownerId;
   final Map<String, dynamic> employee;
   final TextEditingController nameController;
   final TextEditingController hourlyRateController;
@@ -2275,6 +2463,8 @@ class _EditEmployeeDialogState extends State<_EditEmployeeDialog> {
   TimeOfDay? _shiftStart;
   TimeOfDay? _shiftEnd;
   late String _shiftType;
+  late Future<List<Map<String, dynamic>>> _branchesFuture;
+  String? _selectedBranchId;
 
   @override
   void initState() {
@@ -2282,6 +2472,9 @@ class _EditEmployeeDialogState extends State<_EditEmployeeDialog> {
     _shiftStart = widget.initialShiftStart;
     _shiftEnd = widget.initialShiftEnd;
     _shiftType = widget.initialShiftType;
+    _branchesFuture = BranchApiService.getBranches();
+    // Try to get current branchId - could be stored as 'branchId' or need to lookup by name
+    _selectedBranchId = widget.employee['branchId']?.toString();
   }
 
   String _formatTime(TimeOfDay? time) {
@@ -2325,6 +2518,43 @@ class _EditEmployeeDialogState extends State<_EditEmployeeDialog> {
               controller: widget.hourlyRateController,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               decoration: const InputDecoration(labelText: 'سعر الساعة (جنيه)'),
+            ),
+            const SizedBox(height: 16),
+            // Branch selection dropdown
+            FutureBuilder<List<Map<String, dynamic>>>(
+              future: _branchesFuture,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (snapshot.hasError) {
+                  return Text('خطأ في تحميل الفروع: ${snapshot.error}', style: TextStyle(color: Colors.red, fontSize: 12));
+                }
+                final branches = snapshot.data ?? [];
+                return DropdownButtonFormField<String>(
+                  value: _selectedBranchId,
+                  decoration: const InputDecoration(
+                    labelText: 'الفرع',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: [
+                    const DropdownMenuItem(value: null, child: Text('بدون فرع')),
+                    ...branches.map((branch) {
+                      final branchId = branch['id']?.toString();
+                      final branchName = branch['name']?.toString() ?? 'فرع بدون اسم';
+                      return DropdownMenuItem(
+                        value: branchId,
+                        child: Text(branchName),
+                      );
+                    }),
+                  ],
+                  onChanged: (value) {
+                    setState(() {
+                      _selectedBranchId = value;
+                    });
+                  },
+                );
+              },
             ),
             const SizedBox(height: 16),
             const Divider(),
@@ -2371,24 +2601,25 @@ class _EditEmployeeDialogState extends State<_EditEmployeeDialog> {
           onPressed: () {
             final name = widget.nameController.text.trim();
             final hourlyRate = double.tryParse(widget.hourlyRateController.text.trim());
-            
+
             if (name.isEmpty) {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('الاسم مطلوب')),
               );
               return;
             }
-            
+
             if (hourlyRate == null || hourlyRate < 0) {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('يرجى إدخال سعر ساعة صالح')),
               );
               return;
             }
-            
+
             Navigator.pop(context, {
               'fullName': name,
               'hourlyRate': hourlyRate,
+              'branchId': _selectedBranchId,
               'shiftStartTime': _shiftStart != null ? _formatTime(_shiftStart) : null,
               'shiftEndTime': _shiftEnd != null ? _formatTime(_shiftEnd) : null,
               'shiftType': _shiftType,
