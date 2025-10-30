@@ -111,6 +111,15 @@ async function fixSchema() {
       console.log('⚠️ deductions.applied_by:', err.message);
     }
 
+    // 5. Fix attendance.modified_by (drop foreign key)
+    console.log('\n5. Fixing attendance.modified_by foreign key...');
+    try {
+      await sql.query('ALTER TABLE attendance DROP CONSTRAINT IF EXISTS attendance_modified_by_employees_id_fk');
+      console.log('✅ attendance.modified_by foreign key constraint removed');
+    } catch (err) {
+      console.log('⚠️ attendance.modified_by:', err.message);
+    }
+
     console.log('\n✅ All schema fixes completed successfully!');
   } catch (error) {
     console.error('❌ Error fixing schema:', error);

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import bcrypt from 'bcrypt';
 import cron from 'node-cron';
 import { db } from './db.js';
-import { employees, attendance, attendanceRequests, leaveRequests, advances, deductions, absenceNotifications, pulses, branches, branchBssids, branchManagers, breaks, deviceSessions, notifications, salaryCalculations, geofenceViolations } from '../shared/schema.js';
+import { employees, attendance, attendanceRequests, leaveRequests, advances, deductions, absenceNotifications, pulses, branches, branchBssids, branchManagers, breaks, deviceSessions, notifications, salaryCalculations, geofenceViolations } from '../shared/schema';
 import { eq, and, gte, lte, lt, desc, sql, inArray, isNull, or } from 'drizzle-orm';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -4190,8 +4190,8 @@ app.post('/api/pulses', async (req, res) => {
                     geofenceRadius = Number(branch.geofenceRadius) || geofenceRadius;
                 }
                 console.log(`[Pulse] Geofence radius: ${geofenceRadius}m`);
-                if (branch.wifiBssid) {
-                    branchWifi = String(branch.wifiBssid).toUpperCase();
+                if (branch.bssid_1) {
+                    branchWifi = String(branch.bssid_1).toUpperCase();
                 }
             }
         }

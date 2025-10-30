@@ -3862,7 +3862,7 @@ app.get('/api/owner/pending-attendance-requests', async (req, res) => {
     }
 
     // جلب طلبات الحضور المعلقة من المديرين فقط
-    const managerRoles = ['manager', 'hr', 'monitor', 'admin', 'owner'];
+    const managerRoles = ['manager', 'hr', 'monitor', 'admin', 'owner'] as const;
 
     const detailedRequests = await db.select({
       // --- من attendanceRequests ---

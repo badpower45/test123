@@ -10,7 +10,7 @@ export const employeeRoleEnum = pgEnum('employee_role', ['owner', 'admin', 'mana
 export const branches = pgTable('branches', {
     id: uuid('id').primaryKey().defaultRandom(),
     name: text('name').notNull(),
-    managerId: text('manager_id').references(() => employees.id), // Changed to text to reference employees
+    managerId: text('manager_id'), // Use string reference to avoid circular dependency
     latitude: numeric('latitude'),
     longitude: numeric('longitude'),
     geofenceRadius: integer('geofence_radius').default(100),
@@ -53,7 +53,7 @@ export const attendance = pgTable('attendance', {
     checkOutTime: timestamp('check_out_time', { withTimezone: true }),
     actualCheckInTime: timestamp('actual_check_in_time', { withTimezone: true }), // الوقت الفعلي للحضور
     modifiedCheckInTime: timestamp('modified_check_in_time', { withTimezone: true }), // الوقت المعدل
-    modifiedBy: text('modified_by').references(() => employees.id),
+    modifiedBy: text('modified_by'), // Can be employee ID or role string
     modifiedAt: timestamp('modified_at', { withTimezone: true }),
     modificationReason: text('modification_reason'),
     workHours: numeric('work_hours'),
