@@ -262,23 +262,31 @@ class OwnerApiService {
       throw Exception('معرف طلب الإجازة أو معرف المالك مطلوب');
     }
 
-    final uri = Uri.parse(ownerLeaveApprovalEndpoint);
+    // FIX: Use the generic review endpoint which handles 'reject'
+    // (This endpoint is defined in api_endpoints.dart as leaveRequestsEndpoint)
+    final String reviewUrl = '$apiBaseUrl/leave/requests/$leaveRequestId/review';
+    final uri = Uri.parse(reviewUrl);
+
     final response = await http.post(
       uri,
       headers: _jsonHeaders,
       body: jsonEncode({
-        'leave_request_id': leaveRequestId,
-        'owner_user_id': ownerUserId,
         'action': 'reject',
+        'reviewer_id': ownerUserId, // Send as reviewer_id, as expected by this endpoint
         'notes': reason,
       }),
     );
+
     if (response.statusCode == 200) {
       return jsonDecode(response.body) as Map<String, dynamic>;
-    } else {
-      final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
-      final errorMessage = errorBody['error'] ?? errorBody['message'] ?? 'فشل رفض طلب الإجازة';
-      throw Exception('$errorMessage: ${response.statusCode}');
+    }
+
+    // Try to parse error
+    try {
+        final errorBody = jsonDecode(response.body) as Map<String, dynamic>;
+        throw Exception(errorBody['error'] ?? 'فشل رفض طلب الإجازة: ${response.statusCode}');
+    } catch (e) {
+        throw Exception('فشل رفض طلب الإجازة: ${response.statusCode}');
     }
   }
 
