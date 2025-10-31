@@ -5,7 +5,7 @@ import '../models/absence_notification_details.dart';
 
 class ManagerApiService {
   static Future<List<AbsenceNotificationDetails>> getAbsenceNotifications(String managerId) async {
-    final url = '$apiBaseUrl/api/manager/absence-notifications?manager_id=$managerId';
+    final url = '$apiBaseUrl/manager/absence-notifications?manager_id=$managerId';
     print('🔍 Fetching absence notifications from: $url');
 
     final response = await http.get(Uri.parse(url));
@@ -31,7 +31,7 @@ class ManagerApiService {
     required double deductionAmount,
     String? reason,
   }) async {
-    final url = '$apiBaseUrl/api/manager/absence-notifications/$notificationId/apply-deduction';
+    final url = '$apiBaseUrl/manager/absence-notifications/$notificationId/apply-deduction';
     print('💰 Applying deduction for notification: $notificationId');
 
     final response = await http.post(
@@ -57,7 +57,7 @@ class ManagerApiService {
     required String managerId,
     String? reason,
   }) async {
-    final url = '$apiBaseUrl/api/manager/absence-notifications/$notificationId/excuse';
+    final url = '$apiBaseUrl/manager/absence-notifications/$notificationId/excuse';
     print('✅ Excusing absence for notification: $notificationId');
 
     final response = await http.post(
@@ -84,7 +84,7 @@ class ManagerApiService {
     required bool approve,
     String? notes,
   }) async {
-    final url = '$apiBaseUrl/api/leave/requests/$requestId/review';
+    final url = '$apiBaseUrl/leave/requests/$requestId/review';
     print('📝 Reviewing leave request: $requestId, approve: $approve');
 
     final response = await http.post(
@@ -112,7 +112,7 @@ class ManagerApiService {
     required bool approve,
     String? notes,
   }) async {
-    final url = '$apiBaseUrl/api/advances/$advanceId/review';
+    final url = '$apiBaseUrl/advances/$advanceId/review';
     print('💰 Reviewing advance request: $advanceId, approve: $approve');
 
     final response = await http.post(
@@ -140,7 +140,7 @@ class ManagerApiService {
     required bool approve,
     String? notes,
   }) async {
-    final url = '$apiBaseUrl/api/attendance/requests/$requestId/review';
+    final url = '$apiBaseUrl/attendance/requests/$requestId/review';
     print('⏰ Reviewing attendance request: $requestId, approve: $approve');
 
     final response = await http.post(

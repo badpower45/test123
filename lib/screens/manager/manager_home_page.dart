@@ -11,6 +11,7 @@ import '../../services/location_service.dart';
 import '../../services/wifi_service.dart';
 import '../../services/requests_api_service.dart';
 import '../../theme/app_colors.dart';
+import 'manager_send_requests_page.dart';
 
 class ManagerHomePage extends StatefulWidget {
   final String managerId;
@@ -773,6 +774,42 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
 
               const SizedBox(height: 16),
 
+              // Send Requests Button
+              SizedBox(
+                height: 56,
+                child: OutlinedButton(
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (context) => ManagerSendRequestsPage(managerId: widget.managerId),
+                      ),
+                    );
+                  },
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.primaryOrange,
+                    side: const BorderSide(color: AppColors.primaryOrange, width: 2),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: const [
+                      Icon(Icons.send, size: 24),
+                      SizedBox(width: 12),
+                      Text(
+                        'إرسال طلبات',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 16),
 
             ],
           ),

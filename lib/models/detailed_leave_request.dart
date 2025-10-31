@@ -52,8 +52,8 @@ class DetailedLeaveRequest {
 
       // New employee detail fields
       employeeId: (json['employeeId'] ?? json['employee_id']) as String,
-      employeeName: json['employeeName'] as String,
-      employeeRole: json['employeeRole'] as String,
+      employeeName: (json['employeeName'] ?? json['employee_name'] ?? 'غير معروف') as String,
+      employeeRole: (json['employeeRole'] ?? json['employee_role'] ?? 'staff') as String,
       employeeSalary: json['employeeSalary'] as String?,
       branchName: json['branchName'] as String?,
     );

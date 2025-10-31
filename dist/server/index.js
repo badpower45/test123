@@ -1347,21 +1347,65 @@ app.post('/api/leave/requests/:requestId/review', async (req, res) => {
                 message: approvalCheck.reason || 'You do not have permission to approve this request'
             });
         }
-        const updateResult = await db
-            .update(leaveRequests)
-            .set({
-            status: action === 'approve' ? 'approved' : 'rejected',
-            reviewedBy: req.body.reviewer_id,
-            reviewedAt: new Date(),
-            reviewNotes: req.body.notes,
-        })
-            .where(eq(leaveRequests.id, req.params.requestId))
-            .returning();
-        const updated = extractFirstRow(updateResult);
+        // Use transaction to ensure all operations succeed or fail together
+        const result = await db.transaction(async (tx) => {
+            // Update leave request status
+            const updateResult = await tx
+                .update(leaveRequests)
+                .set({
+                status: action === 'approve' ? 'approved' : 'rejected',
+                reviewedBy: reviewer_id,
+                reviewedAt: new Date(),
+                reviewNotes: notes,
+            })
+                .where(eq(leaveRequests.id, requestId))
+                .returning();
+            const updated = extractFirstRow(updateResult);
+            // If approved, mark attendance and deduct allowance if needed
+            if (action === 'approve') {
+                // Get the leave dates
+                const datesToLog = getDatesInRange(updated.startDate, updated.endDate);
+                const datesAsStrings = datesToLog.map(d => d.toISOString().split('T')[0]);
+                // Delete any existing attendance records for these dates
+                await tx
+                    .delete(attendance)
+                    .where(and(eq(attendance.employeeId, updated.employeeId), inArray(attendance.date, datesAsStrings)));
+                // Insert ON_LEAVE attendance records
+                const attendanceRecordsToInsert = datesAsStrings.map(dateStr => ({
+                    employeeId: updated.employeeId,
+                    date: dateStr,
+                    status: 'ON_LEAVE',
+                    checkInTime: null,
+                    checkOutTime: null,
+                    workHours: '0',
+                    createdAt: new Date(),
+                    updatedAt: new Date(),
+                }));
+                if (attendanceRecordsToInsert.length > 0) {
+                    await tx.insert(attendance).values(attendanceRecordsToInsert);
+                }
+                // Deduct allowance if days > 2
+                const daysCount = Number(updated.daysCount);
+                const allowanceAmount = Number(updated.allowanceAmount);
+                if (daysCount > 2 && allowanceAmount > 0) {
+                    const today = new Date().toISOString().split('T')[0];
+                    await tx.insert(deductions).values({
+                        employeeId: updated.employeeId,
+                        amount: String(allowanceAmount),
+                        reason: `خصم بدل إجازة (${daysCount} أيام)`,
+                        deductionDate: today,
+                        deductionType: 'leave_allowance',
+                        appliedBy: reviewer_id,
+                        createdAt: new Date(),
+                    });
+                }
+            }
+            return updated;
+        });
         res.json({
             success: true,
             message: action === 'approve' ? 'تم الموافقة على الإجازة' : 'تم رفض الإجازة',
-            request: normalizeNumericFields(updated, ['daysCount', 'allowanceAmount']),
+            request: normalizeNumericFields(result, ['daysCount', 'allowanceAmount']),
         });
     }
     catch (error) {
@@ -1411,7 +1455,7 @@ export async function getDetailedPendingLeaveRequestsForOwner() {
         .from(leaveRequests)
         .leftJoin(employees, eq(leaveRequests.employeeId, employees.id))
         .leftJoin(branches, eq(employees.branchId, branches.id))
-        .where(and(eq(leaveRequests.status, 'pending')))
+        .where(eq(leaveRequests.status, 'pending'))
         .orderBy(desc(leaveRequests.createdAt));
     return detailedRequests;
 }
@@ -1429,11 +1473,10 @@ export async function approveLeaveRequestAndLogAttendance(leaveRequestId, ownerU
             .update(leaveRequests)
             .set({
             status: 'approved',
-            reviewedBy: ownerUserId, // reviewedBy هو UUID حسب الـ schema
+            reviewedBy: ownerUserId,
             reviewedAt: new Date(),
         })
-            .where(and(eq(leaveRequests.id, leaveRequestId), eq(leaveRequests.status, 'pending') // ضمان الموافقة مرة واحدة فقط
-        ))
+            .where(and(eq(leaveRequests.id, leaveRequestId), eq(leaveRequests.status, 'pending')))
             .returning({
             employeeId: leaveRequests.employeeId,
             startDate: leaveRequests.startDate,
@@ -1672,25 +1715,43 @@ app.post('/api/advances/:advanceId/review', async (req, res) => {
                 message: approvalCheck.reason || 'You do not have permission to approve this request'
             });
         }
-        // Update advance status
-        const updateResult = await db
-            .update(advances)
-            .set({
-            status: action === 'approve' ? 'approved' : 'rejected',
-            reviewedBy: reviewer_id,
-            reviewedAt: new Date(),
-        })
-            .where(eq(advances.id, advanceId))
-            .returning();
-        const updated = extractFirstRow(updateResult);
+        // Use transaction to ensure all operations succeed or fail together
+        const result = await db.transaction(async (tx) => {
+            // Update advance status
+            const updateResult = await tx
+                .update(advances)
+                .set({
+                status: action === 'approve' ? 'approved' : 'rejected',
+                reviewedBy: reviewer_id,
+                reviewedAt: new Date(),
+            })
+                .where(eq(advances.id, advanceId))
+                .returning();
+            const updated = extractFirstRow(updateResult);
+            // If approved, create deduction record
+            if (action === 'approve' && updated) {
+                const advanceAmount = Number(updated.amount);
+                const today = new Date().toISOString().split('T')[0];
+                await tx.insert(deductions).values({
+                    employeeId: updated.employeeId,
+                    amount: String(advanceAmount),
+                    reason: `خصم سلفة - تم الموافقة عليها`,
+                    deductionDate: today,
+                    deductionType: 'advance',
+                    appliedBy: reviewer_id,
+                    createdAt: new Date(),
+                });
+            }
+            return updated;
+        });
         res.json({
             success: true,
-            message: action === 'approve' ? 'تم الموافقة على السلفة وسيتم خصمها في الراتب القادم' : 'تم رفض السلفة',
-            advance: updated,
+            message: action === 'approve' ? 'تم الموافقة على السلفة وسيتم خصمها من الراتب' : 'تم رفض السلفة',
+            advance: result,
         });
     }
     catch (error) {
-        console.error('Absence notification error:', error);
+        console.error('Review advance error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });

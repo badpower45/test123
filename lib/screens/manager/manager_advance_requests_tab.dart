@@ -37,17 +37,23 @@ class _ManagerAdvanceRequestsTabState extends State<ManagerAdvanceRequestsTab> {
     });
 
     try {
-      // Get all advance requests (for employees managed by this manager)
-      final url = '$apiBaseUrl/advances?status=pending';
+      // Get manager dashboard with all pending requests
+      final url = '$apiBaseUrl/manager/dashboard?manager_id=${widget.managerId}';
       final response = await http.get(Uri.parse(url));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        if (data['advances'] is List) {
+        final dashboard = data['dashboard'];
+        if (dashboard != null && dashboard['advances'] is List) {
           setState(() {
-            _requests = (data['advances'] as List)
+            _requests = (dashboard['advances'] as List)
                 .map((json) => AdvanceRequest.fromJson(json))
                 .toList();
+            _isLoading = false;
+          });
+        } else {
+          setState(() {
+            _requests = [];
             _isLoading = false;
           });
         }

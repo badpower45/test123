@@ -25,7 +25,11 @@
       "Bash(npm install)",
       "Bash(npm run build:server:*)",
       "Bash(./node_modules/.bin/tsc:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(dir /s /b \"d:\\Coding\\project important\\test123 (7)\\test123\\lib\\screens\\owner\")",
+      "Bash(curl -X DELETE \"http://16.171.208.249:5000/api/leave/requests/rejected/tt\")",
+      "Bash(curl:*)",
+      "Bash(python:*)"
     ],
     "deny": [],
     "ask": []

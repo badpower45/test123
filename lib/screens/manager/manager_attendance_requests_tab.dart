@@ -37,17 +37,23 @@ class _ManagerAttendanceRequestsTabState extends State<ManagerAttendanceRequests
     });
 
     try {
-      // Get all attendance requests (for employees managed by this manager)
-      final url = '$apiBaseUrl/attendance/requests?status=pending';
+      // Get manager dashboard with all pending requests
+      final url = '$apiBaseUrl/manager/dashboard?manager_id=${widget.managerId}';
       final response = await http.get(Uri.parse(url));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        if (data['requests'] is List) {
+        final dashboard = data['dashboard'];
+        if (dashboard != null && dashboard['attendanceRequests'] is List) {
           setState(() {
-            _requests = (data['requests'] as List)
+            _requests = (dashboard['attendanceRequests'] as List)
                 .map((json) => DetailedAttendanceRequest.fromJson(json))
                 .toList();
+            _isLoading = false;
+          });
+        } else {
+          setState(() {
+            _requests = [];
             _isLoading = false;
           });
         }
