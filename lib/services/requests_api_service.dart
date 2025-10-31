@@ -250,6 +250,12 @@ class RequestsApiService {
         ? attendanceRequestCheckinEndpoint
         : attendanceRequestCheckoutEndpoint;
 
+    print('🔍 ATTENDANCE REQUEST DEBUG:');
+    print('  - Endpoint: $endpoint');
+    print('  - Employee ID: $employeeId');
+    print('  - Requested Time: ${requestedTime.toIso8601String()}');
+    print('  - Reason: $reason');
+
     final response = await http.post(
       Uri.parse(endpoint),
       headers: _jsonHeaders,
@@ -260,12 +266,20 @@ class RequestsApiService {
       }),
     );
 
+    print('🔍 ATTENDANCE REQUEST RESPONSE:');
+    print('  - Status Code: ${response.statusCode}');
+    print('  - Response Body: ${response.body}');
+
     final body = _decodeBody(response.body);
     if (response.statusCode >= 200 && response.statusCode < 300) {
       final payload = body['request'] ?? body;
       return AttendanceRequest.fromJson(Map<String, dynamic>.from(payload as Map));
     }
-    throw Exception(body['error'] ?? 'تعذر إرسال طلب الحضور (${response.statusCode})');
+
+    // Enhanced error message
+    final errorMsg = body['error'] ?? body['message'] ?? 'تعذر إرسال طلب الحضور';
+    print('🔍 ATTENDANCE REQUEST ERROR: $errorMsg (Status: ${response.statusCode})');
+    throw Exception('$errorMsg (${response.statusCode})');
   }
 
   static Future<List<AttendanceRequest>> fetchAttendanceRequests(

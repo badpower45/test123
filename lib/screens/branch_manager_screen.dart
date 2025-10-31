@@ -50,7 +50,12 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
 
   Future<void> _actOnRequest(String type, String id, String action) async {
     try {
-      await BranchManagerApiService.actOnRequest(type: type, id: id, action: action);
+      await BranchManagerApiService.actOnRequest(
+        type: type,
+        id: id,
+        action: action,
+        managerId: widget.managerId,
+      );
       await _fetchData();
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تم تنفيذ العملية بنجاح')));
     } catch (e) {

@@ -32,13 +32,23 @@ class BranchManagerApiService {
     required String type,
     required String id,
     required String action,
+    String? managerId,
+    String? reviewerId,
   }) async {
     final url = '$apiBaseUrl/branch/request/$type/$id/$action';
-    final response = await http.post(Uri.parse(url));
+    final response = await http.post(
+      Uri.parse(url),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        if (managerId != null) 'manager_id': managerId,
+        if (reviewerId != null) 'reviewer_id': reviewerId,
+      }),
+    );
     if (response.statusCode == 200) {
       return jsonDecode(response.body);
     } else {
-      throw Exception('فشل تنفيذ العملية: ${response.statusCode}');
+      final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
+      throw Exception(errorBody['error'] ?? 'فشل تنفيذ العملية: ${response.statusCode}');
     }
   }
 

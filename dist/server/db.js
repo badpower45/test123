@@ -6,7 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import ws from 'ws';
-import * as schema from '../shared/schema';
+import * as schema from '../shared/schema.js';
 neonConfig.webSocketConstructor = ws;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

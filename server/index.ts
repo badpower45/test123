@@ -882,20 +882,25 @@ app.post('/api/attendance/check-out', async (req, res) => {
 
     const today = new Date().toISOString().split('T')[0];
 
-    // Find active attendance record
+    console.log(`[Check-Out] Looking for active attendance for employee: ${employee_id} on date: ${today}`);
+
+    // Find active attendance record - look for NULL checkOutTime instead of status
     const [activeAttendance] = await db
       .select()
       .from(attendance)
       .where(and(
         eq(attendance.employeeId, employee_id),
         eq(attendance.date, today),
-        eq(attendance.status, 'active')
+        isNull(attendance.checkOutTime) // ← Changed: Look for NULL checkOutTime instead of status
       ))
       .limit(1);
 
     if (!activeAttendance) {
+      console.log(`[Check-Out] ❌ No active attendance found for employee: ${employee_id}`);
       return res.status(400).json({ error: 'No active check-in found for today' });
     }
+
+    console.log(`[Check-Out] ✅ Found active attendance ID: ${activeAttendance.id}`);
 
     // Validate geofence for check-out
     const [employee] = await db

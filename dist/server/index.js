@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import bcrypt from 'bcrypt';
 import cron from 'node-cron';
 import { db } from './db.js';
-import { employees, attendance, attendanceRequests, leaveRequests, advances, deductions, absenceNotifications, pulses, branches, branchBssids, branchManagers, breaks, deviceSessions, notifications, salaryCalculations, geofenceViolations } from '../shared/schema';
+import { employees, attendance, attendanceRequests, leaveRequests, advances, deductions, absenceNotifications, pulses, branches, branchBssids, branchManagers, breaks, deviceSessions, notifications, salaryCalculations, geofenceViolations } from '../shared/schema.js';
 import { eq, and, gte, lte, lt, desc, sql, inArray, isNull, or } from 'drizzle-orm';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -98,6 +98,7 @@ async function getOwnerRecord(ownerId) {
  */
 async function canApproveRequest(reviewerId, employeeId) {
     try {
+        console.log('🔍 Checking approval permissions:', { reviewerId, employeeId });
         // Get reviewer info
         const [reviewer] = await db
             .select()
@@ -105,8 +106,10 @@ async function canApproveRequest(reviewerId, employeeId) {
             .where(eq(employees.id, reviewerId))
             .limit(1);
         if (!reviewer) {
+            console.log('❌ Reviewer not found:', reviewerId);
             return { canApprove: false, reason: 'Reviewer not found' };
         }
+        console.log('👤 Reviewer:', { id: reviewer.id, role: reviewer.role, branchId: reviewer.branchId });
         // Get employee info
         const [employee] = await db
             .select()
@@ -114,16 +117,20 @@ async function canApproveRequest(reviewerId, employeeId) {
             .where(eq(employees.id, employeeId))
             .limit(1);
         if (!employee) {
+            console.log('❌ Employee not found:', employeeId);
             return { canApprove: false, reason: 'Employee not found' };
         }
+        console.log('👤 Employee:', { id: employee.id, role: employee.role, branchId: employee.branchId });
         const reviewerRole = reviewer.role;
         const employeeRole = employee.role;
         // Owner can approve anything
         if (reviewerRole === 'owner') {
+            console.log('✅ Owner can approve anything');
             return { canApprove: true };
         }
         // If employee is a manager, only owner can approve
         if (employeeRole === 'manager') {
+            console.log('❌ Only owner can approve manager requests');
             return {
                 canApprove: false,
                 reason: 'Only owner can approve requests from managers. Manager requests must be reviewed by owner.'
@@ -133,13 +140,16 @@ async function canApproveRequest(reviewerId, employeeId) {
         if (reviewerRole === 'manager' && (employeeRole === 'staff' || employeeRole === 'monitor' || employeeRole === 'hr')) {
             // Check if they're in the same branch
             if (reviewer.branchId && employee.branchId && reviewer.branchId === employee.branchId) {
+                console.log('✅ Manager can approve - same branch');
                 return { canApprove: true };
             }
+            console.log('❌ Manager cannot approve - different branch or missing branchId');
             return {
                 canApprove: false,
                 reason: 'Manager can only approve requests from employees in their branch'
             };
         }
+        console.log('❌ Insufficient permissions');
         return {
             canApprove: false,
             reason: 'Insufficient permissions to approve this request'
@@ -1104,12 +1114,13 @@ app.get('/api/attendance/requests', async (req, res) => {
 app.post('/api/attendance/requests/:requestId/review', async (req, res) => {
     try {
         const { requestId } = req.params;
-        const { action, reviewer_id, notes } = req.body;
+        const { action, reviewer_id, notes, owner_user_id, manager_id } = req.body;
+        const approverId = reviewer_id || owner_user_id || manager_id;
         if (!action || !['approve', 'reject'].includes(action)) {
             return res.status(400).json({ error: 'Action must be approve or reject' });
         }
-        if (!reviewer_id) {
-            return res.status(400).json({ error: 'reviewer_id is required' });
+        if (!approverId) {
+            return res.status(400).json({ error: 'reviewer_id, owner_user_id, or manager_id is required' });
         }
         // Get request details
         const [request] = await db
@@ -1121,7 +1132,7 @@ app.post('/api/attendance/requests/:requestId/review', async (req, res) => {
             return res.status(404).json({ error: 'Request not found' });
         }
         // Check if reviewer can approve this request
-        const approvalCheck = await canApproveRequest(reviewer_id, request.employeeId);
+        const approvalCheck = await canApproveRequest(approverId, request.employeeId);
         if (!approvalCheck.canApprove) {
             return res.status(403).json({
                 error: 'Forbidden',
@@ -1133,7 +1144,7 @@ app.post('/api/attendance/requests/:requestId/review', async (req, res) => {
             .update(attendanceRequests)
             .set({
             status: action === 'approve' ? 'approved' : 'rejected',
-            reviewedBy: reviewer_id,
+            reviewedBy: approverId,
             reviewedAt: new Date(),
             reviewNotes: notes,
         })
@@ -1323,12 +1334,13 @@ app.get('/api/leave/requests', async (req, res) => {
 app.post('/api/leave/requests/:requestId/review', async (req, res) => {
     try {
         const { requestId } = req.params;
-        const { action, reviewer_id, notes } = req.body;
+        const { action, reviewer_id, notes, owner_user_id, manager_id } = req.body;
+        const approverId = reviewer_id || owner_user_id || manager_id;
         if (!action || !['approve', 'reject'].includes(action)) {
             return res.status(400).json({ error: 'Action must be approve or reject' });
         }
-        if (!reviewer_id) {
-            return res.status(400).json({ error: 'reviewer_id is required' });
+        if (!approverId) {
+            return res.status(400).json({ error: 'reviewer_id, owner_user_id, or manager_id is required' });
         }
         // Get request details
         const [request] = await db
@@ -1340,7 +1352,7 @@ app.post('/api/leave/requests/:requestId/review', async (req, res) => {
             return res.status(404).json({ error: 'Request not found' });
         }
         // Check if reviewer can approve this request
-        const approvalCheck = await canApproveRequest(reviewer_id, request.employeeId);
+        const approvalCheck = await canApproveRequest(approverId, request.employeeId);
         if (!approvalCheck.canApprove) {
             return res.status(403).json({
                 error: 'Forbidden',
@@ -1354,7 +1366,7 @@ app.post('/api/leave/requests/:requestId/review', async (req, res) => {
                 .update(leaveRequests)
                 .set({
                 status: action === 'approve' ? 'approved' : 'rejected',
-                reviewedBy: reviewer_id,
+                reviewedBy: approverId,
                 reviewedAt: new Date(),
                 reviewNotes: notes,
             })
@@ -1362,7 +1374,7 @@ app.post('/api/leave/requests/:requestId/review', async (req, res) => {
                 .returning();
             const updated = extractFirstRow(updateResult);
             // If approved, mark attendance and deduct allowance if needed
-            if (action === 'approve') {
+            if (action === 'approve' && updated) {
                 // Get the leave dates
                 const datesToLog = getDatesInRange(updated.startDate, updated.endDate);
                 const datesAsStrings = datesToLog.map(d => d.toISOString().split('T')[0]);
@@ -1557,16 +1569,17 @@ app.get('/api/owner/leaves/pending', async (req, res) => {
 // New API endpoint for owner to approve leave request and log attendance
 app.post('/api/owner/leaves/approve', async (req, res) => {
     try {
-        const { leave_request_id, owner_user_id } = req.body;
-        if (!leave_request_id || !owner_user_id) {
-            return res.status(400).json({ error: 'leave_request_id and owner_user_id are required' });
+        const { leave_request_id, owner_user_id, reviewer_id, manager_id } = req.body;
+        const approverId = owner_user_id || reviewer_id || manager_id;
+        if (!leave_request_id || !approverId) {
+            return res.status(400).json({ error: 'leave_request_id and (owner_user_id, reviewer_id, or manager_id) are required' });
         }
         // Verify owner permissions
-        const ownerRecord = await getOwnerRecord(owner_user_id);
+        const ownerRecord = await getOwnerRecord(approverId);
         if (!ownerRecord) {
             return res.status(403).json({ error: 'لا توجد صلاحيات للموافقة على طلبات الإجازات' });
         }
-        const result = await approveLeaveRequestAndLogAttendance(leave_request_id, owner_user_id);
+        const result = await approveLeaveRequestAndLogAttendance(leave_request_id, approverId);
         res.json(result);
     }
     catch (error) {
@@ -1691,12 +1704,13 @@ app.get('/api/advances', async (req, res) => {
 app.post('/api/advances/:advanceId/review', async (req, res) => {
     try {
         const { advanceId } = req.params;
-        const { action, reviewer_id } = req.body;
+        const { action, reviewer_id, owner_user_id, manager_id } = req.body;
+        const approverId = reviewer_id || owner_user_id || manager_id;
         if (!action || !['approve', 'reject'].includes(action)) {
             return res.status(400).json({ error: 'Action must be approve or reject' });
         }
-        if (!reviewer_id) {
-            return res.status(400).json({ error: 'reviewer_id is required' });
+        if (!approverId) {
+            return res.status(400).json({ error: 'reviewer_id, owner_user_id, or manager_id is required' });
         }
         // Get advance details
         const [advance] = await db
@@ -1708,7 +1722,7 @@ app.post('/api/advances/:advanceId/review', async (req, res) => {
             return res.status(404).json({ error: 'Advance request not found' });
         }
         // Check if reviewer can approve this request
-        const approvalCheck = await canApproveRequest(reviewer_id, advance.employeeId);
+        const approvalCheck = await canApproveRequest(approverId, advance.employeeId);
         if (!approvalCheck.canApprove) {
             return res.status(403).json({
                 error: 'Forbidden',
@@ -1722,7 +1736,7 @@ app.post('/api/advances/:advanceId/review', async (req, res) => {
                 .update(advances)
                 .set({
                 status: action === 'approve' ? 'approved' : 'rejected',
-                reviewedBy: reviewer_id,
+                reviewedBy: approverId,
                 reviewedAt: new Date(),
             })
                 .where(eq(advances.id, advanceId))
@@ -3330,15 +3344,16 @@ app.get('/api/owner/pending-attendance-requests', async (req, res) => {
 app.post('/api/owner/attendance-requests/:id/approve', async (req, res) => {
     try {
         const requestId = req.params.id;
-        const { action, owner_user_id } = req.body;
+        const { action, owner_user_id, reviewer_id, manager_id } = req.body;
+        const approverId = owner_user_id || reviewer_id || manager_id;
         if (!action || !['approve', 'reject'].includes(action)) {
             return res.status(400).json({ error: 'Action must be approve or reject' });
         }
-        if (!owner_user_id) {
-            return res.status(400).json({ error: 'owner_user_id is required' });
+        if (!approverId) {
+            return res.status(400).json({ error: 'owner_user_id, reviewer_id, or manager_id is required' });
         }
         // Verify owner permissions
-        const ownerRecord = await getOwnerRecord(owner_user_id);
+        const ownerRecord = await getOwnerRecord(approverId);
         if (!ownerRecord) {
             return res.status(403).json({ error: 'لا توجد صلاحيات للموافقة على طلبات الحضور' });
         }

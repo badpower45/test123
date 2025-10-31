@@ -224,7 +224,12 @@ class _OwnerDashboardTabState extends State<_OwnerDashboardTab> {
 
   Future<void> _actOnRequest(String type, String id, String action) async {
     try {
-      await BranchManagerApiService.actOnRequest(type: type, id: id, action: action);
+      await BranchManagerApiService.actOnRequest(
+        type: type,
+        id: id,
+        action: action,
+        managerId: widget.ownerId,
+      );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('تم تنفيذ ${action == 'approve' ? 'الموافقة' : 'الرفض'} بنجاح')),

@@ -88,8 +88,17 @@ class _LoginScreenState extends State<LoginScreen> {
 
       if (!mounted) return;
 
+      // DEBUG: Print navigation decision
+      print('🔍 NAVIGATION DEBUG - Employee role: ${employee.role}');
+      print('🔍 NAVIGATION DEBUG - Checking conditions:');
+      print('   - Is owner? ${employee.role == EmployeeRole.owner}');
+      print('   - Is admin/hr? ${employee.role == EmployeeRole.admin || employee.role == EmployeeRole.hr}');
+      print('   - Is manager? ${employee.role == EmployeeRole.manager}');
+      print('   - Is staff? ${employee.role == EmployeeRole.staff}');
+
       // Navigate based on role
       if (employee.role == EmployeeRole.owner) {
+        print('🔍 NAVIGATION DEBUG - Navigating to OwnerMainScreen');
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (_) => OwnerMainScreen(
@@ -100,6 +109,7 @@ class _LoginScreenState extends State<LoginScreen> {
         );
       } else if (employee.role == EmployeeRole.admin || employee.role == EmployeeRole.hr) {
         // Admin/HR goes to branch manager dashboard directly
+        print('🔍 NAVIGATION DEBUG - Navigating to BranchManagerScreen (admin/hr)');
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (_) => BranchManagerScreen(
@@ -110,6 +120,7 @@ class _LoginScreenState extends State<LoginScreen> {
         );
       } else if (employee.role == EmployeeRole.manager) {
         // Manager goes to manager main screen (employee screens + dashboard button)
+        print('🔍 NAVIGATION DEBUG - Navigating to ManagerMainScreen');
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (_) => ManagerMainScreen(
@@ -121,6 +132,7 @@ class _LoginScreenState extends State<LoginScreen> {
         );
       } else {
         // Regular employee goes to employee main screen
+        print('🔍 NAVIGATION DEBUG - Navigating to EmployeeMainScreen (staff/default)');
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (_) => EmployeeMainScreen(

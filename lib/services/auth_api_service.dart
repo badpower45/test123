@@ -42,17 +42,25 @@ class AuthApiService {
         final data = decoded as Map<String, dynamic>;
         if (data['success'] == true && data['employee'] != null) {
           final employeeData = data['employee'];
-          
+
+          // DEBUG: Print role information
+          print('🔍 LOGIN DEBUG - Raw role from server: ${employeeData['role']}');
+          final mappedRole = _mapRoleFromString(employeeData['role']);
+          print('🔍 LOGIN DEBUG - Mapped role enum: $mappedRole');
+
           // Map server response to Employee model
-          return Employee(
+          final employee = Employee(
             id: employeeData['id'] ?? employeeId,
             fullName: employeeData['fullName'] ?? '',
             pin: pin, // Store locally for future use
-            role: _mapRoleFromString(employeeData['role']),
+            role: mappedRole,
             permissions: const [], // Server doesn't return permissions yet
             branch: employeeData['branch'] ?? '',
             monthlySalary: 0, // Server doesn't return salary in login
           );
+
+          print('🔍 LOGIN DEBUG - Employee object role: ${employee.role}');
+          return employee;
         } else {
           throw Exception('معرّف الموظف أو الرقم السري غير صحيح');
         }

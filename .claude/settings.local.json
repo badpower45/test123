@@ -29,7 +29,12 @@
       "Bash(dir /s /b \"d:\\Coding\\project important\\test123 (7)\\test123\\lib\\screens\\owner\")",
       "Bash(curl -X DELETE \"http://16.171.208.249:5000/api/leave/requests/rejected/tt\")",
       "Bash(curl:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(dir /s /b \"d:\\Coding\\project important\\test123 (7)\\test123\\shared\")",
+      "Bash(node ./node_modules/typescript/bin/tsc:*)",
+      "Bash(flutter clean:*)",
+      "Bash(timeout 120 bash:*)",
+      "Bash(dir:*)"
     ],
     "deny": [],
     "ask": []
