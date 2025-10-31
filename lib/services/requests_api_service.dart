@@ -339,6 +339,10 @@ class RequestsApiService {
   }
 
   static Future<void> approveOwnerAttendanceRequest(String requestId) async {
+    if (requestId.isEmpty) {
+      throw Exception('معرف طلب الحضور مطلوب');
+    }
+
     final uri = Uri.parse(ownerAttendanceRequestApprovalEndpoint.replaceAll(':id', requestId));
     final response = await http.post(
       uri,
@@ -354,6 +358,7 @@ class RequestsApiService {
     }
 
     final body = _decodeBody(response.body);
-    throw Exception(body['error'] ?? 'تعذر الموافقة على الطلب (${response.statusCode})');
+    final errorMessage = body['error'] ?? body['message'] ?? 'تعذر الموافقة على الطلب';
+    throw Exception('$errorMessage (${response.statusCode})');
   }
 }

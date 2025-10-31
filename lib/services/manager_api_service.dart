@@ -84,8 +84,13 @@ class ManagerApiService {
     required bool approve,
     String? notes,
   }) async {
+    if (requestId.isEmpty || managerId.isEmpty) {
+      throw Exception('معرف طلب الإجازة أو معرف المدير مطلوب');
+    }
+
     final url = '$apiBaseUrl/leave/requests/$requestId/review';
     print('📝 Reviewing leave request: $requestId, approve: $approve');
+    print('📝 Manager ID: $managerId');
 
     final response = await http.post(
       Uri.parse(url),
@@ -97,8 +102,15 @@ class ManagerApiService {
       }),
     );
 
+    print('📝 Response status: ${response.statusCode}');
+    print('📝 Response body: ${response.body}');
+
     if (response.statusCode == 200) {
       return jsonDecode(response.body);
+    } else if (response.statusCode == 403) {
+      final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
+      final message = errorBody['message'] ?? errorBody['error'] ?? 'ليس لديك صلاحية للموافقة على هذا الطلب';
+      throw Exception(message);
     } else {
       final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
       throw Exception(errorBody['error'] ?? 'فشل مراجعة طلب الإجازة: ${response.statusCode}');
@@ -112,8 +124,13 @@ class ManagerApiService {
     required bool approve,
     String? notes,
   }) async {
+    if (advanceId.isEmpty || managerId.isEmpty) {
+      throw Exception('معرف طلب السلفة أو معرف المدير مطلوب');
+    }
+
     final url = '$apiBaseUrl/advances/$advanceId/review';
     print('💰 Reviewing advance request: $advanceId, approve: $approve');
+    print('💰 Manager ID: $managerId');
 
     final response = await http.post(
       Uri.parse(url),
@@ -125,8 +142,15 @@ class ManagerApiService {
       }),
     );
 
+    print('💰 Response status: ${response.statusCode}');
+    print('💰 Response body: ${response.body}');
+
     if (response.statusCode == 200) {
       return jsonDecode(response.body);
+    } else if (response.statusCode == 403) {
+      final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
+      final message = errorBody['message'] ?? errorBody['error'] ?? 'ليس لديك صلاحية للموافقة على هذا الطلب';
+      throw Exception(message);
     } else {
       final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
       throw Exception(errorBody['error'] ?? 'فشل مراجعة طلب السلفة: ${response.statusCode}');
@@ -140,8 +164,13 @@ class ManagerApiService {
     required bool approve,
     String? notes,
   }) async {
+    if (requestId.isEmpty || managerId.isEmpty) {
+      throw Exception('معرف طلب الحضور أو معرف المدير مطلوب');
+    }
+
     final url = '$apiBaseUrl/attendance/requests/$requestId/review';
     print('⏰ Reviewing attendance request: $requestId, approve: $approve');
+    print('⏰ Manager ID: $managerId');
 
     final response = await http.post(
       Uri.parse(url),
@@ -153,8 +182,15 @@ class ManagerApiService {
       }),
     );
 
+    print('⏰ Response status: ${response.statusCode}');
+    print('⏰ Response body: ${response.body}');
+
     if (response.statusCode == 200) {
       return jsonDecode(response.body);
+    } else if (response.statusCode == 403) {
+      final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
+      final message = errorBody['message'] ?? errorBody['error'] ?? 'ليس لديك صلاحية للموافقة على هذا الطلب';
+      throw Exception(message);
     } else {
       final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
       throw Exception(errorBody['error'] ?? 'فشل مراجعة طلب الحضور: ${response.statusCode}');

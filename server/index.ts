@@ -119,6 +119,8 @@ async function getOwnerRecord(ownerId?: string) {
  */
 async function canApproveRequest(reviewerId: string, employeeId: string): Promise<{ canApprove: boolean; reason?: string }> {
   try {
+    console.log('🔍 Checking approval permissions:', { reviewerId, employeeId });
+    
     // Get reviewer info
     const [reviewer] = await db
       .select()
@@ -127,8 +129,11 @@ async function canApproveRequest(reviewerId: string, employeeId: string): Promis
       .limit(1);
 
     if (!reviewer) {
+      console.log('❌ Reviewer not found:', reviewerId);
       return { canApprove: false, reason: 'Reviewer not found' };
     }
+
+    console.log('👤 Reviewer:', { id: reviewer.id, role: reviewer.role, branchId: reviewer.branchId });
 
     // Get employee info
     const [employee] = await db
@@ -138,19 +143,24 @@ async function canApproveRequest(reviewerId: string, employeeId: string): Promis
       .limit(1);
 
     if (!employee) {
+      console.log('❌ Employee not found:', employeeId);
       return { canApprove: false, reason: 'Employee not found' };
     }
+
+    console.log('👤 Employee:', { id: employee.id, role: employee.role, branchId: employee.branchId });
 
     const reviewerRole = reviewer.role as string;
     const employeeRole = employee.role as string;
 
     // Owner can approve anything
     if (reviewerRole === 'owner') {
+      console.log('✅ Owner can approve anything');
       return { canApprove: true };
     }
 
     // If employee is a manager, only owner can approve
     if (employeeRole === 'manager') {
+      console.log('❌ Only owner can approve manager requests');
       return {
         canApprove: false,
         reason: 'Only owner can approve requests from managers. Manager requests must be reviewed by owner.'
@@ -161,14 +171,17 @@ async function canApproveRequest(reviewerId: string, employeeId: string): Promis
     if (reviewerRole === 'manager' && (employeeRole === 'staff' || employeeRole === 'monitor' || employeeRole === 'hr')) {
       // Check if they're in the same branch
       if (reviewer.branchId && employee.branchId && reviewer.branchId === employee.branchId) {
+        console.log('✅ Manager can approve - same branch');
         return { canApprove: true };
       }
+      console.log('❌ Manager cannot approve - different branch or missing branchId');
       return {
         canApprove: false,
         reason: 'Manager can only approve requests from employees in their branch'
       };
     }
 
+    console.log('❌ Insufficient permissions');
     return {
       canApprove: false,
       reason: 'Insufficient permissions to approve this request'

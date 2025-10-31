@@ -48,6 +48,10 @@ class BranchManagerApiService {
     required String action, // approve, reject, or postpone
     required String managerId,
   }) async {
+    if (breakId.isEmpty || managerId.isEmpty) {
+      throw Exception('معرف طلب الاستراحة أو معرف المدير مطلوب');
+    }
+
     final url = '$apiBaseUrl/breaks/$breakId/review';
     final response = await http.post(
       Uri.parse(url),
@@ -72,6 +76,10 @@ class BranchManagerApiService {
     required String reviewerId,
     String? notes,
   }) async {
+    if (requestId.isEmpty || reviewerId.isEmpty) {
+      throw Exception('معرف طلب الحضور أو معرف المراجع مطلوب');
+    }
+
     final url = '$apiBaseUrl/attendance/requests/$requestId/review';
     final response = await http.post(
       Uri.parse(url),

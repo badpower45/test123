@@ -230,6 +230,10 @@ class OwnerApiService {
     required String leaveRequestId,
     required String ownerUserId,
   }) async {
+    if (leaveRequestId.isEmpty || ownerUserId.isEmpty) {
+      throw Exception('معرف طلب الإجازة أو معرف المالك مطلوب');
+    }
+
     final uri = Uri.parse(ownerLeaveApprovalEndpoint);
     final response = await http.post(
       uri,
@@ -237,12 +241,16 @@ class OwnerApiService {
       body: jsonEncode({
         'leave_request_id': leaveRequestId,
         'owner_user_id': ownerUserId,
+        'action': 'approve', // إضافة action
       }),
     );
     if (response.statusCode == 200) {
       return jsonDecode(response.body) as Map<String, dynamic>;
     }
-    throw Exception('فشل الموافقة على طلب الإجازة: ${response.statusCode}');
+    // تحسين رسالة الخطأ
+    final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
+    final errorMessage = errorBody['error'] ?? errorBody['message'] ?? 'فشل الموافقة على طلب الإجازة';
+    throw Exception('$errorMessage: ${response.statusCode}');
   }
 
   static Future<Map<String, dynamic>> rejectLeaveRequest({
@@ -250,6 +258,10 @@ class OwnerApiService {
     required String ownerUserId,
     String? reason,
   }) async {
+    if (leaveRequestId.isEmpty || ownerUserId.isEmpty) {
+      throw Exception('معرف طلب الإجازة أو معرف المالك مطلوب');
+    }
+
     final uri = Uri.parse(ownerLeaveApprovalEndpoint);
     final response = await http.post(
       uri,
@@ -263,8 +275,11 @@ class OwnerApiService {
     );
     if (response.statusCode == 200) {
       return jsonDecode(response.body) as Map<String, dynamic>;
+    } else {
+      final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
+      final errorMessage = errorBody['error'] ?? errorBody['message'] ?? 'فشل رفض طلب الإجازة';
+      throw Exception('$errorMessage: ${response.statusCode}');
     }
-    throw Exception('فشل رفض طلب الإجازة: ${response.statusCode}');
   }
 
   // Attendance request management for owner
@@ -287,6 +302,10 @@ static Future<Map<String, dynamic>> approveAttendanceRequest({
   required String requestId,
   required String ownerUserId,
 }) async {
+  if (requestId.isEmpty || ownerUserId.isEmpty) {
+    throw Exception('معرف طلب الحضور أو معرف المالك مطلوب');
+  }
+
   final endpoint = ownerAttendanceRequestApprovalEndpoint.replaceAll(':id', requestId);
   final uri = Uri.parse(endpoint);
   final response = await http.post(
@@ -299,8 +318,11 @@ static Future<Map<String, dynamic>> approveAttendanceRequest({
   );
   if (response.statusCode == 200) {
     return jsonDecode(response.body) as Map<String, dynamic>;
+  } else {
+    final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
+    final errorMessage = errorBody['error'] ?? errorBody['message'] ?? 'فشل الموافقة على طلب الحضور';
+    throw Exception('$errorMessage: ${response.statusCode}');
   }
-  throw Exception('فشل الموافقة على طلب الحضور: ${response.statusCode}');
 }
 
 static Future<Map<String, dynamic>> rejectAttendanceRequest({
@@ -308,6 +330,10 @@ static Future<Map<String, dynamic>> rejectAttendanceRequest({
   required String ownerUserId,
   String? reason,
 }) async {
+  if (requestId.isEmpty || ownerUserId.isEmpty) {
+    throw Exception('معرف طلب الحضور أو معرف المالك مطلوب');
+  }
+
   final endpoint = ownerAttendanceRequestApprovalEndpoint.replaceAll(':id', requestId);
   final uri = Uri.parse(endpoint);
   final response = await http.post(
@@ -321,8 +347,11 @@ static Future<Map<String, dynamic>> rejectAttendanceRequest({
   );
   if (response.statusCode == 200) {
     return jsonDecode(response.body) as Map<String, dynamic>;
+  } else {
+    final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
+    final errorMessage = errorBody['error'] ?? errorBody['message'] ?? 'فشل رفض طلب الحضور';
+    throw Exception('$errorMessage: ${response.statusCode}');
   }
-  throw Exception('فشل رفض طلب الحضور: ${response.statusCode}');
 }
 
 // Attendance Control APIs - Updated to support date filtering
