@@ -406,7 +406,8 @@ export const notificationTypeEnum = pgEnum('notification_type', [
   'ATTENDANCE_REQUEST',
   'ABSENCE_ALERT',
   'SALARY_PAID',
-  'GENERAL'
+  'GENERAL',
+  'LOCATION_WARNING'
 ]);
 
 export const notifications = pgTable('notifications', {

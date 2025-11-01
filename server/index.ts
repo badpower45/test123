@@ -3035,6 +3035,7 @@ app.get('/api/shifts/status/:employeeId', async (req, res) => {
 
     res.json({
       hasShift: true,
+      hasActiveShift: isActive, // For Flutter compatibility
       status: todayAttendance.status,
       isActive,
       checkInTime: todayAttendance.checkInTime,
@@ -5239,6 +5240,57 @@ app.post('/api/pulses', async (req, res) => {
       ))
       .limit(1);
 
+    // Calculate overall validity
+    const overallValid = (wifiValid && geofenceValid);
+
+    // Check if employee has active attendance (checked in today)
+    const today = new Date().toISOString().split('T')[0];
+    const [todayAttendance] = await db
+      .select()
+      .from(attendance)
+      .where(and(
+        eq(attendance.employeeId, employee_id),
+        eq(attendance.date, today),
+        eq(attendance.status, 'active')
+      ))
+      .limit(1);
+
+    // Send notification if employee is checked in but not at location (and not on break)
+    if (todayAttendance && !activeBreak && !overallValid) {
+      // Check if we sent notification recently (within last 5 minutes) to avoid spam
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+      const [recentNotification] = await db
+        .select()
+        .from(notifications)
+        .where(and(
+          eq(notifications.recipientId, employee_id),
+          eq(notifications.type, 'LOCATION_WARNING'),
+          gte(notifications.createdAt, fiveMinutesAgo)
+        ))
+        .orderBy(desc(notifications.createdAt))
+        .limit(1);
+
+      // Send notification only if no recent notification
+      if (!recentNotification) {
+        let warningMessage = 'أنت خارج نطاق العمل. ';
+        if (!wifiValid && !geofenceValid) {
+          warningMessage += 'يرجى التأكد من الاتصال بشبكة الواي فاي والعودة للموقع.';
+        } else if (!wifiValid) {
+          warningMessage += 'يرجى الاتصال بشبكة الواي فاي الخاصة بالفرع.';
+        } else if (!geofenceValid) {
+          warningMessage += 'يرجى العودة إلى موقع الفرع.';
+        }
+        warningMessage += ' سيتم خصم الوقت حتى عودتك.';
+
+        await sendNotification(
+          employee_id,
+          'LOCATION_WARNING',
+          'تحذير: خارج نطاق العمل',
+          warningMessage
+        );
+      }
+    }
+
     // Store pulse in database
     const insertPulseResult = await db
       .insert(pulses)
@@ -5248,14 +5300,12 @@ app.post('/api/pulses', async (req, res) => {
         latitude,
         longitude,
         bssidAddress: wifi_bssid,
-        isWithinGeofence: isWithinGeofence,
+        isWithinGeofence: overallValid, // Changed to use overallValid (wifi AND geofence)
         status: 'IN', // Default status
         createdAt: timestamp ? new Date(timestamp) : new Date(),
       })
       .returning({ id: pulses.id, employeeId: pulses.employeeId, branchId: pulses.branchId, latitude: pulses.latitude, longitude: pulses.longitude, bssidAddress: pulses.bssidAddress, isWithinGeofence: pulses.isWithinGeofence, status: pulses.status, createdAt: pulses.createdAt });
     const pulse = extractFirstRow(insertPulseResult) as any;
-
-    const overallValid = (wifiValid && geofenceValid);
 
     res.json({
       success: true,
@@ -5266,6 +5316,7 @@ app.post('/api/pulses', async (req, res) => {
         geofence_valid: geofenceValid,
         distance_meters: Math.round(distance * 100) / 100,
         on_break: !!activeBreak,
+        checked_in: !!todayAttendance,
       }
     });
   } catch (error) {
