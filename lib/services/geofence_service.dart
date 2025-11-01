@@ -319,46 +319,89 @@ class GeofenceService {
     );
   }
 
-  /// --- New Method: Validate for Check-Out (GPS only) ---
+  /// --- Validate for Check-Out (GPS OR WiFi - at least one must be valid) ---
   static Future<GeofenceValidationResult> validateForCheckOut(Employee employee) async {
-    // 1. Get current location
-    Position position;
+    print('🔍 [ValidateCheckOut] Starting validation for employee: ${employee.id}');
+    
+    bool isLocationValid = false;
+    bool isWifiValid = false;
+    Position? position;
+    String? bssid;
+    String locationMessage = '';
+    String wifiMessage = '';
+
+    // 1. Try to get and validate current location
     try {
       position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
         forceAndroidLocationManager: true,
         timeLimit: const Duration(seconds: 15),
       );
+      print('📍 [ValidateCheckOut] Location: ${position.latitude}, ${position.longitude}');
+
+      // TODO: Get branch coordinates from API instead of hardcoded values
+      const double branchLat = 31.2652; // Default location
+      const double branchLng = 29.9863; // Default location
+      const double geofenceRadius = 500.0; // Default radius
+
+      final distance = Geolocator.distanceBetween(
+        position.latitude,
+        position.longitude,
+        branchLat,
+        branchLng,
+      );
+
+      if (distance <= geofenceRadius) {
+        isLocationValid = true;
+        locationMessage = '✅ الموقع صحيح (${distance.round()}م)';
+        print('✅ [ValidateCheckOut] Location VALID: ${distance.round()}m');
+      } else {
+        locationMessage = '❌ أنت خارج نطاق الفرع (${distance.round()}م من ${geofenceRadius.round()}م)';
+        print('❌ [ValidateCheckOut] Location INVALID: ${distance.round()}m > ${geofenceRadius.round()}m');
+      }
     } catch (e) {
-      return GeofenceValidationResult(isValid: false, message: 'فشل في تحديد الموقع: $e');
+      locationMessage = '❌ فشل في تحديد الموقع: $e';
+      print('⚠️ [ValidateCheckOut] Location error: $e');
     }
 
-    // For now, we'll use a simple distance check with hardcoded coordinates
-    // TODO: Implement proper branch lookup from API
-    const double branchLat = 31.2652; // Default location
-    const double branchLng = 29.9863; // Default location
-    const double geofenceRadius = 500.0; // Default radius
+    // 2. Try to validate WiFi BSSID
+    try {
+      bssid = await WiFiService.getCurrentWifiBssidValidated();
+      print('📶 [ValidateCheckOut] WiFi BSSID: $bssid');
+      
+      if (bssid.isNotEmpty) {
+        // For now, accept any WiFi as valid
+        // TODO: Validate against branch's allowed BSSIDs from API
+        isWifiValid = true;
+        wifiMessage = '✅ متصل بشبكة WiFi: $bssid';
+        print('✅ [ValidateCheckOut] WiFi VALID');
+      } else {
+        wifiMessage = '❌ غير متصل بشبكة WiFi';
+        print('⚠️ [ValidateCheckOut] WiFi not connected');
+      }
+    } catch (e) {
+      wifiMessage = '❌ فشل في التحقق من WiFi: $e';
+      print('⚠️ [ValidateCheckOut] WiFi error: $e');
+    }
 
-    final distance = Geolocator.distanceBetween(
-      position.latitude,
-      position.longitude,
-      branchLat,
-      branchLng,
-    );
-
-    if (distance > geofenceRadius) {
+    // 3. Check: At least ONE must be valid (OR logic)
+    if (!isLocationValid && !isWifiValid) {
+      print('❌ [ValidateCheckOut] Validation FAILED - Neither WiFi nor Location is valid');
       return GeofenceValidationResult(
         isValid: false,
-        message: 'يجب أن تكون داخل نطاق الفرع (المسافة: ${distance.round()} متر)',
+        message: 'يجب أن تكون متصلاً بشبكة الواي فاي الخاصة بالفرع أو متواجداً في الموقع الصحيح لتسجيل الانصراف.\n\n$locationMessage\n$wifiMessage',
+        position: position,
+        bssid: bssid,
       );
     }
 
-    // 2. Location is valid (WiFi not required for check-out)
+    // Success - at least one is valid
+    print('✅ [ValidateCheckOut] Validation PASSED - WiFi: $isWifiValid, Location: $isLocationValid');
     return GeofenceValidationResult(
       isValid: true,
-      message: 'الموقع صحيح',
+      message: 'تم التحقق بنجاح\n$locationMessage\n$wifiMessage',
       position: position,
-      bssid: null, // Not required for check-out
+      bssid: bssid,
     );
   }
 }

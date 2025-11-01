@@ -48,10 +48,10 @@ class _OwnerAttendanceControlScreenState
     });
 
     try {
-      final employees = await OwnerApiService.getEmployeeAttendanceStatus();
+      final result = await OwnerApiService.getEmployeeAttendanceStatus();
       if (mounted) {
         setState(() {
-          _employees = employees;
+          _employees = result.employees;
           _isLoading = false;
         });
       }

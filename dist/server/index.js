@@ -680,7 +680,7 @@ app.post('/api/attendance/check-in', async (req, res) => {
         }
         // --- END VERIFICATION ---
         // --- START DEBUG LOG ---
-        console.log(`[Check-In Debug] Employee: ${employee_id}, Shift Start: ${employee.shiftStartTime}, Shift End: ${employee.shiftEndTime}`);
+        console.log(`[Check-In Debug] Employee: ${employee_id}, Role: ${employee.role}, Shift Start: ${employee.shiftStartTime}, Shift End: ${employee.shiftEndTime}`);
         // Get Egypt/Cairo time
         const cairoTime = new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' });
         const cairoDate = new Date(cairoTime);
@@ -688,8 +688,10 @@ app.post('/api/attendance/check-in', async (req, res) => {
         console.log(`[Check-In Debug] Cairo Time: ${cairoTime}`);
         console.log(`[Check-In Debug] Cairo Time (Date Object): ${cairoDate.toISOString()}`);
         // --- END DEBUG LOG ---
-        // Validate shift time using Cairo timezone
-        if (employee.shiftStartTime && employee.shiftEndTime) {
+        // Validate shift time using Cairo timezone (skip for owner/admin)
+        const isPrivilegedRole = employee.role === 'owner' || employee.role === 'admin';
+        console.log(`[Check-In Debug] Is Privileged Role: ${isPrivilegedRole}`);
+        if (employee.shiftStartTime && employee.shiftEndTime && !isPrivilegedRole) {
             // Use Cairo time for validation
             const currentHour = cairoDate.getHours();
             const currentMinute = cairoDate.getMinutes();
