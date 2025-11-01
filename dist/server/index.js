@@ -4812,6 +4812,13 @@ app.post('/api/breaks/:breakId/review', async (req, res) => {
             .where(eq(breaks.id, breakId))
             .returning();
         const updated = extractFirstRow(updateResult);
+        // Send notification to employee about break approval/rejection
+        if (action === 'approve') {
+            await sendNotification(breakRecord.employeeId, 'BREAK_APPROVED', 'تمت الموافقة على طلب الاستراحة', `تمت الموافقة على طلب الاستراحة الخاص بك لمدة ${breakRecord.requestedDurationMinutes} دقيقة`, manager_id, breakId);
+        }
+        else if (action === 'reject') {
+            await sendNotification(breakRecord.employeeId, 'BREAK_REJECTED', 'تم رفض طلب الاستراحة', `تم رفض طلب الاستراحة الخاص بك لمدة ${breakRecord.requestedDurationMinutes} دقيقة`, manager_id, breakId);
+        }
         res.json({
             success: true,
             message: action === 'approve' ? 'تم الموافقة على الاستراحة' : action === 'reject' ? 'تم رفض الاستراحة' : 'تم تأجيل الاستراحة - متاح صرف الرصيد لاحقًا',
