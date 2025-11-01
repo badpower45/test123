@@ -163,14 +163,37 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
 
       if (hasInternet) {
         // Online mode: Send to API directly
-        await AttendanceApiService.checkIn(
+        final response = await AttendanceApiService.checkIn(
           employeeId: widget.employeeId,
           latitude: latitude,
           longitude: longitude,
           wifiBssid: wifiBSSID ?? '',
         );
         
-        // تحديث الحالة فوراً
+        // Check if already checked in
+        if (response['alreadyCheckedIn'] == true) {
+          // Already checked in - update UI to show current status
+          final checkInTime = DateTime.parse(response['attendance']['checkInTime']);
+          setState(() {
+            _isCheckedIn = true;
+            _checkInTime = checkInTime;
+            _isLoading = false;
+          });
+          _startTimer();
+          
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(response['message'] ?? 'أنت مسجل حضورك بالفعل'),
+                backgroundColor: AppColors.info,
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          }
+          return;
+        }
+        
+        // New check-in successful
         setState(() {
           _isCheckedIn = true;
           _checkInTime = DateTime.now();
@@ -310,13 +333,37 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
 
       if (hasInternet) {
         // Online mode: Send to API directly
-        await AttendanceApiService.checkOut(
+        final response = await AttendanceApiService.checkOut(
           employeeId: widget.employeeId,
           latitude: position.latitude,
           longitude: position.longitude,
           wifiBssid: validation.bssid, // Include BSSID for check-out validation
         );
 
+        // Check if already checked out
+        if (response['alreadyCheckedOut'] == true) {
+          // Already checked out - update UI
+          setState(() {
+            _isCheckedIn = false;
+            _checkInTime = null;
+            _elapsedTime = '00:00:00';
+            _isLoading = false;
+          });
+          _timer?.cancel();
+
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(response['message'] ?? 'لقد سجلت انصرافك بالفعل'),
+                backgroundColor: AppColors.info,
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          }
+          return;
+        }
+
+        // New check-out successful
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
