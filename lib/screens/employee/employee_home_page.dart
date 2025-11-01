@@ -1,15 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:geolocator/geolocator.dart';
 
 import '../../constants/restaurant_config.dart';
 import '../../models/attendance_request.dart';
 import '../../models/employee.dart';
 import '../../services/attendance_api_service.dart';
 import '../../services/branch_api_service.dart';
-import '../../services/location_service.dart';
-import '../../services/wifi_service.dart';
 import '../../services/requests_api_service.dart';
 import '../../services/sync_service.dart';
 import '../../services/notification_service.dart';
@@ -70,8 +67,9 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
       
       setState(() {
         _isCheckedIn = status['attendance']?['status'] == 'active';
+        // Parse checkInTime and convert from UTC to local time
         _checkInTime = status['attendance']?['checkInTime'] != null
-            ? DateTime.parse(status['attendance']['checkInTime'])
+            ? DateTime.parse(status['attendance']['checkInTime']).toLocal()
             : null;
       });
       
@@ -173,7 +171,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         // Check if already checked in
         if (response['alreadyCheckedIn'] == true) {
           // Already checked in - update UI to show current status
-          final checkInTime = DateTime.parse(response['attendance']['checkInTime']);
+          final checkInTime = DateTime.parse(response['attendance']['checkInTime']).toLocal();
           setState(() {
             _isCheckedIn = true;
             _checkInTime = checkInTime;
@@ -428,6 +426,78 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           ),
         );
       }
+    }
+  }
+
+  Future<void> _requestBreak() async {
+    // Show dialog to select break duration
+    final duration = await showDialog<int>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('طلب استراحة'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('اختر مدة الاستراحة:'),
+            const SizedBox(height: 16),
+            ListTile(
+              title: const Text('15 دقيقة'),
+              onTap: () => Navigator.pop(context, 15),
+            ),
+            ListTile(
+              title: const Text('30 دقيقة'),
+              onTap: () => Navigator.pop(context, 30),
+            ),
+            ListTile(
+              title: const Text('45 دقيقة'),
+              onTap: () => Navigator.pop(context, 45),
+            ),
+            ListTile(
+              title: const Text('60 دقيقة'),
+              onTap: () => Navigator.pop(context, 60),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('إلغاء'),
+          ),
+        ],
+      ),
+    );
+
+    if (duration == null) return;
+
+    setState(() => _isLoading = true);
+
+    try {
+      await RequestsApiService.submitBreakRequest(
+        employeeId: widget.employeeId,
+        durationMinutes: duration,
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✓ تم إرسال طلب الاستراحة للمراجعة'),
+            backgroundColor: AppColors.success,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('خطأ: ${e.toString()}'),
+            backgroundColor: AppColors.error,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
+      setState(() => _isLoading = false);
     }
   }
 
@@ -846,6 +916,38 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
                         ),
                 ),
               ),
+              
+              const SizedBox(height: 16),
+              
+              // Break Button (only show when checked in)
+              if (_isCheckedIn)
+                SizedBox(
+                  height: 48,
+                  child: OutlinedButton(
+                    onPressed: _isLoading ? null : _requestBreak,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.primaryOrange,
+                      side: const BorderSide(color: AppColors.primaryOrange, width: 2),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.coffee, size: 20),
+                        SizedBox(width: 8),
+                        Text(
+                          'طلب استراحة (بريك)',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               
               const SizedBox(height: 16),
               
