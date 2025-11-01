@@ -5264,7 +5264,8 @@ app.post('/api/pulses', async (req, res) => {
         .from(notifications)
         .where(and(
           eq(notifications.recipientId, employee_id),
-          eq(notifications.type, 'LOCATION_WARNING'),
+          eq(notifications.type, 'ABSENCE_ALERT'),
+          sql`${notifications.message} LIKE '%خارج نطاق العمل%'`,
           gte(notifications.createdAt, fiveMinutesAgo)
         ))
         .orderBy(desc(notifications.createdAt))
@@ -5284,7 +5285,7 @@ app.post('/api/pulses', async (req, res) => {
 
         await sendNotification(
           employee_id,
-          'LOCATION_WARNING',
+          'ABSENCE_ALERT',
           'تحذير: خارج نطاق العمل',
           warningMessage
         );

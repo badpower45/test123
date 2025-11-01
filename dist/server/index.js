@@ -4368,7 +4368,7 @@ app.post('/api/pulses', async (req, res) => {
             const [recentNotification] = await db
                 .select()
                 .from(notifications)
-                .where(and(eq(notifications.recipientId, employee_id), eq(notifications.type, 'LOCATION_WARNING'), gte(notifications.createdAt, fiveMinutesAgo)))
+                .where(and(eq(notifications.recipientId, employee_id), eq(notifications.type, 'ABSENCE_ALERT'), sql `${notifications.message} LIKE '%خارج نطاق العمل%'`, gte(notifications.createdAt, fiveMinutesAgo)))
                 .orderBy(desc(notifications.createdAt))
                 .limit(1);
             // Send notification only if no recent notification
@@ -4384,7 +4384,7 @@ app.post('/api/pulses', async (req, res) => {
                     warningMessage += 'يرجى العودة إلى موقع الفرع.';
                 }
                 warningMessage += ' سيتم خصم الوقت حتى عودتك.';
-                await sendNotification(employee_id, 'LOCATION_WARNING', 'تحذير: خارج نطاق العمل', warningMessage);
+                await sendNotification(employee_id, 'ABSENCE_ALERT', 'تحذير: خارج نطاق العمل', warningMessage);
             }
         }
         // Store pulse in database
