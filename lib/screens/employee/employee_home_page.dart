@@ -508,14 +508,40 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
       final loginData = await AuthService.getLoginData();
       final employeeName = loginData['fullName'] ?? 'الموظف';
 
-      // Start monitoring with restaurant config
+      // Use branch data if available, otherwise fall back to RestaurantConfig
+      double branchLat = RestaurantConfig.latitude;
+      double branchLng = RestaurantConfig.longitude;
+      double radius = RestaurantConfig.allowedRadiusInMeters;
+      List<String> bssids = [RestaurantConfig.allowedWifiBssid ?? ''];
+
+      if (_branchData != null) {
+        // Get latitude and longitude from branch data
+        if (_branchData!['latitude'] != null) {
+          branchLat = double.tryParse(_branchData!['latitude'].toString()) ?? branchLat;
+        }
+        if (_branchData!['longitude'] != null) {
+          branchLng = double.tryParse(_branchData!['longitude'].toString()) ?? branchLng;
+        }
+        if (_branchData!['geofence_radius'] != null || _branchData!['geofenceRadius'] != null) {
+          radius = double.tryParse((_branchData!['geofence_radius'] ?? _branchData!['geofenceRadius']).toString()) ?? radius;
+        }
+        
+        // Use the allowed BSSIDs we fetched earlier
+        if (_allowedBssids.isNotEmpty) {
+          bssids = _allowedBssids;
+        }
+        
+        print('[EmployeeHomePage] Using branch geofence: Lat=$branchLat, Lng=$branchLng, Radius=$radius, BSSIDs=${bssids.length}');
+      }
+
+      // Start monitoring with branch config
       await GeofenceService.instance.startMonitoring(
         employeeId: widget.employeeId,
         employeeName: employeeName,
-        branchLatitude: RestaurantConfig.latitude,
-        branchLongitude: RestaurantConfig.longitude,
-        geofenceRadius: RestaurantConfig.allowedRadiusInMeters,
-        requiredBssids: [RestaurantConfig.allowedWifiBssid ?? ''],
+        branchLatitude: branchLat,
+        branchLongitude: branchLng,
+        geofenceRadius: radius,
+        requiredBssids: bssids,
       );
 
       print('[EmployeeHomePage] Geofence monitoring started');

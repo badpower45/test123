@@ -64,7 +64,8 @@ class BackgroundPulseService {
     _activeConfig = config;
     _pulseCounter = 0;
     _timer?.cancel();
-    _timer = Timer.periodic(const Duration(seconds: 30), (_) => _tick());
+    // Send pulse every 5 minutes (300 seconds)
+    _timer = Timer.periodic(const Duration(minutes: 5), (_) => _tick());
     await _tick();
   }
 
