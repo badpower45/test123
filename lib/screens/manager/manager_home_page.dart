@@ -121,48 +121,26 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
         print('⚠️ WiFi error: $e');
       }
 
-      print('📍 Position: ${position?.latitude}, ${position?.longitude} (accuracy: ${position?.accuracy}m)');
+      print('📍 Position: ${position?.latitude}, ${position?.longitude}');
       print('📶 WiFi BSSID: $wifiBSSID');
-      print('📶 Allowed BSSIDs: $_allowedBssids');
 
-      // التحقق من WiFi BSSID أولاً
-      if (_allowedBssids.isNotEmpty) {
-        if (wifiBSSID == null || wifiBSSID.isEmpty) {
-          throw Exception(
-            'يجب الاتصال بشبكة WiFi الفرع.\n'
-            'لم يتم اكتشاف شبكة WiFi.\n'
-            'يرجى التأكد من تفعيل WiFi والاتصال بشبكة الفرع.'
-          );
-        }
-        
+      // Validate: WiFi OR Location (at least one must be valid)
+      bool isWifiValid = false;
+      bool isLocationValid = false;
+
+      // 1️⃣ Check WiFi
+      if (_allowedBssids.isNotEmpty && wifiBSSID != null && wifiBSSID.isNotEmpty) {
         final normalizedCurrent = wifiBSSID.toUpperCase().trim();
-        final isAllowedWifi = _allowedBssids.any((allowed) {
-          final normalizedAllowed = allowed.toUpperCase().trim();
-          return normalizedCurrent == normalizedAllowed;
+        isWifiValid = _allowedBssids.any((allowed) {
+          return allowed.toUpperCase().trim() == normalizedCurrent;
         });
-        
-        if (!isAllowedWifi) {
-          throw Exception(
-            'أنت غير متصل بشبكة الفرع المسموح بها.\n'
-            'BSSID الحالي: $normalizedCurrent\n'
-            'يرجى الاتصال بشبكة WiFi الخاصة بالفرع.'
-          );
-        }
-        
-        print('✅ WiFi validation passed: $normalizedCurrent');
+        print('✅ WiFi check: ${isWifiValid ? "VALID" : "INVALID"} - $normalizedCurrent');
+      } else {
+        print('⚠️ WiFi check: SKIPPED (no WiFi or no allowed BSSIDs)');
       }
 
-      if (RestaurantConfig.enforceLocation && _branchData != null) {
-        if (position == null) {
-          throw Exception('تعذر تحديد موقعك، يرجى تفعيل خدمة تحديد الموقع والمحاولة مرة أخرى.');
-        }
-        
-        // قبول أي دقة - حتى لو ضعيفة
-        if (position.accuracy > 500) {
-          print('⚠️ Poor accuracy: ${position.accuracy.toStringAsFixed(0)}m - but accepting it');
-        }
-        
-        // Use branch coordinates if available
+      // 2️⃣ Check Location
+      if (RestaurantConfig.enforceLocation && _branchData != null && position != null) {
         final branchLat = _branchData!['latitude'] as double?;
         final branchLng = _branchData!['longitude'] as double?;
         final branchRadius = (_branchData!['geofence_radius'] as int?) ?? 200;
@@ -175,41 +153,36 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
             position.longitude,
           );
           
-          print('📍 Geofence check:');
-          print('  Branch: ($branchLat, $branchLng)');
-          print('  Current: (${position.latitude}, ${position.longitude})');
-          print('  Accuracy: ${position.accuracy.toStringAsFixed(1)}m');
-          print('  Distance: ${distance.toStringAsFixed(1)}m');
-          print('  Allowed radius: ${branchRadius}m');
-          
-          // هامش كبير جداً للدقة الضعيفة
-          final accuracyMargin = position.accuracy > 100 
-              ? position.accuracy * 1.5
-              : position.accuracy * 1.0;
+          final accuracyMargin = position.accuracy > 100 ? position.accuracy * 1.5 : position.accuracy * 1.0;
           final effectiveRadius = branchRadius + accuracyMargin;
           
-          print('  Effective radius (with margin): ${effectiveRadius.toStringAsFixed(1)}m');
-          print('  Within range: ${distance <= effectiveRadius}');
-          
-          if (distance > effectiveRadius) {
-            throw Exception(
-              'أنت خارج نطاق الموقع المسموح للمطعم.\n'
-              'المسافة: ${distance.toStringAsFixed(0)}م من ${branchRadius}م\n'
-              'دقة GPS: ${position.accuracy.toStringAsFixed(0)}م\n'
-              'يرجى الاقتراب من المطعم وإعادة المحاولة.'
-            );
-          }
+          isLocationValid = distance <= effectiveRadius;
+          print('✅ Location check: ${isLocationValid ? "VALID" : "INVALID"} - ${distance.toStringAsFixed(0)}m from ${effectiveRadius.toStringAsFixed(0)}m');
+        } else {
+          print('⚠️ Location check: SKIPPED (no branch coordinates)');
         }
+      } else {
+        print('⚠️ Location check: SKIPPED (disabled or no position)');
       }
 
-      final latitude = position?.latitude ?? RestaurantConfig.latitude;
-      final longitude = position?.longitude ?? RestaurantConfig.longitude;
+      // 3️⃣ Require at least ONE to be valid
+      if (!isWifiValid && !isLocationValid) {
+        throw Exception(
+          'يجب أن تكون متصلاً بشبكة الواي فاي الخاصة بالفرع أو متواجداً في الموقع الصحيح.\n'
+          'تأكد من الاتصال بالـ WiFi الصحيح أو التواجد داخل الفرع.'
+        );
+      }
+
+      print('✅ Validation PASSED - WiFi: $isWifiValid, Location: $isLocationValid');
+
+      final latitude = position?.latitude ?? 0.0;
+      final longitude = position?.longitude ?? 0.0;
 
       await AttendanceApiService.checkIn(
         employeeId: widget.managerId,
         latitude: latitude,
         longitude: longitude,
-        wifiBssid: wifiBSSID,
+        wifiBssid: wifiBSSID ?? '',
       );
 
       setState(() {

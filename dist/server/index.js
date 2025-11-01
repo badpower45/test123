@@ -558,7 +558,9 @@ app.post('/api/attendance/check-in', async (req, res) => {
         if (!employee) {
             return res.status(404).json({ error: 'Employee not found' });
         }
-        // --- START WIFI BSSID VERIFICATION ---
+        // --- START VERIFICATION (WiFi OR Location) ---
+        let isWifiValid = false;
+        let isLocationValid = false;
         if (employee.branchId) {
             const [branch] = await db
                 .select()
@@ -566,7 +568,7 @@ app.post('/api/attendance/check-in', async (req, res) => {
                 .where(eq(branches.id, employee.branchId))
                 .limit(1);
             if (branch) {
-                // Get BSSIDs from both sources: legacy (bssid_1, bssid_2) and new table (branchBssids)
+                // 1️⃣ Check WiFi BSSID
                 const allowedBssids = new Set();
                 // Add legacy BSSIDs
                 if (branch.bssid_1)
@@ -585,23 +587,62 @@ app.post('/api/attendance/check-in', async (req, res) => {
                 });
                 if (allowedBssids.size > 0) {
                     const currentBssid = wifi_bssid ? String(wifi_bssid).toUpperCase() : null;
-                    if (!currentBssid || !allowedBssids.has(currentBssid)) {
-                        console.log(`[Check-In] ❌ REJECTED - Invalid BSSID (${currentBssid}) for branch ${employee.branchId}. Allowed: [${Array.from(allowedBssids).join(', ')}]`);
-                        return res.status(403).json({
-                            error: 'أنت غير متصل بشبكة الواي فاي المعتمدة للفرع.',
-                            message: `الشبكة الحالية: ${currentBssid || 'غير معروف'}. يرجى الاتصال بالشبكة الصحيحة.`,
-                            code: 'INVALID_WIFI_BSSID',
-                        });
+                    if (currentBssid && allowedBssids.has(currentBssid)) {
+                        isWifiValid = true;
+                        console.log(`[Check-In] ✅ WiFi VALID - BSSID: ${currentBssid}`);
                     }
-                    console.log(`[Check-In] ✅ APPROVED - Valid BSSID (${currentBssid})`);
+                    else {
+                        console.log(`[Check-In] ❌ WiFi INVALID - BSSID: ${currentBssid || 'غير موجود'}`);
+                    }
                 }
                 else {
-                    // No BSSIDs registered, allow through
-                    console.log(`[Check-In] WiFi check skipped: No BSSIDs registered for branch ${employee.branchId}`);
+                    console.log(`[Check-In] ⚠️ No WiFi BSSIDs configured for branch`);
                 }
+                // 2️⃣ Check Location (Geofence)
+                if (latitude && longitude) {
+                    const branchLat = branch.latitude ? Number(branch.latitude) : null;
+                    const branchLng = branch.longitude ? Number(branch.longitude) : null;
+                    const radius = branch.geofenceRadius || 200;
+                    if (branchLat && branchLng) {
+                        const R = 6371000;
+                        const toRad = (deg) => (deg * Math.PI) / 180;
+                        const φ1 = toRad(branchLat);
+                        const φ2 = toRad(latitude);
+                        const Δφ = toRad(latitude - branchLat);
+                        const Δλ = toRad(longitude - branchLng);
+                        const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+                            Math.cos(φ1) * Math.cos(φ2) *
+                                Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+                        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                        const distance = R * c;
+                        if (distance <= radius) {
+                            isLocationValid = true;
+                            console.log(`[Check-In] ✅ Location VALID - Distance: ${distance.toFixed(2)}m`);
+                        }
+                        else {
+                            console.log(`[Check-In] ❌ Location INVALID - Distance: ${distance.toFixed(2)}m (Max: ${radius}m)`);
+                        }
+                    }
+                    else {
+                        console.log(`[Check-In] ⚠️ No geofence configured for branch`);
+                    }
+                }
+                else {
+                    console.log(`[Check-In] ⚠️ No location provided`);
+                }
+                // 3️⃣ Check: WiFi OR Location (at least one must be valid)
+                if (!isWifiValid && !isLocationValid) {
+                    console.log(`[Check-In] ❌ REJECTED - Neither WiFi nor Location is valid`);
+                    return res.status(403).json({
+                        error: 'يجب أن تكون متصلاً بشبكة الواي فاي الخاصة بالفرع أو متواجداً في الموقع الصحيح لتسجيل الحضور.',
+                        message: 'تأكد من الاتصال بالـ WiFi الصحيح أو التواجد داخل الفرع.',
+                        code: 'INVALID_WIFI_OR_LOCATION',
+                    });
+                }
+                console.log(`[Check-In] ✅ APPROVED - WiFi: ${isWifiValid}, Location: ${isLocationValid}`);
             }
         }
-        // --- END WIFI BSSID VERIFICATION ---
+        // --- END VERIFICATION ---
         // --- START DEBUG LOG ---
         console.log(`[Check-In Debug] Employee: ${employee_id}, Shift Start: ${employee.shiftStartTime}, Shift End: ${employee.shiftEndTime}`);
         // Get Egypt/Cairo time
@@ -668,62 +709,6 @@ app.post('/api/attendance/check-in', async (req, res) => {
                 attendance: existing
             });
         }
-        // Validate geofence if employee has branchId
-        if (employee.branchId && latitude && longitude) {
-            const [branch] = await db
-                .select()
-                .from(branches)
-                .where(eq(branches.id, employee.branchId))
-                .limit(1);
-            if (branch) {
-                const branchLat = branch.latitude ? Number(branch.latitude) : null;
-                const branchLng = branch.longitude ? Number(branch.longitude) : null;
-                // Default radius increased to 200 meters for better GPS accuracy tolerance
-                const radius = branch.geofenceRadius || 200;
-                console.log(`[Geofence Check-In] Branch: ${branch.name}`);
-                console.log(`[Geofence Check-In] Branch Location: lat=${branchLat}, lng=${branchLng}, radius=${radius}m`);
-                console.log(`[Geofence Check-In] Employee Location: lat=${latitude}, lng=${longitude}`);
-                if (branchLat && branchLng) {
-                    // Calculate distance using improved Haversine formula with better precision
-                    const R = 6371000; // Earth radius in meters (more precise)
-                    const toRad = (deg) => (deg * Math.PI) / 180;
-                    const φ1 = toRad(branchLat);
-                    const φ2 = toRad(latitude);
-                    const Δφ = toRad(latitude - branchLat);
-                    const Δλ = toRad(longitude - branchLng);
-                    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-                        Math.cos(φ1) * Math.cos(φ2) *
-                            Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-                    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-                    const distance = R * c;
-                    console.log(`[Geofence Check-In] Distance calculated: ${distance.toFixed(2)}m (allowed: ${radius}m)`);
-                    console.log(`[Geofence Check-In] Result: ${distance <= radius ? '✅ ALLOWED' : '❌ DENIED'}`);
-                    if (distance > radius) {
-                        return res.status(403).json({
-                            error: 'أنت خارج نطاق الموقع المسموح. يجب أن تكون داخل الفرع لتسجيل الحضور.',
-                            errorAr: 'أنت خارج نطاق الموقع المسموح',
-                            errorEn: 'You are outside the allowed location',
-                            distance: Math.round(distance),
-                            allowedRadius: radius,
-                            branchLocation: { lat: branchLat, lng: branchLng },
-                            yourLocation: { lat: latitude, lng: longitude },
-                            hint: `أنت على بعد ${Math.round(distance)}م من الفرع. المسافة المسموحة ${radius}م`,
-                            code: 'GEOFENCE_VIOLATION',
-                        });
-                    }
-                    console.log(`[Geofence Check-In] ✅ Employee within geofence`);
-                }
-                else {
-                    console.log(`[Geofence Check-In] ⚠️ Warning: Branch ${employee.branchId} has no location set - SKIPPING geofence check`);
-                }
-            }
-            else {
-                console.log(`[Geofence Check-In] ⚠️ Warning: Branch ${employee.branchId} not found`);
-            }
-        }
-        else {
-            console.log(`[Geofence Check-In] ⚠️ Geofence check skipped: branchId=${employee.branchId}, lat=${latitude}, lng=${longitude}`);
-        }
         // Use transaction to ensure atomicity
         const result = await db.transaction(async (tx) => {
             // Create new attendance record
@@ -785,22 +770,28 @@ app.post('/api/attendance/check-out', async (req, res) => {
             return res.status(400).json({ error: 'Employee ID is required' });
         }
         const today = new Date().toISOString().split('T')[0];
-        // Find active attendance record
+        console.log(`[Check-Out] Looking for active attendance for employee: ${employee_id} on date: ${today}`);
+        // Find active attendance record - look for active status (handle night shifts properly)
         const [activeAttendance] = await db
             .select()
             .from(attendance)
-            .where(and(eq(attendance.employeeId, employee_id), eq(attendance.date, today), eq(attendance.status, 'active')))
+            .where(and(eq(attendance.employeeId, employee_id), eq(attendance.status, 'active')))
+            .orderBy(desc(attendance.checkInTime)) // Get the most recent check-in for night shifts
             .limit(1);
         if (!activeAttendance) {
+            console.log(`[Check-Out] ❌ No active attendance found for employee: ${employee_id}`);
             return res.status(400).json({ error: 'No active check-in found for today' });
         }
-        // Validate geofence for check-out
+        console.log(`[Check-Out] ✅ Found active attendance ID: ${activeAttendance.id}`);
+        // Fetch employee data
         const [employee] = await db
             .select()
             .from(employees)
             .where(eq(employees.id, employee_id))
             .limit(1);
-        // --- START WIFI BSSID VERIFICATION ---
+        // --- START VERIFICATION (WiFi OR Location) ---
+        let isWifiValid = false;
+        let isLocationValid = false;
         if (employee && employee.branchId) {
             const [branch] = await db
                 .select()
@@ -808,59 +799,81 @@ app.post('/api/attendance/check-out', async (req, res) => {
                 .where(eq(branches.id, employee.branchId))
                 .limit(1);
             if (branch) {
-                const allowedBssids = [branch.bssid_1, branch.bssid_2]
-                    .filter(Boolean)
-                    .map(b => b.toUpperCase());
-                if (allowedBssids.length > 0) {
-                    const currentBssid = wifi_bssid ? String(wifi_bssid).toUpperCase() : null;
-                    if (!currentBssid || !allowedBssids.includes(currentBssid)) {
-                        console.log(`[Check-Out] ❌ REJECTED - Invalid BSSID (${currentBssid}) for branch ${employee.branchId}. Allowed: [${allowedBssids.join(', ')}]`);
-                        return res.status(403).json({
-                            error: 'أنت غير متصل بشبكة الواي فاي المعتمدة للفرع.',
-                            message: `الشبكة الحالية: ${currentBssid || 'غير معروف'}. يرجى الاتصال بالشبكة الصحيحة.`,
-                            code: 'INVALID_WIFI_BSSID',
-                        });
+                // 1️⃣ Check WiFi BSSID
+                const allowedBssids = new Set();
+                // Add legacy BSSIDs
+                if (branch.bssid_1)
+                    allowedBssids.add(branch.bssid_1.toUpperCase());
+                if (branch.bssid_2)
+                    allowedBssids.add(branch.bssid_2.toUpperCase());
+                // Add BSSIDs from branchBssids table
+                const bssidRecords = await db
+                    .select()
+                    .from(branchBssids)
+                    .where(eq(branchBssids.branchId, employee.branchId));
+                bssidRecords.forEach(record => {
+                    if (record.bssidAddress) {
+                        allowedBssids.add(record.bssidAddress.toUpperCase());
                     }
-                    console.log(`[Check-Out] ✅ APPROVED - Valid BSSID (${currentBssid})`);
+                });
+                if (allowedBssids.size > 0) {
+                    const currentBssid = wifi_bssid ? String(wifi_bssid).toUpperCase().replace(/-/g, ':') : null;
+                    if (currentBssid && allowedBssids.has(currentBssid)) {
+                        isWifiValid = true;
+                        console.log(`[Check-Out] ✅ WiFi VALID - BSSID: ${currentBssid}`);
+                    }
+                    else {
+                        console.log(`[Check-Out] ❌ WiFi INVALID - BSSID: ${currentBssid || 'غير موجود'}`);
+                    }
                 }
                 else {
-                    // No BSSIDs registered, allow through
-                    console.log(`[Check-Out] WiFi check skipped: No BSSIDs registered for branch ${employee.branchId}`);
+                    console.log(`[Check-Out] ⚠️ No WiFi BSSIDs configured for branch`);
                 }
-            }
-        }
-        // --- END WIFI BSSID VERIFICATION ---
-        if (employee && employee.branchId && latitude && longitude) {
-            const [branch] = await db
-                .select()
-                .from(branches)
-                .where(eq(branches.id, employee.branchId))
-                .limit(1);
-            if (branch) {
-                const branchLat = branch.latitude ? Number(branch.latitude) : null;
-                const branchLng = branch.longitude ? Number(branch.longitude) : null;
-                const radius = branch.geofenceRadius || 100;
-                if (branchLat && branchLng) {
-                    const R = 6371e3;
-                    const φ1 = (branchLat * Math.PI) / 180;
-                    const φ2 = (latitude * Math.PI) / 180;
-                    const Δφ = ((latitude - branchLat) * Math.PI) / 180;
-                    const Δλ = ((longitude - branchLng) * Math.PI) / 180;
-                    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-                        Math.cos(φ1) * Math.cos(φ2) *
-                            Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-                    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-                    const distance = R * c;
-                    if (distance > radius) {
-                        return res.status(403).json({
-                            error: 'أنت خارج نطاق الموقع المسموح. يجب أن تكون داخل الفرع لتسجيل الانصراف.',
-                            distance: Math.round(distance),
-                            allowedRadius: radius,
-                        });
+                // 2️⃣ Check Location (Geofence)
+                if (latitude && longitude) {
+                    const branchLat = branch.latitude ? Number(branch.latitude) : null;
+                    const branchLng = branch.longitude ? Number(branch.longitude) : null;
+                    const radius = branch.geofenceRadius || 200;
+                    if (branchLat && branchLng) {
+                        const R = 6371000;
+                        const toRad = (deg) => (deg * Math.PI) / 180;
+                        const φ1 = toRad(branchLat);
+                        const φ2 = toRad(latitude);
+                        const Δφ = toRad(latitude - branchLat);
+                        const Δλ = toRad(longitude - branchLng);
+                        const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+                            Math.cos(φ1) * Math.cos(φ2) *
+                                Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+                        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                        const distance = R * c;
+                        if (distance <= radius) {
+                            isLocationValid = true;
+                            console.log(`[Check-Out] ✅ Location VALID - Distance: ${distance.toFixed(2)}m`);
+                        }
+                        else {
+                            console.log(`[Check-Out] ❌ Location INVALID - Distance: ${distance.toFixed(2)}m (Max: ${radius}m)`);
+                        }
+                    }
+                    else {
+                        console.log(`[Check-Out] ⚠️ No geofence configured for branch`);
                     }
                 }
+                else {
+                    console.log(`[Check-Out] ⚠️ No location provided`);
+                }
+                // 3️⃣ Check: WiFi OR Location (at least one must be valid)
+                if (!isWifiValid && !isLocationValid) {
+                    console.log(`[Check-Out] ❌ REJECTED - Neither WiFi nor Location is valid`);
+                    return res.status(403).json({
+                        error: 'يجب أن تكون متصلاً بشبكة الواي فاي الخاصة بالفرع أو متواجداً في الموقع الصحيح لتسجيل الانصراف.',
+                        message: 'تأكد من الاتصال بالـ WiFi الصحيح أو التواجد داخل الفرع.',
+                        code: 'INVALID_WIFI_OR_LOCATION',
+                    });
+                }
+                console.log(`[Check-Out] ✅ APPROVED - WiFi: ${isWifiValid}, Location: ${isLocationValid}`);
             }
         }
+        // --- END VERIFICATION ---
         // Calculate work hours
         const checkOutTime = new Date();
         const checkInTime = new Date(activeAttendance.checkInTime);
@@ -4310,7 +4323,8 @@ app.post('/api/pulses', async (req, res) => {
                         wifiValid = false;
                     }
                     else {
-                        wifiValid = allowedBssids.has(String(wifi_bssid).toUpperCase());
+                        const normalizedCurrentBssid = String(wifi_bssid || '').toUpperCase().replace(/-/g, ':');
+                        wifiValid = allowedBssids.has(normalizedCurrentBssid);
                     }
                 }
                 else {

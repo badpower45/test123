@@ -249,64 +249,71 @@ class GeofenceService {
   // Get current employee info
   String? get currentEmployeeId => _currentEmployeeId;
 
-  /// --- New Method: Validate for Check-In (GPS + WiFi) ---
+  /// --- New Method: Validate for Check-In (GPS OR WiFi - at least one must be valid) ---
   static Future<GeofenceValidationResult> validateForCheckIn(Employee employee) async {
-    // 1. Get current location
-    Position position;
+    bool isLocationValid = false;
+    bool isWifiValid = false;
+    Position? position;
+    String? bssid;
+    String locationMessage = '';
+    String wifiMessage = '';
+
+    // 1. Try to get and validate current location
     try {
       position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
         forceAndroidLocationManager: true,
         timeLimit: const Duration(seconds: 15),
       );
-    } catch (e) {
-      return GeofenceValidationResult(isValid: false, message: 'فشل في تحديد الموقع: $e');
-    }
 
-    // For now, we'll use a simple distance check with hardcoded coordinates
-    // TODO: Implement proper branch lookup from API
-    const double branchLat = 31.2652; // Default location
-    const double branchLng = 29.9863; // Default location
-    const double geofenceRadius = 500.0; // Default radius
+      // For now, we'll use a simple distance check with hardcoded coordinates
+      // TODO: Implement proper branch lookup from API
+      const double branchLat = 31.2652; // Default location
+      const double branchLng = 29.9863; // Default location
+      const double geofenceRadius = 500.0; // Default radius
 
-    final distance = Geolocator.distanceBetween(
-      position.latitude,
-      position.longitude,
-      branchLat,
-      branchLng,
-    );
-
-    if (distance > geofenceRadius) {
-      return GeofenceValidationResult(
-        isValid: false,
-        message: 'يجب أن تكون داخل نطاق الفرع (المسافة: ${distance.round()} متر)',
+      final distance = Geolocator.distanceBetween(
+        position.latitude,
+        position.longitude,
+        branchLat,
+        branchLng,
       );
+
+      if (distance <= geofenceRadius) {
+        isLocationValid = true;
+        locationMessage = '✅ الموقع صحيح (${distance.round()}م)';
+      } else {
+        locationMessage = '❌ أنت خارج نطاق الفرع (${distance.round()}م من ${geofenceRadius.round()}م)';
+      }
+    } catch (e) {
+      locationMessage = '❌ فشل في تحديد الموقع: $e';
     }
 
-    // 2. Validate WiFi BSSID (required for check-in)
-    String? bssid;
+    // 2. Try to validate WiFi BSSID
     try {
       bssid = await WiFiService.getCurrentWifiBssidValidated();
+      if (bssid.isNotEmpty) {
+        isWifiValid = true;
+        wifiMessage = '✅ شبكة WiFi صحيحة';
+      } else {
+        wifiMessage = '❌ غير متصل بشبكة WiFi';
+      }
     } catch (e) {
+      wifiMessage = '❌ فشل في التحقق من WiFi: $e';
+    }
+
+    // 3. Check: At least ONE must be valid (OR logic)
+    if (!isLocationValid && !isWifiValid) {
       return GeofenceValidationResult(
         isValid: false,
-        message: 'يرجى الاتصال بشبكة الواي فاي الخاصة بالفرع',
+        message: 'يجب أن تكون متصلاً بشبكة الواي فاي الخاصة بالفرع أو متواجداً في الموقع الصحيح.\n\n$locationMessage\n$wifiMessage',
       );
     }
 
-    // For now, accept any BSSID - TODO: Implement proper branch BSSID validation
-    // final isBssidValid = await WiFiService.isBssidValidForBranch(bssid, branch.id);
-    // if (!isBssidValid) {
-    //   return GeofenceValidationResult(
-    //     isValid: false,
-    //     message: 'أنت متصل بشبكة واي فاي غير صحيحة.',
-    //   );
-    // }
-
-    // Success - both location and WiFi are valid
+    // Success - at least one is valid
     return GeofenceValidationResult(
       isValid: true,
-      message: 'الموقع والشبكة صحيحان',
+      message: 'تم التحقق بنجاح\n$locationMessage\n$wifiMessage',
       position: position,
       bssid: bssid,
     );

@@ -130,7 +130,6 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
       print('🚀 Starting check-in process...');
 
       // Create a simple employee object for validation
-      // In a real implementation, you'd get this from the auth service
       final authData = await AuthService.getLoginData();
       final employee = Employee(
         id: authData['employeeId'] ?? widget.employeeId,
@@ -140,106 +139,23 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         branch: authData['branch'] ?? 'المركز الرئيسي',
       );
 
-      // Use the new validation method for check-in (GPS + WiFi required)
+      // Use the new validation method for check-in (WiFi OR Location)
       final validation = await GeofenceService.validateForCheckIn(employee);
 
       if (!validation.isValid) {
         throw Exception(validation.message);
       }
 
-      // Ensure we have position and BSSID for check-in
-      if (validation.position == null || validation.bssid == null) {
-        throw Exception('خطأ في التحقق من البيانات');
-      }
+      print('✅ Validation passed: ${validation.message}');
+      print('📍 Position: ${validation.position?.latitude}, ${validation.position?.longitude}');
+      print('📶 WiFi BSSID: ${validation.bssid}');
 
-      final position = validation.position!;
-      final wifiBSSID = validation.bssid!;
+      // Use validated position and BSSID (may be null if only one was validated)
+      final position = validation.position;
+      final wifiBSSID = validation.bssid;
 
-      print('📍 Position: ${position?.latitude}, ${position?.longitude} (accuracy: ${position?.accuracy}m)');
-      print('📶 WiFi BSSID: $wifiBSSID');
-      print('📶 Allowed BSSIDs: $_allowedBssids');
-
-      // التحقق من WiFi BSSID أولاً
-      if (_allowedBssids.isNotEmpty) {
-        if (wifiBSSID == null || wifiBSSID.isEmpty) {
-          throw Exception(
-            'يجب الاتصال بشبكة WiFi الفرع.\n'
-            'لم يتم اكتشاف شبكة WiFi.\n'
-            'يرجى التأكد من تفعيل WiFi والاتصال بشبكة الفرع.'
-          );
-        }
-        
-        // تطبيع الـ BSSID للمقارنة
-        final normalizedCurrent = wifiBSSID.toUpperCase().trim();
-        final isAllowedWifi = _allowedBssids.any((allowed) {
-          final normalizedAllowed = allowed.toUpperCase().trim();
-          return normalizedCurrent == normalizedAllowed;
-        });
-        
-        if (!isAllowedWifi) {
-          throw Exception(
-            'أنت غير متصل بشبكة الفرع المسموح بها.\n'
-            'BSSID الحالي: $normalizedCurrent\n'
-            'يرجى الاتصال بشبكة WiFi الخاصة بالفرع.'
-          );
-        }
-        
-        print('✅ WiFi validation passed: $normalizedCurrent');
-      }
-
-      // Validate location using branch data
-      if (RestaurantConfig.enforceLocation && _branchData != null) {
-        if (position == null) {
-          throw Exception('تعذر تحديد موقعك، يرجى تفعيل خدمة تحديد الموقع والمحاولة مرة أخرى.');
-        }
-        
-        // قبول أي دقة - حتى لو ضعيفة (300-500 متر في الأماكن المغلقة)
-        if (position.accuracy > 500) {
-          print('⚠️ Poor accuracy: ${position.accuracy.toStringAsFixed(0)}m - but accepting it');
-        }
-        
-        // Use branch coordinates if available
-        final branchLat = _branchData!['latitude'] as double?;
-        final branchLng = _branchData!['longitude'] as double?;
-        final branchRadius = (_branchData!['geofence_radius'] as int?) ?? 200;
-        
-        if (branchLat != null && branchLng != null) {
-          final distance = Geolocator.distanceBetween(
-            branchLat,
-            branchLng,
-            position.latitude,
-            position.longitude,
-          );
-          
-          print('📍 Geofence check:');
-          print('  Branch: ($branchLat, $branchLng)');
-          print('  Current: (${position.latitude}, ${position.longitude})');
-          print('  Accuracy: ${position.accuracy.toStringAsFixed(1)}m');
-          print('  Distance: ${distance.toStringAsFixed(1)}m');
-          print('  Allowed radius: ${branchRadius}m');
-          
-          // هامش كبير جداً للدقة الضعيفة
-          final accuracyMargin = position.accuracy > 100 
-              ? position.accuracy * 1.5  // دقة ضعيفة: نضرب في 1.5
-              : position.accuracy * 1.0; // دقة جيدة: نضرب في 1.0
-          final effectiveRadius = branchRadius + accuracyMargin;
-          
-          print('  Effective radius (with margin): ${effectiveRadius.toStringAsFixed(1)}m');
-          print('  Within range: ${distance <= effectiveRadius}');
-          
-          if (distance > effectiveRadius) {
-            throw Exception(
-              'أنت خارج نطاق الموقع المسموح للمطعم.\n'
-              'المسافة: ${distance.toStringAsFixed(0)}م من ${branchRadius}م\n'
-              'دقة GPS: ${position.accuracy.toStringAsFixed(0)}م\n'
-              'يرجى الاقتراب من المطعم وإعادة المحاولة.'
-            );
-          }
-        }
-      }
-
-      final latitude = position?.latitude ?? RestaurantConfig.latitude;
-      final longitude = position?.longitude ?? RestaurantConfig.longitude;
+      final latitude = position?.latitude ?? 0.0;
+      final longitude = position?.longitude ?? 0.0;
 
       // Check internet connection
       final syncService = SyncService.instance;
@@ -249,9 +165,9 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         // Online mode: Send to API directly
         await AttendanceApiService.checkIn(
           employeeId: widget.employeeId,
-          latitude: position.latitude,
-          longitude: position.longitude,
-          wifiBssid: wifiBSSID,
+          latitude: latitude,
+          longitude: longitude,
+          wifiBssid: wifiBSSID ?? '',
         );
         
         // تحديث الحالة فوراً
@@ -280,7 +196,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           timestamp: DateTime.now(),
           latitude: latitude,
           longitude: longitude,
-          wifiBssid: wifiBSSID,
+          wifiBssid: wifiBSSID ?? '',
         );
         
         // Start sync service if not already running
@@ -308,6 +224,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
             ),
           );
         }
+      }
       }
       
       // Start geofence monitoring
