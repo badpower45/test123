@@ -18,6 +18,7 @@ import '../../theme/app_colors.dart';
 import '../login_screen.dart';
 import 'employee_attendance_table_screen.dart';
 import 'owner_set_branch_bssid_screen.dart';
+import 'branch_location_picker_screen.dart';
 
 class OwnerMainScreen extends StatefulWidget {
   const OwnerMainScreen({super.key, required this.ownerId, this.ownerName});
@@ -1944,6 +1945,34 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
     }
   }
 
+  Future<void> _openMapPicker() async {
+    // Import the map picker screen
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => BranchLocationPickerScreen(
+          initialLatitude: _latitudeController.text.isNotEmpty 
+              ? double.tryParse(_latitudeController.text) 
+              : null,
+          initialLongitude: _longitudeController.text.isNotEmpty 
+              ? double.tryParse(_longitudeController.text) 
+              : null,
+          initialRadius: _currentRadius,
+        ),
+      ),
+    );
+
+    if (result != null && result is Map<String, dynamic>) {
+      setState(() {
+        _latitudeController.text = result['latitude'].toStringAsFixed(7);
+        _longitudeController.text = result['longitude'].toStringAsFixed(7);
+        _currentRadius = result['radius'];
+        _radiusController.text = _currentRadius.toInt().toString();
+        _locationSet = true;
+      });
+    }
+  }
+
   Future<void> _getCurrentWifiBssid() async {
     try {
       final wifiBSSID = await WiFiService.getCurrentWifiBssidValidated();
@@ -2138,15 +2167,34 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
                       ),
                     ],
                     const SizedBox(height: 12),
-                    ElevatedButton.icon(
-                      onPressed: _getCurrentLocation,
-                      icon: const Icon(Icons.my_location, size: 20),
-                      label: Text(_locationSet ? 'تحديث الموقع' : 'تحديد الموقع الحالي'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primaryOrange,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                      ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: _getCurrentLocation,
+                            icon: const Icon(Icons.my_location, size: 20),
+                            label: const Text('موقعي الحالي'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.grey.shade200,
+                              foregroundColor: Colors.black87,
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: _openMapPicker,
+                            icon: const Icon(Icons.map, size: 20),
+                            label: const Text('فتح الخريطة'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primaryOrange,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
