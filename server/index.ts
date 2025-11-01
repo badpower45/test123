@@ -1138,17 +1138,44 @@ app.get('/api/pulses/active/:employeeId', async (req, res) => {
     const startTs = new Date(todayAttendance.checkInTime!);
     const now = new Date();
 
-    const result = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(pulses)
+    // Check if employee has an active break (break = full pay, no restrictions)
+    const [activeBreak] = await db
+      .select()
+      .from(breaks)
       .where(and(
-        eq(pulses.employeeId, employeeId),
-        eq(pulses.isWithinGeofence, true),
-        gte(pulses.createdAt, startTs),
-        lte(pulses.createdAt, now)
-      ));
+        eq(breaks.employeeId, employeeId),
+        eq(breaks.status, 'ACTIVE')
+      ))
+      .limit(1);
 
-    const validPulseCount = Number(result[0]?.count) || 0;
+    let validPulseCount = 0;
+
+    if (activeBreak) {
+      // During break: count ALL pulses regardless of location/wifi
+      const result = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(pulses)
+        .where(and(
+          eq(pulses.employeeId, employeeId),
+          gte(pulses.createdAt, startTs),
+          lte(pulses.createdAt, now)
+        ));
+      validPulseCount = Number(result[0]?.count) || 0;
+      console.log(`[Pulses] Employee ${employeeId} on BREAK - counting ALL pulses: ${validPulseCount}`);
+    } else {
+      // Not on break: count pulses with (WiFi valid OR Location valid)
+      const result = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(pulses)
+        .where(and(
+          eq(pulses.employeeId, employeeId),
+          eq(pulses.isWithinGeofence, true), // This is set to true if (WiFi OR Location)
+          gte(pulses.createdAt, startTs),
+          lte(pulses.createdAt, now)
+        ));
+      validPulseCount = Number(result[0]?.count) || 0;
+      console.log(`[Pulses] Employee ${employeeId} NOT on break - counting valid pulses: ${validPulseCount}`);
+    }
 
     // Fetch employee to get their hourly rate (fallback to 40 if not set)
     const [employeeRecord] = await db
@@ -5585,8 +5612,10 @@ app.post('/api/pulses', async (req, res) => {
       ))
       .limit(1);
 
-    // Calculate overall validity
-    const overallValid = (wifiValid && geofenceValid);
+    // NEW LOGIC: Calculate overall validity
+    // Rule: (WiFi valid OR Location valid) = valid pulse for payment
+    // Exception: During ACTIVE break, all pulses are valid regardless
+    const overallValid = activeBreak ? true : (wifiValid || geofenceValid);
 
     // Check if employee has active attendance (checked in today)
     const today = new Date().toISOString().split('T')[0];
