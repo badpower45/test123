@@ -23,6 +23,24 @@ app.use(express.static(path.join(__dirname, '../public')));
 // =============================================================================
 // UTILITY FUNCTIONS
 /**
+ * Get current date/time in Egypt timezone (UTC+2)
+ */
+function getEgyptTime() {
+    const now = new Date();
+    // Egypt is UTC+2
+    const egyptOffset = 2 * 60; // minutes
+    const localOffset = now.getTimezoneOffset(); // minutes from UTC
+    const totalOffset = egyptOffset + localOffset;
+    return new Date(now.getTime() + totalOffset * 60 * 1000);
+}
+/**
+ * Get today's date string in Egypt timezone (YYYY-MM-DD)
+ */
+function getTodayEgypt() {
+    const egyptNow = getEgyptTime();
+    return egyptNow.toISOString().split('T')[0];
+}
+/**
  * Helper function to get date string in YYYY-MM-DD format
  */
 function getDateString(date) {
@@ -2543,7 +2561,7 @@ app.post('/api/shifts/auto-checkout', async (req, res) => {
 app.get('/api/shifts/status/:employeeId', async (req, res) => {
     try {
         const { employeeId } = req.params;
-        const today = new Date().toISOString().split('T')[0];
+        const today = getTodayEgypt(); // Use Egypt timezone
         const [todayAttendance] = await db
             .select()
             .from(attendance)
@@ -2552,6 +2570,7 @@ app.get('/api/shifts/status/:employeeId', async (req, res) => {
         if (!todayAttendance) {
             return res.json({
                 hasShift: false,
+                hasActiveShift: false, // Add this
                 status: 'not_checked_in',
                 message: 'لم يتم تسجيل الحضور اليوم',
             });
@@ -4720,14 +4739,12 @@ app.post('/api/breaks/request', async (req, res) => {
         if (!employee_id || !duration_minutes) {
             return res.status(400).json({ error: 'employee_id and duration_minutes are required' });
         }
-        // Check if employee has checked in today
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const todayString = today.toISOString().split('T')[0];
+        // Check if employee has checked in today (using Egypt timezone)
+        const todayString = getTodayEgypt();
         const [todayAttendance] = await db
             .select()
             .from(attendance)
-            .where(and(eq(attendance.employeeId, employee_id), eq(attendance.date, todayString), isNull(attendance.checkOutTime) // Still checked in
+            .where(and(eq(attendance.employeeId, employee_id), eq(attendance.date, todayString), eq(attendance.status, 'active') // Changed: check if status is active
         ))
             .limit(1);
         if (!todayAttendance) {
@@ -4737,6 +4754,7 @@ app.post('/api/breaks/request', async (req, res) => {
             });
         }
         // Prevent duplicate break requests for the same day
+        const today = new Date(todayString + 'T00:00:00Z');
         const tomorrow = new Date(today);
         tomorrow.setDate(today.getDate() + 1);
         const existingBreak = await db
