@@ -126,7 +126,7 @@ class _ProfilePageState extends State<ProfilePage> {
                     _buildInfoCard(
                       icon: Icons.work,
                       label: 'الوظيفة',
-                      value: 'موظف',
+                      value: _getRoleDisplayName(_employee!.role),
                       color: AppColors.primaryOrange,
                     ),
                     
@@ -135,7 +135,7 @@ class _ProfilePageState extends State<ProfilePage> {
                     _buildInfoCard(
                       icon: Icons.location_on,
                       label: 'الفرع',
-                      value: 'الفرع الرئيسي',
+                      value: _employee!.branch,
                       color: AppColors.info,
                     ),
                     
@@ -144,7 +144,7 @@ class _ProfilePageState extends State<ProfilePage> {
                     _buildInfoCard(
                       icon: Icons.payments,
                       label: 'الراتب الشهري',
-                      value: '5000 جنيه',
+                      value: '${_employee!.monthlySalary.toStringAsFixed(0)} جنيه',
                       color: AppColors.success,
                     ),
                     
@@ -372,5 +372,24 @@ class _ProfilePageState extends State<ProfilePage> {
         ),
       ),
     );
+  }
+
+  String _getRoleDisplayName(EmployeeRole role) {
+    switch (role) {
+      case EmployeeRole.staff:
+        return 'موظف';
+      case EmployeeRole.monitor:
+        return 'مراقب';
+      case EmployeeRole.hr:
+        return 'موارد بشرية';
+      case EmployeeRole.admin:
+        return 'مسؤول';
+      case EmployeeRole.manager:
+        return 'مدير فرع';
+      case EmployeeRole.owner:
+        return 'مالك';
+      default:
+        return 'موظف';
+    }
   }
 }

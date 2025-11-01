@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import bcrypt from 'bcrypt';
 import cron from 'node-cron';
+import * as XLSX from 'xlsx';
 import { db } from './db.js';
 import { employees, attendance, attendanceRequests, leaveRequests, advances, deductions, absenceNotifications, pulses, branches, branchBssids, branchManagers, breaks, deviceSessions, notifications, salaryCalculations, geofenceViolations } from '../shared/schema.js';
 import { eq, and, gte, lte, lt, desc, sql, inArray, isNull, or } from 'drizzle-orm';
@@ -2785,6 +2786,117 @@ app.get('/api/attendance/daily-sheet', async (req, res) => {
     }
     catch (error) {
         console.error('Get daily attendance sheet error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// Export attendance sheet to Excel (Owner only)
+app.get('/api/attendance/export-excel', async (req, res) => {
+    try {
+        const { date, branch_id, start_date, end_date } = req.query;
+        let attendanceRecords;
+        let dateRange = '';
+        if (start_date && end_date) {
+            // Range export
+            dateRange = `${start_date} to ${end_date}`;
+            attendanceRecords = await db
+                .select({
+                employeeId: attendance.employeeId,
+                employeeName: employees.fullName,
+                employeeRole: employees.role,
+                branch: employees.branch,
+                date: attendance.date,
+                checkInTime: attendance.checkInTime,
+                checkOutTime: attendance.checkOutTime,
+                workHours: attendance.workHours,
+                status: attendance.status,
+                isAutoCheckout: attendance.isAutoCheckout,
+            })
+                .from(attendance)
+                .innerJoin(employees, eq(attendance.employeeId, employees.id))
+                .where(and(gte(attendance.date, start_date), lte(attendance.date, end_date), branch_id ? eq(employees.branchId, branch_id) : sql `true`))
+                .orderBy(attendance.date, employees.fullName);
+        }
+        else {
+            // Single day export
+            const targetDate = date ? date : getTodayEgypt();
+            dateRange = targetDate;
+            // Get all active employees
+            let employeesQuery = db
+                .select()
+                .from(employees)
+                .where(eq(employees.active, true))
+                .$dynamic();
+            if (branch_id) {
+                employeesQuery = employeesQuery.where(eq(employees.branchId, branch_id));
+            }
+            const allEmployees = await employeesQuery;
+            // Get attendance for the day
+            const attendanceForDay = await db
+                .select()
+                .from(attendance)
+                .where(eq(attendance.date, targetDate));
+            const attendanceMap = new Map();
+            attendanceForDay.forEach(record => {
+                attendanceMap.set(record.employeeId, record);
+            });
+            // Build records including absent employees
+            attendanceRecords = allEmployees.map(employee => {
+                const record = attendanceMap.get(employee.id);
+                return {
+                    employeeId: employee.id,
+                    employeeName: employee.fullName,
+                    employeeRole: employee.role,
+                    branch: employee.branch,
+                    date: targetDate,
+                    checkInTime: record?.checkInTime || null,
+                    checkOutTime: record?.checkOutTime || null,
+                    workHours: record?.workHours || '0',
+                    status: record ? record.status : 'absent',
+                    isAutoCheckout: record?.isAutoCheckout || false,
+                };
+            });
+        }
+        // Prepare Excel data
+        const excelData = attendanceRecords.map((record) => ({
+            'اسم الموظف': record.employeeName,
+            'الدور': record.employeeRole === 'manager' ? 'مدير' :
+                record.employeeRole === 'staff' ? 'موظف' :
+                    record.employeeRole === 'hr' ? 'موارد بشرية' :
+                        record.employeeRole === 'monitor' ? 'مراقب' : record.employeeRole,
+            'الفرع': record.branch || 'غير محدد',
+            'التاريخ': record.date,
+            'وقت الحضور': record.checkInTime ? new Date(record.checkInTime).toLocaleString('ar-EG') : 'لم يسجل',
+            'وقت الانصراف': record.checkOutTime ? new Date(record.checkOutTime).toLocaleString('ar-EG') : record.status === 'active' ? 'لا يزال موجوداً' : 'لم يسجل',
+            'ساعات العمل': parseFloat(record.workHours || '0').toFixed(2),
+            'الحالة': record.status === 'active' ? 'موجود حالياً' :
+                record.status === 'completed' ? 'انصرف' : 'غائب',
+            'خروج تلقائي': record.isAutoCheckout ? 'نعم' : 'لا',
+        }));
+        // Create workbook
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet(excelData);
+        // Set column widths
+        ws['!cols'] = [
+            { wch: 25 }, // اسم الموظف
+            { wch: 15 }, // الدور
+            { wch: 20 }, // الفرع
+            { wch: 12 }, // التاريخ
+            { wch: 20 }, // وقت الحضور
+            { wch: 20 }, // وقت الانصراف
+            { wch: 12 }, // ساعات العمل
+            { wch: 15 }, // الحالة
+            { wch: 12 }, // خروج تلقائي
+        ];
+        XLSX.utils.book_append_sheet(wb, ws, 'سجل الحضور');
+        // Generate buffer
+        const excelBuffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        // Set response headers
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=attendance-${dateRange}.xlsx`);
+        res.send(excelBuffer);
+    }
+    catch (error) {
+        console.error('Export Excel error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
@@ -5629,9 +5741,22 @@ app.get('/api/owner/employee-attendance/:employeeId', async (req, res) => {
                 workDays.add(row.date);
             }
         }
+        // Calculate attendance allowance (حافز الغياب)
+        // يُمنح 100 جنيه إذا لم يتجاوز عدد أيام الإجازة المعتمدة يومين في هذه الفترة
+        let attendanceAllowance = 0;
+        // Get all approved leaves in this period
+        const approvedLeaves = await db
+            .select()
+            .from(leaveRequests)
+            .where(and(eq(leaveRequests.employeeId, employeeId), eq(leaveRequests.status, 'approved'), gte(leaveRequests.startDate, startDate), lte(leaveRequests.endDate, endDate)));
+        const totalLeaveDays = approvedLeaves.reduce((sum, leave) => sum + (leave.daysCount || 0), 0);
+        if (totalLeaveDays <= 2) {
+            attendanceAllowance = 100; // حافز الغياب 100 جنيه ثابت
+        }
+        // إذا أخذ إجازة أكثر من يومين → يخسر حافز الغياب
         // Calculate net (after deducting advances from total)
         const grossAmount = (employee.monthlySalary ? parseFloat(employee.monthlySalary) : 0);
-        const netAfterAdvances = grossAmount - totalAdvances;
+        const netAfterAdvances = grossAmount - totalAdvances + attendanceAllowance;
         res.json({
             success: true,
             employee: {
@@ -5647,6 +5772,7 @@ app.get('/api/owner/employee-attendance/:employeeId', async (req, res) => {
                 totalWorkHours: totalWorkHours.toFixed(2),
                 totalAdvances: totalAdvances.toFixed(2),
                 totalLeaveAllowances: totalLeaveAllowances.toFixed(2),
+                attendanceAllowance: attendanceAllowance.toFixed(2), // حافز الغياب
                 totalDeductions: totalDeductions.toFixed(2),
                 grossSalary: grossAmount.toFixed(2),
                 netAfterAdvances: netAfterAdvances.toFixed(2),
@@ -5878,26 +6004,40 @@ cron.schedule('*/30 * * * *', async () => {
                 .limit(1);
             if (existingNotification)
                 continue; // Already notified
-            // Find manager for this employee's branch
-            let managerId = null;
-            if (employee.branchId) {
-                const [branch] = await db
-                    .select()
-                    .from(branches)
-                    .where(eq(branches.id, employee.branchId))
-                    .limit(1);
-                if (branch?.managerId) {
-                    managerId = branch.managerId;
+            // Determine who should receive the notification based on employee role
+            let notificationRecipientId = null;
+            if (employee.role === 'manager') {
+                // If employee is a manager, notify the owner
+                notificationRecipientId = await getOwnerId();
+                console.log(`[CRON] Employee ${employee.fullName} is a MANAGER - notifying owner`);
+            }
+            else {
+                // If employee is staff/hr/monitor, notify branch manager
+                if (employee.branchId) {
+                    const [branch] = await db
+                        .select()
+                        .from(branches)
+                        .where(eq(branches.id, employee.branchId))
+                        .limit(1);
+                    if (branch?.managerId) {
+                        notificationRecipientId = branch.managerId;
+                        console.log(`[CRON] Employee ${employee.fullName} is STAFF - notifying branch manager`);
+                    }
+                }
+                // If no branch manager found, notify owner as fallback
+                if (!notificationRecipientId) {
+                    notificationRecipientId = await getOwnerId();
+                    console.log(`[CRON] No branch manager found - notifying owner as fallback`);
                 }
             }
-            // If no branch manager, send to owner
-            if (!managerId) {
-                managerId = await getOwnerId();
+            if (notificationRecipientId) {
+                // Send notification
+                const roleLabel = employee.role === 'manager' ? 'المدير' : 'الموظف';
+                await sendNotification(notificationRecipientId, 'ABSENCE_ALERT', `تأخير ${roleLabel}`, `تنبيه: ${roleLabel} ${employee.fullName} لم يسجل حضوره بعد ساعتين من بداية الشيفت (${employee.shiftStartTime})`, employee.id, employee.id);
+                console.log(`[CRON] ✅ Sent late notification for ${employee.role} ${employee.fullName} to recipient ${notificationRecipientId}`);
             }
-            if (managerId) {
-                // Send notification to manager
-                await sendNotification(managerId, 'ABSENCE_ALERT', 'تأخير موظف', `تنبيه: الموظف ${employee.fullName} تأخر لمدة ساعتين عن شيفت اليوم (${employee.shiftStartTime}). هل ترغب بتطبيق خصم؟`, employee.id, employee.id);
-                console.log(`[CRON] Sent late notification for employee ${employee.fullName} to manager ${managerId}`);
+            else {
+                console.log(`[CRON] ❌ Could not find recipient for notification (employee: ${employee.fullName})`);
             }
         }
         console.log('[CRON] Late employee check completed');

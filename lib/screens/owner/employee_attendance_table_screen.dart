@@ -282,6 +282,7 @@ class _EmployeeAttendanceTableScreenState extends State<EmployeeAttendanceTableS
           _summaryRow('إجمالي ساعات العمل', _summary!['totalWorkHours'].toString()),
           _summaryRow('إجمالي السلف', '${_summary!['totalAdvances']} جنيه', color: Colors.red),
           _summaryRow('إجمالي بدل الإجازات', '${_summary!['totalLeaveAllowances']} جنيه'),
+          _summaryRow('حافز الغياب', '${_summary!['attendanceAllowance'] ?? '0.00'} جنيه', color: Colors.green),
           _summaryRow('إجمالي الخصومات', '${_summary!['totalDeductions']} جنيه', color: Colors.red),
           const Divider(thickness: 2),
           _summaryRow(

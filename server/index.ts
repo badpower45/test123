@@ -6931,9 +6931,31 @@ app.get('/api/owner/employee-attendance/:employeeId', async (req, res) => {
       }
     }
 
+    // Calculate attendance allowance (حافز الغياب)
+    // يُمنح 100 جنيه إذا لم يتجاوز عدد أيام الإجازة المعتمدة يومين في هذه الفترة
+    let attendanceAllowance = 0;
+    
+    // Get all approved leaves in this period
+    const approvedLeaves = await db
+      .select()
+      .from(leaveRequests)
+      .where(and(
+        eq(leaveRequests.employeeId, employeeId),
+        eq(leaveRequests.status, 'approved'),
+        gte(leaveRequests.startDate, startDate as string),
+        lte(leaveRequests.endDate, endDate as string)
+      ));
+    
+    const totalLeaveDays = approvedLeaves.reduce((sum, leave) => sum + (leave.daysCount || 0), 0);
+    
+    if (totalLeaveDays <= 2) {
+      attendanceAllowance = 100; // حافز الغياب 100 جنيه ثابت
+    }
+    // إذا أخذ إجازة أكثر من يومين → يخسر حافز الغياب
+
     // Calculate net (after deducting advances from total)
     const grossAmount = (employee.monthlySalary ? parseFloat(employee.monthlySalary) : 0);
-    const netAfterAdvances = grossAmount - totalAdvances;
+    const netAfterAdvances = grossAmount - totalAdvances + attendanceAllowance;
 
     res.json({
       success: true,
@@ -6950,6 +6972,7 @@ app.get('/api/owner/employee-attendance/:employeeId', async (req, res) => {
         totalWorkHours: totalWorkHours.toFixed(2),
         totalAdvances: totalAdvances.toFixed(2),
         totalLeaveAllowances: totalLeaveAllowances.toFixed(2),
+        attendanceAllowance: attendanceAllowance.toFixed(2), // حافز الغياب
         totalDeductions: totalDeductions.toFixed(2),
         grossSalary: grossAmount.toFixed(2),
         netAfterAdvances: netAfterAdvances.toFixed(2),
