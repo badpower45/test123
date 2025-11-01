@@ -808,7 +808,12 @@ app.post('/api/attendance/check-in', async (req, res) => {
       console.log(`[Check-In Debug] ✅ APPROVED - Within shift time`);
     }
 
-    const today = new Date().toISOString().split('T')[0];
+    // Use Cairo timezone for date consistency
+    const cairoTimeStr = new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' });
+    const cairoNow = new Date(cairoTimeStr);
+    const today = cairoNow.toISOString().split('T')[0];
+
+    console.log(`[Check-In] 📅 Today's Date (Cairo): ${today}`);
 
     // Check if already checked in today (with 'active' status)
     const [existing] = await db
@@ -840,12 +845,12 @@ app.post('/api/attendance/check-in', async (req, res) => {
 
     // Use transaction to ensure atomicity
     const result = await db.transaction(async (tx) => {
-      // Create new attendance record
+      // Create new attendance record with Cairo time
       const insertResult = await tx
         .insert(attendance)
         .values({
           employeeId: employee_id,
-          checkInTime: new Date(),
+          checkInTime: cairoNow,
           date: today,
           status: 'active',
         })
@@ -860,6 +865,7 @@ app.post('/api/attendance/check-in', async (req, res) => {
           latitude,
           longitude,
           isWithinGeofence: true,
+          createdAt: cairoNow,
         });
       }
 
@@ -869,7 +875,7 @@ app.post('/api/attendance/check-in', async (req, res) => {
     // Send notification to owner
     const ownerId = await getOwnerId();
     if (ownerId) {
-      const checkInTime = new Date().toLocaleTimeString('ar-EG', {
+      const checkInTime = cairoNow.toLocaleTimeString('ar-EG', {
         hour: '2-digit',
         minute: '2-digit'
       });
@@ -915,8 +921,14 @@ app.post('/api/attendance/check-out', async (req, res) => {
       return res.status(400).json({ error: 'Employee ID is required' });
     }
 
-    const today = new Date().toISOString().split('T')[0];
+    // Use Cairo timezone for date
+    const cairoTime = new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' });
+    const cairoDate = new Date(cairoTime);
+    const today = cairoDate.toISOString().split('T')[0];
 
+    console.log(`[Check-Out] 🕐 Server Time (UTC): ${new Date().toISOString()}`);
+    console.log(`[Check-Out] 🕐 Cairo Time: ${cairoTime}`);
+    console.log(`[Check-Out] 📅 Today's Date (Cairo): ${today}`);
     console.log(`[Check-Out] Looking for active attendance for employee: ${employee_id} on date: ${today}`);
 
     // Find active attendance record - look for active status (handle night shifts properly)
@@ -1086,10 +1098,14 @@ app.post('/api/attendance/check-out', async (req, res) => {
     }
     // --- END VERIFICATION ---
 
-    // Calculate work hours
-    const checkOutTime = new Date();
+    // Calculate work hours using Cairo timezone
+    const cairoCheckOutTime = new Date(cairoTime);
     const checkInTime = new Date(activeAttendance.checkInTime!);
-    const workHours = (checkOutTime.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
+    const workHours = (cairoCheckOutTime.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
+
+    console.log(`[Check-Out] ⏱️ Check-In Time: ${checkInTime.toISOString()}`);
+    console.log(`[Check-Out] ⏱️ Check-Out Time (Cairo): ${cairoCheckOutTime.toISOString()}`);
+    console.log(`[Check-Out] ⏱️ Work Hours: ${workHours.toFixed(2)}`);
 
     // Use transaction to ensure atomicity
     const result = await db.transaction(async (tx) => {
@@ -1097,10 +1113,10 @@ app.post('/api/attendance/check-out', async (req, res) => {
       const updateResult = await tx
         .update(attendance)
         .set({
-          checkOutTime,
+          checkOutTime: cairoCheckOutTime,
           workHours: workHours.toFixed(2),
           status: 'completed',
-          updatedAt: new Date(),
+          updatedAt: cairoCheckOutTime,
         })
         .where(eq(attendance.id, activeAttendance.id))
         .returning();
@@ -1114,12 +1130,15 @@ app.post('/api/attendance/check-out', async (req, res) => {
           latitude,
           longitude,
           status: 'IN',
-          createdAt: new Date(),
+          createdAt: cairoCheckOutTime,
         });
       }
 
       return updated;
     });
+
+    console.log(`[Check-Out] ✅ Check-out successful!`);
+    console.log(`[Check-Out] 📊 Final Work Hours: ${workHours.toFixed(2)}`);
 
     res.json({
       success: true,
@@ -1141,7 +1160,10 @@ app.post('/api/attendance/check-out', async (req, res) => {
 app.get('/api/pulses/active/:employeeId', async (req, res) => {
   try {
     const { employeeId } = req.params;
-    const today = new Date().toISOString().split('T')[0];
+    // Use Cairo timezone for date
+    const cairoTime = new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' });
+    const cairoDate = new Date(cairoTime);
+    const today = cairoDate.toISOString().split('T')[0];
 
     const [todayAttendance] = await db
       .select()
@@ -1154,7 +1176,7 @@ app.get('/api/pulses/active/:employeeId', async (req, res) => {
     }
 
     const startTs = new Date(todayAttendance.checkInTime!);
-    const now = new Date();
+    const now = cairoDate;
 
     // Check if employee has an active break (break = full pay, no restrictions)
     const [activeBreak] = await db
