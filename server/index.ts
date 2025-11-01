@@ -693,6 +693,7 @@ app.post('/api/attendance/check-in', async (req, res) => {
           const radius = branch.geofenceRadius || 200;
 
           console.log(`[Check-In] 🔍 Branch Location: ${branchLat}, ${branchLng} (Radius: ${radius}m)`);
+          console.log(`[Check-In] 📱 Employee Location: ${latitude}, ${longitude}`);
 
           if (branchLat && branchLng) {
             const R = 6371000;
@@ -708,12 +709,17 @@ app.post('/api/attendance/check-in', async (req, res) => {
             const distance = R * c;
 
             console.log(`[Check-In] 📏 Distance: ${distance.toFixed(2)}m (Max allowed: ${radius}m)`);
+            console.log(`[Check-In] 🧮 Calculation Details:`);
+            console.log(`   Branch: (${branchLat}, ${branchLng})`);
+            console.log(`   Employee: (${latitude}, ${longitude})`);
+            console.log(`   Distance Formula Result: ${distance.toFixed(6)}m`);
 
             if (distance <= radius) {
               isLocationValid = true;
-              console.log(`[Check-In] ✅ Location VALID - Distance: ${distance.toFixed(2)}m`);
+              console.log(`[Check-In] ✅ Location VALID - Distance: ${distance.toFixed(2)}m <= ${radius}m`);
             } else {
-              console.log(`[Check-In] ❌ Location INVALID - Distance: ${distance.toFixed(2)}m (Max: ${radius}m)`);
+              console.log(`[Check-In] ❌ Location INVALID - Distance: ${distance.toFixed(2)}m > ${radius}m`);
+              console.log(`[Check-In] 💡 Suggestion: Increase radius to at least ${Math.ceil(distance)}m`);
             }
           } else {
             console.log(`[Check-In] ⚠️ No geofence configured for branch`);
@@ -804,7 +810,7 @@ app.post('/api/attendance/check-in', async (req, res) => {
 
     const today = new Date().toISOString().split('T')[0];
 
-    // Check if already checked in today
+    // Check if already checked in today (with 'active' status)
     const [existing] = await db
       .select()
       .from(attendance)
@@ -816,7 +822,8 @@ app.post('/api/attendance/check-in', async (req, res) => {
       .limit(1);
 
     if (existing) {
-      console.log(`[Check-In] ⚠️ Already checked in - Returning existing attendance`);
+      console.log(`[Check-In] ⚠️ Already checked in today with active status`);
+      console.log(`[Check-In] Existing attendance ID: ${existing.id}, Check-in time: ${existing.checkInTime}`);
       return res.status(200).json({ 
         success: true,
         alreadyCheckedIn: true,
@@ -828,6 +835,8 @@ app.post('/api/attendance/check-in', async (req, res) => {
         }
       });
     }
+
+    console.log(`[Check-In] ✅ No active attendance found for today - Proceeding with new check-in`);
 
     // Use transaction to ensure atomicity
     const result = await db.transaction(async (tx) => {
@@ -1022,14 +1031,18 @@ app.post('/api/attendance/check-out', async (req, res) => {
           const radius = branch.geofenceRadius || 200;
 
           console.log(`[Check-Out] 🔍 Branch Location: ${branchLat}, ${branchLng} (Radius: ${radius}m)`);
+          console.log(`[Check-Out] 📱 Employee Location: ${latitude}, ${longitude}`);
 
           if (branchLat && branchLng) {
-            const R = 6371000;
+            const R = 6371000; // Earth radius in meters
             const toRad = (deg: number) => (deg * Math.PI) / 180;
+            
+            // Correct formula: φ1 = branch, φ2 = employee
             const φ1 = toRad(branchLat);
             const φ2 = toRad(latitude);
             const Δφ = toRad(latitude - branchLat);
             const Δλ = toRad(longitude - branchLng);
+            
             const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
                       Math.cos(φ1) * Math.cos(φ2) *
                       Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
@@ -1037,12 +1050,17 @@ app.post('/api/attendance/check-out', async (req, res) => {
             const distance = R * c;
 
             console.log(`[Check-Out] 📏 Distance: ${distance.toFixed(2)}m (Max allowed: ${radius}m)`);
+            console.log(`[Check-Out] 🧮 Calculation Details:`);
+            console.log(`   Branch: (${branchLat}, ${branchLng})`);
+            console.log(`   Employee: (${latitude}, ${longitude})`);
+            console.log(`   Distance Formula Result: ${distance.toFixed(6)}m`);
 
             if (distance <= radius) {
               isLocationValid = true;
-              console.log(`[Check-Out] ✅ Location VALID - Distance: ${distance.toFixed(2)}m`);
+              console.log(`[Check-Out] ✅ Location VALID - Distance: ${distance.toFixed(2)}m <= ${radius}m`);
             } else {
-              console.log(`[Check-Out] ❌ Location INVALID - Distance: ${distance.toFixed(2)}m (Max: ${radius}m)`);
+              console.log(`[Check-Out] ❌ Location INVALID - Distance: ${distance.toFixed(2)}m > ${radius}m`);
+              console.log(`[Check-Out] 💡 Suggestion: Increase radius to at least ${Math.ceil(distance)}m`);
             }
           } else {
             console.log(`[Check-Out] ⚠️ No geofence configured for branch`);
@@ -1379,7 +1397,7 @@ app.post('/api/attendance/request-checkout', async (req, res) => {
 // Get pending requests (for manager)
 app.get('/api/attendance/requests', async (req, res) => {
   try {
-    const { status = 'pending', manager_id } = req.query;
+    const { status = 'pending', manager_id, employee_id } = req.query;
 
     let query = db
       .select({
@@ -1398,8 +1416,14 @@ app.get('/api/attendance/requests', async (req, res) => {
       .innerJoin(employees, eq(attendanceRequests.employeeId, employees.id))
       .$dynamic();
 
-    // أول فلترة (دي لازم تكون موجودة دايماً)
+    // Filter by status
     query = query.where(eq(attendanceRequests.status, status as 'pending' | 'approved' | 'rejected'));
+
+    // If employee_id provided, filter by specific employee (for employee app)
+    if (employee_id && typeof employee_id === 'string') {
+      console.log(`[Attendance Requests] Filtering by employee_id: ${employee_id}`);
+      query = query.where(eq(attendanceRequests.employeeId, employee_id));
+    }
 
     // If manager_id provided, filter by employees in that manager's branch
     if (manager_id && typeof manager_id === 'string') {
