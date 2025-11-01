@@ -1361,6 +1361,7 @@ app.post('/api/attendance/requests/:requestId/review', async (req, res) => {
           .limit(1);
 
         if (!existing) {
+          // No existing attendance - create new one
           await db.insert(attendance).values({
             employeeId: request.employeeId,
             checkInTime: requestedDateTime,
@@ -1369,38 +1370,116 @@ app.post('/api/attendance/requests/:requestId/review', async (req, res) => {
           });
         } else {
           // Update existing record with the new check-in time
+          const oldCheckInTime = existing.checkInTime ? new Date(existing.checkInTime) : null;
+          const newCheckInTime = requestedDateTime;
+          
+          // Update check-in time
           await db
             .update(attendance)
             .set({
-              checkInTime: requestedDateTime,
+              checkInTime: newCheckInTime,
               status: 'active',
             })
             .where(eq(attendance.id, existing.id));
+
+          // If there's a check-out time, recalculate work hours
+          if (existing.checkOutTime) {
+            const checkOutTime = new Date(existing.checkOutTime);
+            const newWorkHours = (checkOutTime.getTime() - newCheckInTime.getTime()) / (1000 * 60 * 60);
+            
+            await db
+              .update(attendance)
+              .set({
+                workHours: newWorkHours.toFixed(2),
+              })
+              .where(eq(attendance.id, existing.id));
+          }
+
+          // If the corrected time is earlier, add pulses for the extra time
+          if (oldCheckInTime && newCheckInTime < oldCheckInTime) {
+            const timeDiffMinutes = (oldCheckInTime.getTime() - newCheckInTime.getTime()) / (1000 * 60);
+            const pulsesToAdd = Math.floor(timeDiffMinutes / 0.5); // One pulse every 30 seconds (0.5 minutes)
+            
+            console.log(`[Attendance Correction] Adding ${pulsesToAdd} pulses for ${timeDiffMinutes} minutes difference`);
+            
+            // Get employee's branch for pulse validation
+            const [employee] = await db
+              .select()
+              .from(employees)
+              .where(eq(employees.id, request.employeeId))
+              .limit(1);
+
+            // Add pulses for the corrected time period
+            for (let i = 0; i < pulsesToAdd; i++) {
+              const pulseTime = new Date(newCheckInTime.getTime() + (i * 30 * 1000)); // Every 30 seconds
+              await db.insert(pulses).values({
+                employeeId: request.employeeId,
+                branchId: employee?.branchId || null,
+                latitude: null,
+                longitude: null,
+                bssidAddress: null,
+                isWithinGeofence: true, // Assume valid since it's corrected by manager
+                status: 'IN',
+                createdAt: pulseTime,
+              });
+            }
+          }
         }
       } else if (request.requestType === 'check-out') {
-        const [activeAttendance] = await db
+        // Find attendance record (could be active or already completed)
+        const [existingAttendance] = await db
           .select()
           .from(attendance)
           .where(and(
             eq(attendance.employeeId, request.employeeId),
-            eq(attendance.date, requestDate),
-            eq(attendance.status, 'active')
+            eq(attendance.date, requestDate)
           ))
           .limit(1);
 
-        if (activeAttendance) {
-          const checkOutTime = requestedDateTime;
-          const checkInTime = new Date(activeAttendance.checkInTime!);
-          const workHours = (checkOutTime.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
+        if (existingAttendance) {
+          const oldCheckOutTime = existingAttendance.checkOutTime ? new Date(existingAttendance.checkOutTime) : null;
+          const newCheckOutTime = requestedDateTime;
+          const checkInTime = new Date(existingAttendance.checkInTime!);
+          const newWorkHours = (newCheckOutTime.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
 
           await db
             .update(attendance)
             .set({
-              checkOutTime,
-              workHours: workHours.toFixed(2),
+              checkOutTime: newCheckOutTime,
+              workHours: newWorkHours.toFixed(2),
               status: 'completed',
             })
-            .where(eq(attendance.id, activeAttendance.id));
+            .where(eq(attendance.id, existingAttendance.id));
+
+          // If the corrected check-out time is LATER, add pulses for extra time
+          if (oldCheckOutTime && newCheckOutTime > oldCheckOutTime) {
+            const timeDiffMinutes = (newCheckOutTime.getTime() - oldCheckOutTime.getTime()) / (1000 * 60);
+            const pulsesToAdd = Math.floor(timeDiffMinutes / 0.5); // One pulse every 30 seconds
+            
+            console.log(`[Checkout Correction] Adding ${pulsesToAdd} pulses for ${timeDiffMinutes} minutes difference`);
+            
+            // Get employee's branch
+            const [employee] = await db
+              .select()
+              .from(employees)
+              .where(eq(employees.id, request.employeeId))
+              .limit(1);
+
+            // Add pulses for the corrected time period
+            for (let i = 0; i < pulsesToAdd; i++) {
+              const pulseTime = new Date(oldCheckOutTime.getTime() + (i * 30 * 1000));
+              await db.insert(pulses).values({
+                employeeId: request.employeeId,
+                branchId: employee?.branchId || null,
+                latitude: null,
+                longitude: null,
+                bssidAddress: null,
+                isWithinGeofence: true,
+                status: 'IN',
+                createdAt: pulseTime,
+              });
+            }
+          }
         }
       }
     }
