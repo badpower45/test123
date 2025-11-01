@@ -225,7 +225,6 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           );
         }
       }
-      }
       
       // Start geofence monitoring
       if (_branchData != null) {
@@ -304,10 +303,6 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
       }
 
       final position = validation.position!;
-
-
-      final latitude = position?.latitude ?? RestaurantConfig.latitude;
-      final longitude = position?.longitude ?? RestaurantConfig.longitude;
 
       // Check internet connection
       final syncService = SyncService.instance;
