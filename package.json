@@ -22,7 +22,8 @@
     "dotenv": "^16.4.5",
     "drizzle-orm": "^0.44.6",
     "express": "^4.18.2",
-    "ws": "^8.16.0"
+    "ws": "^8.16.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
@@ -30,6 +31,7 @@
     "@types/node": "^20.19.24",
     "@types/node-cron": "^3.0.11",
     "@types/ws": "^8.5.10",
+    "@types/xlsx": "^0.0.35",
     "drizzle-kit": "^0.31.5",
     "tsx": "^4.7.0",
     "typescript": "^5.9.3"
