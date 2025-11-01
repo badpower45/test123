@@ -37,14 +37,16 @@ class _EmployeeAttendanceTableScreenState extends State<EmployeeAttendanceTableS
 
   void _setDefaultDates() {
     final now = DateTime.now();
-    if (now.day <= 15) {
-      // First period: day 1 to 15
-      _startDate = DateTime(now.year, now.month, 1);
-      _endDate = DateTime(now.year, now.month, 15);
-    } else {
-      // Second period: day 16 to end of month
+    
+    // النظام الجديد: من يوم 16 إلى يوم 15 الشهر القادم
+    if (now.day >= 16) {
+      // من 16 الشهر الحالي إلى 15 الشهر القادم
       _startDate = DateTime(now.year, now.month, 16);
-      _endDate = DateTime(now.year, now.month + 1, 0); // Last day of month
+      _endDate = DateTime(now.year, now.month + 1, 15);
+    } else {
+      // من 16 الشهر الماضي إلى 15 الشهر الحالي
+      _startDate = DateTime(now.year, now.month - 1, 16);
+      _endDate = DateTime(now.year, now.month, 15);
     }
   }
 
@@ -173,12 +175,67 @@ class _EmployeeAttendanceTableScreenState extends State<EmployeeAttendanceTableS
                   // Date Range Display
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                    child: Column(
                       children: [
-                        Text(
-                          'من ${DateFormat('yyyy-MM-dd').format(_startDate!)} إلى ${DateFormat('yyyy-MM-dd').format(_endDate!)}',
-                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        // Quick select period buttons
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            _buildPeriodQuickButton(
+                              label: 'الفترة الحالية',
+                              onTap: () {
+                                _setDefaultDates();
+                                _loadData();
+                              },
+                            ),
+                            const SizedBox(width: 8),
+                            _buildPeriodQuickButton(
+                              label: 'الفترة السابقة',
+                              onTap: () {
+                                final now = DateTime.now();
+                                if (now.day >= 16) {
+                                  // الفترة السابقة: من 16 الشهر الماضي إلى 15 الشهر الحالي
+                                  setState(() {
+                                    _startDate = DateTime(now.year, now.month - 1, 16);
+                                    _endDate = DateTime(now.year, now.month, 15);
+                                  });
+                                } else {
+                                  // الفترة السابقة: من 16 قبل شهرين إلى 15 الشهر الماضي
+                                  setState(() {
+                                    _startDate = DateTime(now.year, now.month - 2, 16);
+                                    _endDate = DateTime(now.year, now.month - 1, 15);
+                                  });
+                                }
+                                _loadData();
+                              },
+                            ),
+                            const SizedBox(width: 8),
+                            OutlinedButton.icon(
+                              onPressed: _selectDateRange,
+                              icon: const Icon(Icons.calendar_month, size: 18),
+                              label: const Text('اختر فترة مخصصة'),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        // Current date range
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.blue.shade200),
+                          ),
+                          child: Text(
+                            'من ${DateFormat('yyyy-MM-dd').format(_startDate!)} إلى ${DateFormat('yyyy-MM-dd').format(_endDate!)}',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -363,6 +420,24 @@ class _EmployeeAttendanceTableScreenState extends State<EmployeeAttendanceTableS
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildPeriodQuickButton({required String label, required VoidCallback onTap}) {
+    return ElevatedButton(
+      onPressed: onTap,
+      style: ElevatedButton.styleFrom(
+        backgroundColor: const Color(0xFF1976D2),
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+        ),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(fontSize: 12),
       ),
     );
   }

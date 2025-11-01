@@ -1168,9 +1168,19 @@ class _OwnerPayrollTabState extends State<_OwnerPayrollTab> {
   @override
   void initState() {
     super.initState();
+    // النظام الجديد: من يوم 16 إلى يوم 15 الشهر القادم
     final now = DateTime.now();
-    _startDate = DateTime(now.year, now.month, 1);
-    _endDate = now;
+    
+    if (now.day >= 16) {
+      // من 16 الشهر الحالي إلى 15 الشهر القادم
+      _startDate = DateTime(now.year, now.month, 16);
+      _endDate = DateTime(now.year, now.month + 1, 15);
+    } else {
+      // من 16 الشهر الماضي إلى 15 الشهر الحالي
+      _startDate = DateTime(now.year, now.month - 1, 16);
+      _endDate = DateTime(now.year, now.month, 15);
+    }
+    
     _employeesFuture = _loadEmployees();
   }
 
@@ -1883,6 +1893,8 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
   final _latitudeController = TextEditingController();
   final _longitudeController = TextEditingController();
   final _radiusController = TextEditingController(text: '100');
+  double _currentRadius = 100;
+  bool _locationSet = false;
 
   @override
   void dispose() {
@@ -1897,15 +1909,37 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
 
   Future<void> _getCurrentLocation() async {
     try {
-      final position = await Geolocator.getCurrentPosition();
+      // Get high accuracy location
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+      
       setState(() {
-        _latitudeController.text = position.latitude.toString();
-        _longitudeController.text = position.longitude.toString();
+        _latitudeController.text = position.latitude.toStringAsFixed(7);
+        _longitudeController.text = position.longitude.toStringAsFixed(7);
+        _locationSet = true;
       });
+      
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'تم تحديد الموقع بدقة ✓\n'
+            'خط العرض: ${position.latitude.toStringAsFixed(7)}\n'
+            'خط الطول: ${position.longitude.toStringAsFixed(7)}\n'
+            'الدقة: ${position.accuracy.toStringAsFixed(1)}م',
+          ),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 4),
+        ),
+      );
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('خطأ في الحصول على الموقع: $error')),
+        SnackBar(
+          content: Text('خطأ في الحصول على الموقع: $error'),
+          backgroundColor: AppColors.error,
+        ),
       );
     }
   }
@@ -1948,6 +1982,16 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
+    
+    if (!_locationSet) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('⚠️ يرجى تحديد موقع الفرع أولاً'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
 
     try {
       await BranchApiService.createBranch(
@@ -1955,13 +1999,13 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
         wifiBssid: _wifiNameController.text.trim().isEmpty ? null : _wifiNameController.text.trim(),
         latitude: _latitudeController.text.trim().isEmpty ? null : double.parse(_latitudeController.text.trim()),
         longitude: _longitudeController.text.trim().isEmpty ? null : double.parse(_longitudeController.text.trim()),
-        geofenceRadius: int.parse(_radiusController.text.trim()),
+        geofenceRadius: _currentRadius.toInt(),
       );
 
       if (!mounted) return;
       Navigator.pop(context, true);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تم إضافة الفرع بنجاح')),
+        const SnackBar(content: Text('✓ تم إضافة الفرع بنجاح')),
       );
     } catch (error) {
       if (!mounted) return;
@@ -1972,6 +2016,37 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
         ),
       );
     }
+  }
+
+  Widget _buildRadiusQuickButton(int radius) {
+    final isSelected = _currentRadius == radius.toDouble();
+    return InkWell(
+      onTap: () {
+        setState(() {
+          _currentRadius = radius.toDouble();
+          _radiusController.text = radius.toString();
+        });
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? AppColors.primaryOrange : Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isSelected ? AppColors.primaryOrange : Colors.grey.shade300,
+            width: isSelected ? 2 : 1,
+          ),
+        ),
+        child: Text(
+          '${radius}م',
+          style: TextStyle(
+            color: isSelected ? Colors.white : Colors.grey.shade700,
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+            fontSize: 12,
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -2020,6 +2095,199 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
               ),
               const SizedBox(height: 16),
 
+              // Location Section
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: _locationSet ? Colors.green.shade50 : Colors.orange.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: _locationSet ? Colors.green : Colors.orange,
+                    width: 2,
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          _locationSet ? Icons.location_on : Icons.location_off,
+                          color: _locationSet ? Colors.green : Colors.orange,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          _locationSet ? 'تم تحديد الموقع بنجاح ✓' : 'حدد موقع الفرع',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: _locationSet ? Colors.green.shade900 : Colors.orange.shade900,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (_locationSet) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        'خط العرض: ${_latitudeController.text}',
+                        style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
+                      ),
+                      Text(
+                        'خط الطول: ${_longitudeController.text}',
+                        style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    ElevatedButton.icon(
+                      onPressed: _getCurrentLocation,
+                      icon: const Icon(Icons.my_location, size: 20),
+                      label: Text(_locationSet ? 'تحديث الموقع' : 'تحديد الموقع الحالي'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primaryOrange,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              
+              const SizedBox(height: 16),
+
+              // Radius Slider Section
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.blue.shade200),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'نصف قطر المنطقة المسموحة',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: AppColors.primaryOrange,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            '${_currentRadius.toInt()} متر',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    
+                    // Visual representation
+                    SizedBox(
+                      height: 120,
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          // Outer circle (represents radius)
+                          Container(
+                            width: 100,
+                            height: 100,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: AppColors.primaryOrange.withOpacity(0.1),
+                              border: Border.all(
+                                color: AppColors.primaryOrange.withOpacity(0.3),
+                                width: 2,
+                              ),
+                            ),
+                          ),
+                          // Center point
+                          Container(
+                            width: 20,
+                            height: 20,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: AppColors.primaryOrange,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: AppColors.primaryOrange.withOpacity(0.5),
+                                  blurRadius: 8,
+                                  spreadRadius: 2,
+                                ),
+                              ],
+                            ),
+                            child: const Icon(Icons.location_on, size: 12, color: Colors.white),
+                          ),
+                          // Radius line
+                          Positioned(
+                            right: MediaQuery.of(context).size.width / 2 - 50,
+                            child: Container(
+                              width: 50,
+                              height: 2,
+                              color: AppColors.primaryOrange.withOpacity(0.5),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    
+                    const SizedBox(height: 12),
+                    
+                    // Slider
+                    Slider(
+                      value: _currentRadius,
+                      min: 50,
+                      max: 500,
+                      divisions: 45,
+                      activeColor: AppColors.primaryOrange,
+                      inactiveColor: Colors.grey.shade300,
+                      onChanged: (value) {
+                        setState(() {
+                          _currentRadius = value;
+                          _radiusController.text = value.toInt().toString();
+                        });
+                      },
+                    ),
+                    
+                    // Quick select buttons
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        _buildRadiusQuickButton(50),
+                        _buildRadiusQuickButton(100),
+                        _buildRadiusQuickButton(200),
+                        _buildRadiusQuickButton(300),
+                      ],
+                    ),
+                    
+                    const SizedBox(height: 8),
+                    Text(
+                      'اختر المسافة المناسبة للموظفين لتسجيل الحضور',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade600,
+                        fontStyle: FontStyle.italic,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 16),
+
               Row(
                 children: [
                   Expanded(
@@ -2056,6 +2324,8 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
                         border: OutlineInputBorder(),
                       ),
                       keyboardType: TextInputType.number,
+                      enabled: false, // Disabled - use location button
+                      style: const TextStyle(color: Colors.grey),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -2067,32 +2337,14 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
                         border: OutlineInputBorder(),
                       ),
                       keyboardType: TextInputType.number,
+                      enabled: false, // Disabled - use location button
+                      style: const TextStyle(color: Colors.grey),
                     ),
                   ),
                 ],
               ),
               const SizedBox(height: 16),
 
-              ElevatedButton.icon(
-                onPressed: _getCurrentLocation,
-                icon: const Icon(Icons.my_location),
-                label: const Text('الحصول على الموقع الحالي'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.grey.shade200,
-                  foregroundColor: Colors.black87,
-                ),
-              ),
-              const SizedBox(height: 16),
-
-              TextFormField(
-                controller: _radiusController,
-                decoration: const InputDecoration(
-                  labelText: 'نصف القطر المسموح (متر)',
-                  border: OutlineInputBorder(),
-                ),
-                keyboardType: TextInputType.number,
-                validator: (value) => value?.isEmpty == true ? 'مطلوب' : null,
-              ),
               const SizedBox(height: 24),
 
               ElevatedButton(
