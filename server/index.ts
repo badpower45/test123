@@ -3360,6 +3360,7 @@ app.get('/api/manager/dashboard', async (req, res) => {
       .where(and(
         eq(attendanceRequests.status, 'pending'),
         eq(employees.branchId, manager.branchId),
+        sql`${employees.id} != ${managerId}`, // استبعاد المدير نفسه
         or(
           eq(employees.role, 'staff'),
           eq(employees.role, 'hr'),
@@ -3394,6 +3395,7 @@ app.get('/api/manager/dashboard', async (req, res) => {
       .where(and(
         eq(leaveRequests.status, 'pending'),
         eq(employees.branchId, manager.branchId),
+        sql`${employees.id} != ${managerId}`, // استبعاد المدير نفسه
         or(
           eq(employees.role, 'staff'),
           eq(employees.role, 'hr'),
@@ -3418,6 +3420,7 @@ app.get('/api/manager/dashboard', async (req, res) => {
       .where(and(
         eq(advances.status, 'pending'),
         eq(employees.branchId, manager.branchId),
+        sql`${employees.id} != ${managerId}`, // استبعاد المدير نفسه
         or(
           eq(employees.role, 'staff'),
           eq(employees.role, 'hr'),
@@ -3441,6 +3444,7 @@ app.get('/api/manager/dashboard', async (req, res) => {
       .where(and(
         eq(absenceNotifications.status, 'pending'),
         eq(employees.branchId, manager.branchId),
+        sql`${employees.id} != ${managerId}`, // استبعاد المدير نفسه
         or(
           eq(employees.role, 'staff'),
           eq(employees.role, 'hr'),
@@ -3463,6 +3467,7 @@ app.get('/api/manager/dashboard', async (req, res) => {
       .where(and(
         eq(breaks.status, 'PENDING'),
         eq(employees.branchId, manager.branchId),
+        sql`${employees.id} != ${managerId}`, // استبعاد المدير نفسه
         or(
           eq(employees.role, 'staff'),
           eq(employees.role, 'hr'),

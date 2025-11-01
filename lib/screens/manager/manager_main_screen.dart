@@ -7,7 +7,6 @@ import '../branch_manager_screen.dart';
 import '../employee/refreshable_tab.dart';
 import '../login_screen.dart';
 import 'manager_home_page.dart';
-import 'manager_requests_page.dart';
 import 'manager_report_page.dart';
 import 'manager_profile_page.dart';
 
@@ -35,7 +34,7 @@ class _ManagerMainScreenState extends State<ManagerMainScreen> {
   @override
   void initState() {
     super.initState();
-    _tabKeys = List.generate(4, (_) => GlobalKey<RefreshableTabState>());
+    _tabKeys = List.generate(3, (_) => GlobalKey<RefreshableTabState>());
     _pages = [
       RefreshableTab(
         key: _tabKeys[0],
@@ -43,14 +42,10 @@ class _ManagerMainScreenState extends State<ManagerMainScreen> {
       ),
       RefreshableTab(
         key: _tabKeys[1],
-        builder: (context) => ManagerRequestsPage(managerId: widget.managerId),
-      ),
-      RefreshableTab(
-        key: _tabKeys[2],
         builder: (context) => ManagerReportPage(managerId: widget.managerId, branch: widget.branch),
       ),
       RefreshableTab(
-        key: _tabKeys[3],
+        key: _tabKeys[2],
         builder: (context) => ManagerProfilePage(managerId: widget.managerId),
       ),
     ];
@@ -177,13 +172,6 @@ class _ManagerMainScreenState extends State<ManagerMainScreen> {
                 size: 28,
               ),
               label: 'الرئيسية',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(
-                Icons.assignment,
-                size: 28,
-              ),
-              label: 'الطلبات',
             ),
             BottomNavigationBarItem(
               icon: Icon(

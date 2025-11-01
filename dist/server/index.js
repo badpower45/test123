@@ -2836,7 +2836,8 @@ app.get('/api/manager/dashboard', async (req, res) => {
         })
             .from(attendanceRequests)
             .innerJoin(employees, eq(attendanceRequests.employeeId, employees.id))
-            .where(and(eq(attendanceRequests.status, 'pending'), eq(employees.branchId, manager.branchId), or(eq(employees.role, 'staff'), eq(employees.role, 'hr'), eq(employees.role, 'monitor'))))
+            .where(and(eq(attendanceRequests.status, 'pending'), eq(employees.branchId, manager.branchId), sql `${employees.id} != ${managerId}`, // استبعاد المدير نفسه
+        or(eq(employees.role, 'staff'), eq(employees.role, 'hr'), eq(employees.role, 'monitor'))))
             .orderBy(desc(attendanceRequests.createdAt));
         // Ensure status and requestType are sent as strings
         const normalizedAttendanceRequests = pendingAttendanceRequests.map(a => ({
@@ -2860,7 +2861,8 @@ app.get('/api/manager/dashboard', async (req, res) => {
         })
             .from(leaveRequests)
             .innerJoin(employees, eq(leaveRequests.employeeId, employees.id))
-            .where(and(eq(leaveRequests.status, 'pending'), eq(employees.branchId, manager.branchId), or(eq(employees.role, 'staff'), eq(employees.role, 'hr'), eq(employees.role, 'monitor'))))
+            .where(and(eq(leaveRequests.status, 'pending'), eq(employees.branchId, manager.branchId), sql `${employees.id} != ${managerId}`, // استبعاد المدير نفسه
+        or(eq(employees.role, 'staff'), eq(employees.role, 'hr'), eq(employees.role, 'monitor'))))
             .orderBy(desc(leaveRequests.createdAt));
         const pendingAdvances = await db
             .select({
@@ -2875,7 +2877,8 @@ app.get('/api/manager/dashboard', async (req, res) => {
         })
             .from(advances)
             .innerJoin(employees, eq(advances.employeeId, employees.id))
-            .where(and(eq(advances.status, 'pending'), eq(employees.branchId, manager.branchId), or(eq(employees.role, 'staff'), eq(employees.role, 'hr'), eq(employees.role, 'monitor'))))
+            .where(and(eq(advances.status, 'pending'), eq(employees.branchId, manager.branchId), sql `${employees.id} != ${managerId}`, // استبعاد المدير نفسه
+        or(eq(employees.role, 'staff'), eq(employees.role, 'hr'), eq(employees.role, 'monitor'))))
             .orderBy(desc(advances.requestDate));
         const pendingAbsences = await db
             .select({
@@ -2889,7 +2892,8 @@ app.get('/api/manager/dashboard', async (req, res) => {
         })
             .from(absenceNotifications)
             .innerJoin(employees, eq(absenceNotifications.employeeId, employees.id))
-            .where(and(eq(absenceNotifications.status, 'pending'), eq(employees.branchId, manager.branchId), or(eq(employees.role, 'staff'), eq(employees.role, 'hr'), eq(employees.role, 'monitor'))))
+            .where(and(eq(absenceNotifications.status, 'pending'), eq(employees.branchId, manager.branchId), sql `${employees.id} != ${managerId}`, // استبعاد المدير نفسه
+        or(eq(employees.role, 'staff'), eq(employees.role, 'hr'), eq(employees.role, 'monitor'))))
             .orderBy(desc(absenceNotifications.notifiedAt));
         const pendingBreaks = await db
             .select({
@@ -2902,7 +2906,8 @@ app.get('/api/manager/dashboard', async (req, res) => {
         })
             .from(breaks)
             .innerJoin(employees, eq(breaks.employeeId, employees.id))
-            .where(and(eq(breaks.status, 'PENDING'), eq(employees.branchId, manager.branchId), or(eq(employees.role, 'staff'), eq(employees.role, 'hr'), eq(employees.role, 'monitor'))))
+            .where(and(eq(breaks.status, 'PENDING'), eq(employees.branchId, manager.branchId), sql `${employees.id} != ${managerId}`, // استبعاد المدير نفسه
+        or(eq(employees.role, 'staff'), eq(employees.role, 'hr'), eq(employees.role, 'monitor'))))
             .orderBy(desc(breaks.createdAt));
         // Ensure status is sent as string
         const normalizedBreaks = pendingBreaks.map(b => ({
