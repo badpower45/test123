@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>دليل رفع التطبيق على iOS</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        
+        h1 {
+            color: #667eea;
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+        
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 40px;
+            font-size: 1.2em;
+        }
+        
+        .step {
+            margin-bottom: 40px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 15px;
+            border-right: 5px solid #667eea;
+        }
+        
+        .step-number {
+            display: inline-block;
+            width: 40px;
+            height: 40px;
+            background: #667eea;
+            color: white;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 40px;
+            font-weight: bold;
+            margin-left: 15px;
+        }
+        
+        .step-title {
+            font-size: 1.5em;
+            color: #333;
+            margin-bottom: 15px;
+        }
+        
+        .step-content {
+            color: #555;
+            line-height: 1.8;
+            padding-right: 55px;
+        }
+        
+        .link-box {
+            background: #667eea;
+            color: white;
+            padding: 15px 25px;
+            border-radius: 10px;
+            display: inline-block;
+            text-decoration: none;
+            margin-top: 10px;
+            transition: all 0.3s;
+        }
+        
+        .link-box:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .code-box {
+            background: #2d2d2d;
+            color: #f8f8f2;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 15px 0;
+            font-family: 'Courier New', monospace;
+            overflow-x: auto;
+        }
+        
+        .warning {
+            background: #fff3cd;
+            border-right: 5px solid #ffc107;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 15px 0;
+            color: #856404;
+        }
+        
+        .success {
+            background: #d4edda;
+            border-right: 5px solid #28a745;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 15px 0;
+            color: #155724;
+        }
+        
+        .icon {
+            font-size: 1.5em;
+            margin-left: 10px;
+        }
+        
+        .checklist {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .checklist li {
+            padding: 10px 0;
+            padding-right: 30px;
+            position: relative;
+        }
+        
+        .checklist li:before {
+            content: '✅';
+            position: absolute;
+            right: 0;
+        }
+        
+        .timeline {
+            border-right: 3px solid #667eea;
+            padding-right: 30px;
+            margin: 30px 0;
+        }
+        
+        .timeline-item {
+            margin-bottom: 30px;
+            position: relative;
+        }
+        
+        .timeline-item:before {
+            content: '';
+            width: 15px;
+            height: 15px;
+            background: #667eea;
+            border-radius: 50%;
+            position: absolute;
+            right: -38px;
+            top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🍎 دليل رفع التطبيق على iOS</h1>
+        <p class="subtitle">بدون Mac - سهل وسريع!</p>
+        
+        <div class="success">
+            <strong>🎉 تم الإعداد بنجاح!</strong><br>
+            المشروع جاهز للرفع على App Store باستخدام Codemagic أو GitHub Actions
+        </div>
+        
+        <div class="step">
+            <div class="step-title">
+                <span class="step-number">1</span>
+                <span class="icon">📝</span>
+                التسجيل في Apple Developer
+            </div>
+            <div class="step-content">
+                <p>أول خطوة هي التسجيل في برنامج مطوري Apple:</p>
+                <a href="https://developer.apple.com" target="_blank" class="link-box">
+                    🔗 افتح Apple Developer
+                </a>
+                <div class="warning">
+                    <strong>⚠️ ملاحظة:</strong> التكلفة 99 دولار سنوياً
+                </div>
+                <ul class="checklist">
+                    <li>احتفظ بـ Apple ID الخاص بك</li>
+                    <li>استخدم بطاقة ائتمان صالحة</li>
+                    <li>انتظر 24-48 ساعة للموافقة</li>
+                </ul>
+            </div>
+        </div>
+        
+        <div class="step">
+            <div class="step-title">
+                <span class="step-number">2</span>
+                <span class="icon">🚀</span>
+                التسجيل في Codemagic
+            </div>
+            <div class="step-content">
+                <p>Codemagic سيبني التطبيق تلقائياً على سيرفرات Mac في السحابة:</p>
+                <a href="https://codemagic.io/signup" target="_blank" class="link-box">
+                    🔗 سجل في Codemagic (مجاناً)
+                </a>
+                <div class="timeline">
+                    <div class="timeline-item">
+                        <strong>1. Sign up with GitHub</strong><br>
+                        اضغط على زر GitHub واسمح بالوصول
+                    </div>
+                    <div class="timeline-item">
+                        <strong>2. Add application</strong><br>
+                        اختر مشروع test123 من القائمة
+                    </div>
+                    <div class="timeline-item">
+                        <strong>3. Select Flutter</strong><br>
+                        اختر Flutter كنوع المشروع
+                    </div>
+                    <div class="timeline-item">
+                        <strong>4. Finish setup</strong><br>
+                        Codemagic سيكتشف codemagic.yaml تلقائياً!
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="step">
+            <div class="step-title">
+                <span class="step-number">3</span>
+                <span class="icon">⚙️</span>
+                إعداد App Store Connect
+            </div>
+            <div class="step-content">
+                <p>أنشئ التطبيق في App Store Connect:</p>
+                <a href="https://appstoreconnect.apple.com" target="_blank" class="link-box">
+                    🔗 افتح App Store Connect
+                </a>
+                <div class="code-box">
+My Apps → ➕ New App
+
+Platform: iOS
+Name: أولديزز وركرز
+Bundle ID: com.oldies.attendance
+SKU: oldies-workers-001
+Language: Arabic
+                </div>
+            </div>
+        </div>
+        
+        <div class="step">
+            <div class="step-title">
+                <span class="step-number">4</span>
+                <span class="icon">🔗</span>
+                ربط Codemagic مع Apple
+            </div>
+            <div class="step-content">
+                <p>في Codemagic Dashboard:</p>
+                <div class="code-box">
+Teams → Your team → Integrations
+→ App Store Connect
+→ Enable
+→ Connect with Apple ID
+                </div>
+                <div class="success">
+                    <strong>✨ سحر!</strong> Codemagic سيعمل certificates و provisioning profiles تلقائياً!
+                </div>
+            </div>
+        </div>
+        
+        <div class="step">
+            <div class="step-title">
+                <span class="step-number">5</span>
+                <span class="icon">📧</span>
+                تحديث البريد الإلكتروني
+            </div>
+            <div class="step-content">
+                <p>افتح ملف <code>codemagic.yaml</code> وغيّر:</p>
+                <div class="code-box">
+email:
+  recipients:
+    - your-email@example.com  # 👈 ضع بريدك هنا
+                </div>
+            </div>
+        </div>
+        
+        <div class="step">
+            <div class="step-title">
+                <span class="step-number">6</span>
+                <span class="icon">🎉</span>
+                ابدأ البناء!
+            </div>
+            <div class="step-content">
+                <p>في Codemagic Dashboard:</p>
+                <div class="code-box">
+Applications → test123
+→ Start new build
+→ Select Workflow: ios-workflow
+→ Start new build
+                </div>
+                <div class="warning">
+                    ⏱️ انتظر 15-20 دقيقة... استرح واشرب قهوة! ☕
+                </div>
+                <div class="success">
+                    <strong>🎊 تم!</strong> بعد اكتمال البناء، التطبيق سيُرفع تلقائياً على TestFlight!
+                </div>
+            </div>
+        </div>
+        
+        <div class="step">
+            <div class="step-title">
+                <span class="step-number">7</span>
+                <span class="icon">📱</span>
+                التجربة على TestFlight
+            </div>
+            <div class="step-content">
+                <p>جرب التطبيق قبل النشر:</p>
+                <a href="https://appstoreconnect.apple.com" target="_blank" class="link-box">
+                    🔗 افتح TestFlight
+                </a>
+                <ul class="checklist">
+                    <li>أضف مستخدمين للتجربة (حتى 100 مستخدم داخلي)</li>
+                    <li>أرسل لهم دعوة عبر البريد</li>
+                    <li>حمّل تطبيق TestFlight من App Store</li>
+                    <li>جرب التطبيق وأصلح الأخطاء</li>
+                </ul>
+            </div>
+        </div>
+        
+        <div class="step">
+            <div class="step-title">
+                <span class="step-number">8</span>
+                <span class="icon">🌟</span>
+                النشر على App Store
+            </div>
+            <div class="step-content">
+                <p>جاهز للنشر؟ في App Store Connect:</p>
+                <div class="code-box">
+My Apps → أولديزز وركرز
+→ Prepare for Submission
+→ املأ جميع البيانات:
+   • Screenshots
+   • Description
+   • Keywords
+   • Privacy Policy
+→ Submit for Review
+                </div>
+                <div class="success">
+                    <strong>🎯 النجاح!</strong> انتظر 24-48 ساعة لمراجعة Apple ثم التطبيق سيكون متاح على App Store! 🎉
+                </div>
+            </div>
+        </div>
+        
+        <div class="warning">
+            <h3>🆘 مشاكل شائعة</h3>
+            <ul style="margin-top: 10px;">
+                <li><strong>Build Failed:</strong> تحقق من الـ logs في Codemagic</li>
+                <li><strong>Certificate issues:</strong> تأكد من ربط App Store Connect</li>
+                <li><strong>Missing screenshots:</strong> استخدم أداة مثل Figma لإنشائها</li>
+            </ul>
+        </div>
+        
+        <div class="success" style="margin-top: 30px; text-align: center;">
+            <h2>🚀 جاهز للإطلاق!</h2>
+            <p style="margin-top: 10px;">
+                راجع <strong>IOS_DEPLOYMENT_GUIDE.md</strong> للمزيد من التفاصيل<br>
+                أو <strong>IOS_QUICK_START.md</strong> للخطوات السريعة
+            </p>
+        </div>
+    </div>
+</body>
+</html>

@@ -734,9 +734,16 @@ app.post('/api/attendance/check-in', async (req, res) => {
             .where(and(eq(attendance.employeeId, employee_id), eq(attendance.date, today), eq(attendance.status, 'active')))
             .limit(1);
         if (existing) {
-            return res.status(400).json({
-                error: 'Already checked in today',
-                attendance: existing
+            console.log(`[Check-In] ⚠️ Already checked in - Returning existing attendance`);
+            return res.status(200).json({
+                success: true,
+                alreadyCheckedIn: true,
+                message: 'أنت مسجل حضورك بالفعل اليوم',
+                attendance: {
+                    id: existing.id,
+                    checkInTime: existing.checkInTime,
+                    status: existing.status,
+                }
             });
         }
         // Use transaction to ensure atomicity
@@ -813,7 +820,33 @@ app.post('/api/attendance/check-out', async (req, res) => {
             .limit(1);
         if (!activeAttendance) {
             console.log(`[Check-Out] ❌ No active attendance found for employee: ${employee_id}`);
-            return res.status(400).json({ error: 'No active check-in found for today' });
+            // Check if already checked out today
+            const [completedAttendance] = await db
+                .select()
+                .from(attendance)
+                .where(and(eq(attendance.employeeId, employee_id), eq(attendance.date, today), eq(attendance.status, 'completed')))
+                .orderBy(desc(attendance.checkOutTime))
+                .limit(1);
+            if (completedAttendance) {
+                console.log(`[Check-Out] ⚠️ Already checked out - Returning existing attendance`);
+                return res.status(200).json({
+                    success: true,
+                    alreadyCheckedOut: true,
+                    message: 'لقد سجلت انصرافك بالفعل اليوم',
+                    attendance: {
+                        id: completedAttendance.id,
+                        checkInTime: completedAttendance.checkInTime,
+                        checkOutTime: completedAttendance.checkOutTime,
+                        workHours: completedAttendance.workHours,
+                        status: completedAttendance.status,
+                    }
+                });
+            }
+            return res.status(400).json({
+                error: 'No active check-in found',
+                message: 'لا يوجد تسجيل حضور نشط لهذا اليوم',
+                code: 'NO_ACTIVE_CHECKIN'
+            });
         }
         console.log(`[Check-Out] ✅ Found active attendance ID: ${activeAttendance.id}`);
         // Fetch employee data
