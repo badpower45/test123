@@ -622,6 +622,10 @@ app.post('/api/attendance/check-in', async (req, res) => {
     if (!employee_id) {
       return res.status(400).json({ error: 'Employee ID is required' });
     }
+
+    console.log(`[Check-In] 🔵 Request received for employee: ${employee_id}`);
+    console.log(`[Check-In] 📍 Location: ${latitude}, ${longitude}`);
+    console.log(`[Check-In] 📶 WiFi BSSID: ${wifi_bssid || 'NOT PROVIDED'}`);
     
     // Fetch employee to check shift times
     const [employee] = await db
@@ -667,6 +671,8 @@ app.post('/api/attendance/check-in', async (req, res) => {
 
         if (allowedBssids.size > 0) {
           const currentBssid = wifi_bssid ? String(wifi_bssid).toUpperCase() : null;
+          console.log(`[Check-In] 🔍 Checking WiFi - Provided: ${currentBssid || 'NONE'}`);
+          console.log(`[Check-In] 🔍 Allowed BSSIDs:`, Array.from(allowedBssids));
           if (currentBssid && allowedBssids.has(currentBssid)) {
             isWifiValid = true;
             console.log(`[Check-In] ✅ WiFi VALID - BSSID: ${currentBssid}`);
@@ -675,6 +681,8 @@ app.post('/api/attendance/check-in', async (req, res) => {
           }
         } else {
           console.log(`[Check-In] ⚠️ No WiFi BSSIDs configured for branch`);
+          // If no WiFi configured, we'll accept any WiFi as valid
+          isWifiValid = true; 
         }
 
         // 2️⃣ Check Location (Geofence)
@@ -682,6 +690,8 @@ app.post('/api/attendance/check-in', async (req, res) => {
           const branchLat = branch.latitude ? Number(branch.latitude) : null;
           const branchLng = branch.longitude ? Number(branch.longitude) : null;
           const radius = branch.geofenceRadius || 200;
+
+          console.log(`[Check-In] 🔍 Branch Location: ${branchLat}, ${branchLng} (Radius: ${radius}m)`);
 
           if (branchLat && branchLng) {
             const R = 6371000;
@@ -696,6 +706,8 @@ app.post('/api/attendance/check-in', async (req, res) => {
             const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
             const distance = R * c;
 
+            console.log(`[Check-In] 📏 Distance: ${distance.toFixed(2)}m (Max allowed: ${radius}m)`);
+
             if (distance <= radius) {
               isLocationValid = true;
               console.log(`[Check-In] ✅ Location VALID - Distance: ${distance.toFixed(2)}m`);
@@ -704,6 +716,8 @@ app.post('/api/attendance/check-in', async (req, res) => {
             }
           } else {
             console.log(`[Check-In] ⚠️ No geofence configured for branch`);
+            // If no geofence configured, accept any location
+            isLocationValid = true;
           }
         } else {
           console.log(`[Check-In] ⚠️ No location provided`);
@@ -876,6 +890,10 @@ app.post('/api/attendance/check-out', async (req, res) => {
   try {
     const { employee_id, latitude, longitude, wifi_bssid } = req.body;
 
+    console.log(`[Check-Out] 🔵 Request received for employee: ${employee_id}`);
+    console.log(`[Check-Out] 📍 Location: ${latitude}, ${longitude}`);
+    console.log(`[Check-Out] 📶 WiFi BSSID: ${wifi_bssid || 'NOT PROVIDED'}`);
+
     if (!employee_id) {
       return res.status(400).json({ error: 'Employee ID is required' });
     }
@@ -942,6 +960,8 @@ app.post('/api/attendance/check-out', async (req, res) => {
 
         if (allowedBssids.size > 0) {
           const currentBssid = wifi_bssid ? String(wifi_bssid).toUpperCase().replace(/-/g, ':') : null;
+          console.log(`[Check-Out] 🔍 Checking WiFi - Provided: ${currentBssid || 'NONE'}`);
+          console.log(`[Check-Out] 🔍 Allowed BSSIDs:`, Array.from(allowedBssids));
           if (currentBssid && allowedBssids.has(currentBssid)) {
             isWifiValid = true;
             console.log(`[Check-Out] ✅ WiFi VALID - BSSID: ${currentBssid}`);
@@ -950,6 +970,8 @@ app.post('/api/attendance/check-out', async (req, res) => {
           }
         } else {
           console.log(`[Check-Out] ⚠️ No WiFi BSSIDs configured for branch`);
+          // If no WiFi configured, accept any WiFi as valid
+          isWifiValid = true;
         }
 
         // 2️⃣ Check Location (Geofence)
@@ -957,6 +979,8 @@ app.post('/api/attendance/check-out', async (req, res) => {
           const branchLat = branch.latitude ? Number(branch.latitude) : null;
           const branchLng = branch.longitude ? Number(branch.longitude) : null;
           const radius = branch.geofenceRadius || 200;
+
+          console.log(`[Check-Out] 🔍 Branch Location: ${branchLat}, ${branchLng} (Radius: ${radius}m)`);
 
           if (branchLat && branchLng) {
             const R = 6371000;
@@ -971,6 +995,8 @@ app.post('/api/attendance/check-out', async (req, res) => {
             const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
             const distance = R * c;
 
+            console.log(`[Check-Out] 📏 Distance: ${distance.toFixed(2)}m (Max allowed: ${radius}m)`);
+
             if (distance <= radius) {
               isLocationValid = true;
               console.log(`[Check-Out] ✅ Location VALID - Distance: ${distance.toFixed(2)}m`);
@@ -979,6 +1005,8 @@ app.post('/api/attendance/check-out', async (req, res) => {
             }
           } else {
             console.log(`[Check-Out] ⚠️ No geofence configured for branch`);
+            // If no geofence configured, accept any location
+            isLocationValid = true;
           }
         } else {
           console.log(`[Check-Out] ⚠️ No location provided`);
@@ -1187,7 +1215,30 @@ app.post('/api/attendance/request-checkin', async (req, res) => {
         status: 'pending',
       })
       .returning();
-    const request = extractFirstRow(insertResult);
+    const request = extractFirstRow(insertResult) as any;
+
+    // Get employee info to check if manager
+    const [employee] = await db
+      .select()
+      .from(employees)
+      .where(eq(employees.id, employee_id))
+      .limit(1);
+
+    // If employee is a manager, send notification to owner
+    if (employee && employee.role === 'manager' && request) {
+      const ownerId = await getOwnerId();
+      if (ownerId) {
+        await sendNotification(
+          ownerId,
+          'ATTENDANCE_REQUEST',
+          'طلب تصحيح حضور من مدير',
+          `${employee.fullName} يطلب تصحيح وقت الحضور`,
+          employee_id,
+          request.id || ''
+        );
+        console.log('📧 Sent attendance request notification to owner for manager:', employee.fullName);
+      }
+    }
 
     res.json({
       success: true,
@@ -1221,7 +1272,30 @@ app.post('/api/attendance/request-checkout', async (req, res) => {
         status: 'pending',
       })
       .returning();
-    const request = extractFirstRow(insertResult);
+    const request = extractFirstRow(insertResult) as any;
+
+    // Get employee info to check if manager
+    const [employee] = await db
+      .select()
+      .from(employees)
+      .where(eq(employees.id, employee_id))
+      .limit(1);
+
+    // If employee is a manager, send notification to owner
+    if (employee && employee.role === 'manager' && request) {
+      const ownerId = await getOwnerId();
+      if (ownerId) {
+        await sendNotification(
+          ownerId,
+          'ATTENDANCE_REQUEST',
+          'طلب تصحيح انصراف من مدير',
+          `${employee.fullName} يطلب تصحيح وقت الانصراف`,
+          employee_id,
+          request.id || ''
+        );
+        console.log('📧 Sent checkout request notification to owner for manager:', employee.fullName);
+      }
+    }
 
     res.json({
       success: true,
