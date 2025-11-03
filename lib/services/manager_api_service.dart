@@ -77,6 +77,41 @@ class ManagerApiService {
     }
   }
 
+  /// NEW: Review absence notification (approve or reject with automatic deduction)
+  static Future<Map<String, dynamic>> reviewAbsenceNotification({
+    required String notificationId,
+    required String managerId,
+    required String action, // 'approve' or 'reject'
+    String? notes,
+  }) async {
+    final url = '$apiBaseUrl/absence/$notificationId/review';
+    print('🔍 Reviewing absence notification: $notificationId, action: $action');
+
+    final response = await http.post(
+      Uri.parse(url),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'action': action,
+        'reviewer_id': managerId,
+        if (notes != null) 'notes': notes,
+      }),
+    );
+
+    print('🔍 Response status: ${response.statusCode}');
+    print('🔍 Response body: ${response.body}');
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else if (response.statusCode == 403) {
+      final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
+      final message = errorBody['message'] ?? errorBody['error'] ?? 'ليس لديك صلاحية للموافقة على هذا الطلب';
+      throw Exception(message);
+    } else {
+      final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
+      throw Exception(errorBody['error'] ?? 'فشل مراجعة إشعار الغياب: ${response.statusCode}');
+    }
+  }
+
   // دالة لمراجعة (قبول/رفض) طلبات الإجازة
   static Future<Map<String, dynamic>> reviewLeaveRequest({
     required String requestId,

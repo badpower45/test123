@@ -50,37 +50,63 @@ class _ManagerAbsenceNotificationsScreenState
     }
   }
 
-  Future<void> _applyDeduction(AbsenceNotificationDetails notification) async {
-    final TextEditingController amountController = TextEditingController();
-    final TextEditingController reasonController = TextEditingController();
-
+  Future<void> _handleAbsenceReview(AbsenceNotificationDetails notification, bool approve) async {
     final result = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('تطبيق خصم الغياب'),
+        title: Text(approve ? 'قبول عذر الغياب' : 'رفض عذر الغياب وتطبيق الخصم'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('الموظف: ${notification.employeeName}'),
+            Text(
+              'الموظف: ${notification.employeeName}',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
             Text('تاريخ الغياب: ${notification.absenceDate}'),
             const SizedBox(height: 16),
-            TextField(
-              controller: amountController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'مبلغ الخصم (جنيه)',
-                hintText: 'أدخل المبلغ',
-                border: OutlineInputBorder(),
+            if (!approve && notification.deductionAmount != null) ...[
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.red.shade200),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '⚠️ الخصم المقترح:',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      '${notification.deductionAmount} جنيه (يومين)',
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.red,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'الحساب: (ساعات الشيفت × سعر الساعة) × 2',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey[700],
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: reasonController,
-              decoration: const InputDecoration(
-                labelText: 'السبب (اختياري)',
-                hintText: 'وصف سبب الخصم',
-                border: OutlineInputBorder(),
-              ),
+              const SizedBox(height: 12),
+            ],
+            Text(
+              approve
+                  ? 'هل أنت متأكد من قبول عذر الغياب بدون تطبيق خصم؟'
+                  : 'هل أنت متأكد من رفض عذر الغياب وتطبيق خصم يومين؟',
+              style: const TextStyle(fontSize: 14),
             ),
           ],
         ),
@@ -91,43 +117,40 @@ class _ManagerAbsenceNotificationsScreenState
           ),
           ElevatedButton(
             onPressed: () async {
-              final amount = double.tryParse(amountController.text.trim());
-              if (amount == null || amount <= 0) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('يرجى إدخال مبلغ صحيح')),
-                );
-                return;
-              }
-
               try {
-                await ManagerApiService.applyAbsenceDeduction(
+                // Call the review endpoint with approve/reject action
+                await ManagerApiService.reviewAbsenceNotification(
                   notificationId: notification.id,
                   managerId: widget.managerId,
-                  deductionAmount: amount,
-                  reason: reasonController.text.trim().isNotEmpty
-                      ? reasonController.text.trim()
-                      : null,
+                  action: approve ? 'approve' : 'reject',
                 );
 
                 if (mounted) {
                   Navigator.pop(context, true);
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('تم تطبيق خصم بقيمة $amount جنيه')),
+                    SnackBar(
+                      content: Text(
+                        approve
+                            ? 'تم قبول عذر الغياب'
+                            : 'تم رفض عذر الغياب وتطبيق خصم ${notification.deductionAmount ?? "0"} جنيه',
+                      ),
+                      backgroundColor: approve ? Colors.green : Colors.red,
+                    ),
                   );
                   _loadNotifications(); // Refresh list
                 }
               } catch (e) {
                 if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('فشل في تطبيق الخصم: $e')),
+                    SnackBar(content: Text('فشل في المعالجة: $e')),
                   );
                 }
               }
             },
             style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primaryOrange,
+              backgroundColor: approve ? Colors.green : Colors.red,
             ),
-            child: const Text('تطبيق الخصم'),
+            child: Text(approve ? 'قبول العذر' : 'رفض وخصم'),
           ),
         ],
       ),
@@ -138,60 +161,12 @@ class _ManagerAbsenceNotificationsScreenState
     }
   }
 
+  Future<void> _applyDeduction(AbsenceNotificationDetails notification) async {
+    _handleAbsenceReview(notification, false); // Reject = apply deduction
+  }
+
   Future<void> _excuseAbsence(AbsenceNotificationDetails notification) async {
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('قبول عذر الغياب'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('الموظف: ${notification.employeeName}'),
-            Text('تاريخ الغياب: ${notification.absenceDate}'),
-            const SizedBox(height: 16),
-            const Text('هل أنت متأكد من قبول عذر الغياب بدون تطبيق خصم؟'),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('إلغاء'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              try {
-                await ManagerApiService.excuseAbsence(
-                  notificationId: notification.id,
-                  managerId: widget.managerId,
-                );
-
-                if (mounted) {
-                  Navigator.pop(context, true);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('تم قبول عذر الغياب')),
-                  );
-                  _loadNotifications(); // Refresh list
-                }
-              } catch (e) {
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('فشل في قبول العذر: $e')),
-                  );
-                }
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.green,
-            ),
-            child: const Text('قبول العذر'),
-          ),
-        ],
-      ),
-    );
-
-    if (result == true) {
-      _loadNotifications();
-    }
+    _handleAbsenceReview(notification, true); // Approve = excuse absence
   }
 
   @override
@@ -342,6 +317,45 @@ class _ManagerAbsenceNotificationsScreenState
                                       ),
                                     ],
                                   ),
+                                  if (notification.deductionAmount != null) ...[
+                                    const SizedBox(height: 8),
+                                    Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: Colors.red.shade50,
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: Colors.red.shade200),
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Icon(Icons.warning_amber_rounded, size: 18, color: Colors.red.shade700),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  'الخصم المقترح (يومين):',
+                                                  style: GoogleFonts.ibmPlexSansArabic(
+                                                    fontSize: 11,
+                                                    color: Colors.grey[700],
+                                                  ),
+                                                ),
+                                                Text(
+                                                  '${notification.deductionAmount!.toStringAsFixed(0)} جنيه',
+                                                  style: GoogleFonts.ibmPlexSansArabic(
+                                                    fontSize: 16,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: Colors.red.shade700,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
                                   const SizedBox(height: 16),
                                   Row(
                                     children: [

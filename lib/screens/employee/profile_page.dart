@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../theme/app_colors.dart';
 import '../../services/employee_repository.dart';
 import '../../services/auth_service.dart';
+import '../../services/attendance_api_service.dart';
 import '../../models/employee.dart';
 import '../login_screen.dart';
 
@@ -150,6 +151,93 @@ class _ProfilePageState extends State<ProfilePage> {
                     
                     const SizedBox(height: 32),
                     
+                    // Personal Information Section
+                    const Text(
+                      'البيانات الشخصية',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    
+                    const SizedBox(height: 16),
+                    
+                    if (_employee!.address != null && _employee!.address!.isNotEmpty)
+                      _buildInfoCard(
+                        icon: Icons.home,
+                        label: 'العنوان',
+                        value: _employee!.address!,
+                        color: AppColors.primaryDark,
+                      ),
+                    
+                    if (_employee!.address != null && _employee!.address!.isNotEmpty)
+                      const SizedBox(height: 12),
+                    
+                    if (_employee!.birthDate != null)
+                      _buildInfoCard(
+                        icon: Icons.cake,
+                        label: 'تاريخ الميلاد',
+                        value: _formatDate(_employee!.birthDate!),
+                        color: AppColors.warning,
+                      ),
+                    
+                    if (_employee!.birthDate != null)
+                      const SizedBox(height: 12),
+                    
+                    if (_employee!.email != null && _employee!.email!.isNotEmpty)
+                      _buildInfoCard(
+                        icon: Icons.email,
+                        label: 'البريد الإلكتروني',
+                        value: _employee!.email!,
+                        color: AppColors.info,
+                      ),
+                    
+                    if (_employee!.email != null && _employee!.email!.isNotEmpty)
+                      const SizedBox(height: 12),
+                    
+                    if (_employee!.phone != null && _employee!.phone!.isNotEmpty)
+                      _buildInfoCard(
+                        icon: Icons.phone,
+                        label: 'رقم الهاتف',
+                        value: _employee!.phone!,
+                        color: AppColors.success,
+                      ),
+                    
+                    if (_employee!.phone != null && _employee!.phone!.isNotEmpty)
+                      const SizedBox(height: 12),
+                    
+                    // Show message if no personal info
+                    if ((_employee!.address == null || _employee!.address!.isEmpty) &&
+                        _employee!.birthDate == null &&
+                        (_employee!.email == null || _employee!.email!.isEmpty) &&
+                        (_employee!.phone == null || _employee!.phone!.isEmpty))
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.grey.shade300),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.info_outline, color: Colors.grey.shade600),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                'لم يتم إضافة بيانات شخصية بعد',
+                                style: TextStyle(
+                                  color: Colors.grey.shade700,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    
+                    const SizedBox(height: 32),
+                    
                     const Text(
                       'الإعدادات',
                       style: TextStyle(
@@ -202,6 +290,40 @@ class _ProfilePageState extends State<ProfilePage> {
                       width: double.infinity,
                       child: OutlinedButton.icon(
                         onPressed: () async {
+                          // التحقق من حالة الحضور أولاً
+                          try {
+                            final status = await AttendanceApiService.fetchEmployeeStatus(widget.employeeId);
+                            final isCheckedIn = status['attendance']?['status'] == 'active';
+                            
+                            if (isCheckedIn) {
+                              // منع تسجيل الخروج إذا كان مسجل حضور
+                              if (!mounted) return;
+                              showDialog(
+                                context: context,
+                                builder: (context) => AlertDialog(
+                                  icon: const Icon(Icons.warning_amber, size: 48, color: AppColors.error),
+                                  title: const Text('لا يمكن تسجيل الخروج'),
+                                  content: const Text(
+                                    'يجب عليك تسجيل الانصراف أولاً قبل تسجيل الخروج من الحساب.\n\n'
+                                    'الرجاء الضغط على زر "تسجيل الانصراف" من الصفحة الرئيسية.',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(fontSize: 16),
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(context),
+                                      child: const Text('حسناً', style: TextStyle(fontSize: 16)),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              return; // إيقاف عملية تسجيل الخروج
+                            }
+                          } catch (e) {
+                            print('⚠️ Failed to check attendance status: $e');
+                            // في حالة الخطأ، نسمح بالمتابعة
+                          }
+
                           // --- إظهار مؤشر التحميل ---
                           showDialog(
                             context: context,
@@ -388,8 +510,11 @@ class _ProfilePageState extends State<ProfilePage> {
         return 'مدير فرع';
       case EmployeeRole.owner:
         return 'مالك';
-      default:
-        return 'موظف';
     }
+  }
+
+  String _formatDate(DateTime date) {
+    // Format: DD/MM/YYYY
+    return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
   }
 }

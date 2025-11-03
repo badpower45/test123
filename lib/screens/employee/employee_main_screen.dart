@@ -72,6 +72,41 @@ class _EmployeeMainScreenState extends State<EmployeeMainScreen> {
             icon: const Icon(Icons.logout),
             tooltip: 'تسجيل الخروج',
             onPressed: () async {
+              // التحقق من حالة الحضور أولاً
+              try {
+                final status = await AttendanceApiService.fetchEmployeeStatus(widget.employeeId);
+                final isCheckedIn = status['attendance']?['status'] == 'active';
+                
+                if (isCheckedIn) {
+                  // منع تسجيل الخروج إذا كان مسجل حضور
+                  if (!mounted) return;
+                  showDialog(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      icon: const Icon(Icons.warning_amber, size: 48, color: AppColors.error),
+                      title: const Text('لا يمكن تسجيل الخروج'),
+                      content: const Text(
+                        'يجب عليك تسجيل الانصراف أولاً قبل تسجيل الخروج من الحساب.\n\n'
+                        'الرجاء الضغط على زر "تسجيل الانصراف" من الصفحة الرئيسية.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 16),
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('حسناً', style: TextStyle(fontSize: 16)),
+                        ),
+                      ],
+                    ),
+                  );
+                  return; // إيقاف عملية تسجيل الخروج
+                }
+              } catch (e) {
+                print('⚠️ Failed to check attendance status: $e');
+                // في حالة الخطأ، نسمح بالمتابعة
+              }
+
+              // إذا لم يكن مسجل حضور، نطلب التأكيد
               final confirmed = await showDialog<bool>(
                 context: context,
                 builder: (context) => AlertDialog(
@@ -92,26 +127,6 @@ class _EmployeeMainScreenState extends State<EmployeeMainScreen> {
               );
 
               if (confirmed == true) {
-                // تسجيل خروج تلقائي إذا كان مسجل حضور
-                try {
-                  final status = await AttendanceApiService.fetchEmployeeStatus(widget.employeeId);
-                  final isCheckedIn = status['attendance']?['status'] == 'active';
-                  
-                  if (isCheckedIn) {
-                    // عمل check-out تلقائي
-                    await AttendanceApiService.checkOut(
-                      employeeId: widget.employeeId,
-                      latitude: 0, // dummy location
-                      longitude: 0,
-                      wifiBssid: null, // No BSSID for auto logout
-                    );
-                    print('✅ Auto check-out on logout');
-                  }
-                } catch (e) {
-                  print('⚠️ Failed to auto check-out: $e');
-                  // Continue with logout anyway
-                }
-                
                 await AuthService.logout();
                 if (!mounted) return;
                 Navigator.of(context).pushAndRemoveUntil(

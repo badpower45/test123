@@ -12,6 +12,7 @@ import '../../services/wifi_service.dart';
 import '../../services/requests_api_service.dart';
 import '../../theme/app_colors.dart';
 import 'manager_send_requests_page.dart';
+import 'manager_employees_page.dart';
 
 class ManagerHomePage extends StatefulWidget {
   final String managerId;
@@ -602,6 +603,77 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
 
               const SizedBox(height: 24),
 
+              // Quick Actions - Employees Management
+              Card(
+                elevation: 2,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => ManagerEmployeesPage(
+                          managerId: widget.managerId,
+                          managerBranch: _branchData?['branch_name'] ?? '',
+                        ),
+                      ),
+                    );
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            gradient: AppColors.primaryGradient,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Icon(
+                            Icons.people,
+                            color: Colors.white,
+                            size: 28,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'إدارة الموظفين',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppColors.textPrimary,
+                                ),
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                'عرض وإضافة موظفي الفرع',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: AppColors.textSecondary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Icon(
+                          Icons.arrow_forward_ios,
+                          color: AppColors.textTertiary,
+                          size: 20,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 24),
+
               // Status Card with Timer
               Container(
                 padding: const EdgeInsets.all(24),
@@ -784,11 +856,115 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
 
               const SizedBox(height: 16),
 
+              // Request Break Button
+              if (_isCheckedIn)
+                SizedBox(
+                  height: 48,
+                  child: OutlinedButton(
+                    onPressed: _isLoading ? null : _requestBreak,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.primaryOrange,
+                      side: const BorderSide(color: AppColors.primaryOrange, width: 2),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.coffee, size: 20),
+                        SizedBox(width: 8),
+                        Text(
+                          'طلب استراحة (بريك)',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+              if (_isCheckedIn) const SizedBox(height: 16),
+
             ],
           ),
         ),
       ),
     );
+  }
+
+  Future<void> _requestBreak() async {
+    // Show dialog to select break duration
+    final duration = await showDialog<int>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('طلب استراحة'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('اختر مدة الاستراحة:'),
+            const SizedBox(height: 16),
+            ListTile(
+              title: const Text('15 دقيقة'),
+              onTap: () => Navigator.pop(context, 15),
+            ),
+            ListTile(
+              title: const Text('30 دقيقة'),
+              onTap: () => Navigator.pop(context, 30),
+            ),
+            ListTile(
+              title: const Text('45 دقيقة'),
+              onTap: () => Navigator.pop(context, 45),
+            ),
+            ListTile(
+              title: const Text('60 دقيقة'),
+              onTap: () => Navigator.pop(context, 60),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('إلغاء'),
+          ),
+        ],
+      ),
+    );
+
+    if (duration == null) return;
+
+    setState(() => _isLoading = true);
+
+    try {
+      await RequestsApiService.submitBreakRequest(
+        employeeId: widget.managerId,
+        durationMinutes: duration,
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✓ تم إرسال طلب الاستراحة للمراجعة'),
+            backgroundColor: AppColors.success,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('خطأ: ${e.toString()}'),
+            backgroundColor: AppColors.error,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
+      setState(() => _isLoading = false);
+    }
   }
 
   Widget _buildStatCard({

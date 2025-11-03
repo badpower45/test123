@@ -22,6 +22,10 @@ class Employee extends HiveObject {
     this.isActive = true,
     this.branch = 'المركز الرئيسي',
     this.monthlySalary = 0,
+    this.address,
+    this.birthDate,
+    this.email,
+    this.phone,
     DateTime? createdAt,
     DateTime? updatedAt,
   })  : permissions = permissions ?? <EmployeePermission>[],
@@ -36,6 +40,10 @@ class Employee extends HiveObject {
   bool isActive;
   String branch;
   double monthlySalary;
+  String? address;
+  DateTime? birthDate;
+  String? email;
+  String? phone;
   DateTime createdAt;
   DateTime updatedAt;
 
@@ -70,6 +78,10 @@ class EmployeeAdapter extends TypeAdapter<Employee> {
       isActive: fields[5] as bool? ?? true,
       branch: branch,
       monthlySalary: salary,
+      address: fields[10] as String?,
+      birthDate: fields[11] != null ? DateTime.tryParse(fields[11] as String) : null,
+      email: fields[12] as String?,
+      phone: fields[13] as String?,
       createdAt: DateTime.tryParse(fields[6] as String? ?? '') ??
           DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
       updatedAt: DateTime.tryParse(fields[7] as String? ?? '') ??
@@ -80,7 +92,7 @@ class EmployeeAdapter extends TypeAdapter<Employee> {
   @override
   void write(BinaryWriter writer, Employee obj) {
     writer
-      ..writeByte(10)
+      ..writeByte(14)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -96,11 +108,19 @@ class EmployeeAdapter extends TypeAdapter<Employee> {
       ..writeByte(6)
       ..write(obj.createdAt.toUtc().toIso8601String())
       ..writeByte(7)
-    ..write(obj.updatedAt.toUtc().toIso8601String())
-    ..writeByte(8)
-    ..write(obj.branch)
-    ..writeByte(9)
-    ..write(obj.monthlySalary);
+      ..write(obj.updatedAt.toUtc().toIso8601String())
+      ..writeByte(8)
+      ..write(obj.branch)
+      ..writeByte(9)
+      ..write(obj.monthlySalary)
+      ..writeByte(10)
+      ..write(obj.address)
+      ..writeByte(11)
+      ..write(obj.birthDate?.toUtc().toIso8601String())
+      ..writeByte(12)
+      ..write(obj.email)
+      ..writeByte(13)
+      ..write(obj.phone);
   }
 }
 

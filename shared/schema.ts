@@ -45,6 +45,11 @@ export const employees = pgTable('employees', {
   shiftStartTime: text('shift_start_time'), // e.g., '09:00' or '21:00'
   shiftEndTime: text('shift_end_time'), // e.g., '17:00' or '05:00'
   shiftType: text('shift_type'), // 'AM' or 'PM'
+  // Personal Information Fields
+  address: text('address'),
+  birthDate: date('birth_date'),
+  email: text('email'),
+  phone: text('phone'),
   active: boolean('active').default(true).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),

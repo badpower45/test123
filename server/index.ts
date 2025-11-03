@@ -1,4 +1,4 @@
-import express from 'express';
+mport express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -1537,7 +1537,23 @@ app.post('/api/attendance/requests/:requestId/review', async (req, res) => {
 
     // If approved, create/update attendance record
     if (action === 'approve') {
-      const requestedDateTime = new Date(request.requestedTime);
+      // تحويل الوقت للتوقيت المصري (Africa/Cairo)
+      const requestedTimeString = new Date(request.requestedTime).toLocaleString('en-US', { 
+        timeZone: 'Africa/Cairo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      });
+      
+      const requestedDateTime = new Date(requestedTimeString);
+      console.log(`[Attendance Request] Original time: ${request.requestedTime}`);
+      console.log(`[Attendance Request] Cairo time: ${requestedTimeString}`);
+      console.log(`[Attendance Request] Final DateTime: ${requestedDateTime}`);
+      
       const requestDate = requestedDateTime.toISOString().split('T')[0];
 
       if (request.requestType === 'check-in') {
@@ -2366,6 +2382,7 @@ app.get('/api/absence/notifications', async (req, res) => {
         absenceDate: absenceNotifications.absenceDate,
         status: absenceNotifications.status,
         deductionApplied: absenceNotifications.deductionApplied,
+        deductionAmount: absenceNotifications.deductionAmount,
         notifiedAt: absenceNotifications.notifiedAt,
       })
       .from(absenceNotifications)
@@ -2960,6 +2977,12 @@ app.post('/api/employees', async (req, res) => {
     const shiftEndTime = typeof req.body.shiftEndTime === 'string' ? req.body.shiftEndTime.trim() : undefined;
     const shiftType = typeof req.body.shiftType === 'string' ? req.body.shiftType.trim() : undefined;
 
+    // Get personal information from request
+    const address = typeof req.body.address === 'string' ? req.body.address.trim() : undefined;
+    const birthDate = typeof req.body.birthDate === 'string' || req.body.birthDate instanceof Date ? req.body.birthDate : undefined;
+    const email = typeof req.body.email === 'string' ? req.body.email.trim() : undefined;
+    const phone = typeof req.body.phone === 'string' ? req.body.phone.trim() : undefined;
+
     const insertData: any = {
       id,
       fullName,
@@ -2982,6 +3005,20 @@ app.post('/api/employees', async (req, res) => {
     }
     if (shiftType) {
       insertData.shiftType = shiftType;
+    }
+    
+    // Add personal information if provided
+    if (address) {
+      insertData.address = address;
+    }
+    if (birthDate) {
+      insertData.birthDate = birthDate;
+    }
+    if (email) {
+      insertData.email = email;
+    }
+    if (phone) {
+      insertData.phone = phone;
     }
 
     const [newEmployee] = await db
@@ -3083,6 +3120,23 @@ app.put('/api/employees/:id', async (req, res) => {
       updateData.shiftType = req.body.shiftType ? String(req.body.shiftType).trim() : null;
     }
 
+    // Personal information fields
+    if (req.body.address !== undefined) {
+      updateData.address = req.body.address ? String(req.body.address).trim() : null;
+    }
+
+    if (req.body.birthDate !== undefined) {
+      updateData.birthDate = req.body.birthDate || null;
+    }
+
+    if (req.body.email !== undefined) {
+      updateData.email = req.body.email ? String(req.body.email).trim() : null;
+    }
+
+    if (req.body.phone !== undefined) {
+      updateData.phone = req.body.phone ? String(req.body.phone).trim() : null;
+    }
+
     if (Object.keys(updateData).length === 0) {
       return res.status(400).json({ error: 'No fields to update' });
     }
@@ -3101,6 +3155,10 @@ app.put('/api/employees/:id', async (req, res) => {
         branchId: employees.branchId,
         hourlyRate: employees.hourlyRate,
         active: employees.active,
+        address: employees.address,
+        birthDate: employees.birthDate,
+        email: employees.email,
+        phone: employees.phone,
         updatedAt: employees.updatedAt,
       });
 
@@ -7071,9 +7129,30 @@ app.get('/api/owner/employee-attendance/:employeeId', async (req, res) => {
     }
     // إذا أخذ إجازة أكثر من يومين → يخسر حافز الغياب
 
-    // Calculate net (after deducting advances from total)
-    const grossAmount = (employee.monthlySalary ? parseFloat(employee.monthlySalary) : 0);
-    const netAfterAdvances = grossAmount - totalAdvances + attendanceAllowance;
+    // Calculate gross salary in real-time based on actual work
+    let grossAmount = 0;
+    
+    if (employee.hourlyRate && parseFloat(employee.hourlyRate) > 0) {
+      // Hourly rate employee: Calculate based on actual hours worked
+      const hourlyRate = parseFloat(employee.hourlyRate);
+      grossAmount = totalWorkHours * hourlyRate + totalLeaveAllowances;
+      console.log(`[Real-time Salary] Employee: ${employee.fullName}`);
+      console.log(`[Real-time Salary] Hourly Rate: ${hourlyRate} EGP`);
+      console.log(`[Real-time Salary] Total Work Hours: ${totalWorkHours.toFixed(2)}`);
+      console.log(`[Real-time Salary] Work Amount: ${(totalWorkHours * hourlyRate).toFixed(2)} EGP`);
+      console.log(`[Real-time Salary] Leave Allowances: ${totalLeaveAllowances} EGP`);
+      console.log(`[Real-time Salary] Gross Amount: ${grossAmount.toFixed(2)} EGP`);
+    } else if (employee.monthlySalary && parseFloat(employee.monthlySalary) > 0) {
+      // Monthly salary employee: Use fixed monthly salary
+      grossAmount = parseFloat(employee.monthlySalary) + totalLeaveAllowances;
+      console.log(`[Real-time Salary] Employee: ${employee.fullName} (Monthly)`);
+      console.log(`[Real-time Salary] Monthly Salary: ${employee.monthlySalary} EGP`);
+      console.log(`[Real-time Salary] Leave Allowances: ${totalLeaveAllowances} EGP`);
+      console.log(`[Real-time Salary] Gross Amount: ${grossAmount.toFixed(2)} EGP`);
+    }
+
+    // Calculate net (gross + attendance allowance - advances - deductions)
+    const netAfterAdvances = grossAmount + attendanceAllowance - totalAdvances - totalDeductions;
 
     res.json({
       success: true,
@@ -7092,8 +7171,8 @@ app.get('/api/owner/employee-attendance/:employeeId', async (req, res) => {
         totalLeaveAllowances: totalLeaveAllowances.toFixed(2),
         attendanceAllowance: attendanceAllowance.toFixed(2), // حافز الغياب
         totalDeductions: totalDeductions.toFixed(2),
-        grossSalary: grossAmount.toFixed(2),
-        netAfterAdvances: netAfterAdvances.toFixed(2),
+        grossSalary: grossAmount.toFixed(2), // Real-time calculation
+        netAfterAdvances: netAfterAdvances.toFixed(2), // Net after all deductions
       },
     });
   } catch (error) {
@@ -7328,7 +7407,7 @@ cron.schedule('0 2 * * *', async () => {
 // Late employee check - runs every 30 minutes
 cron.schedule('*/30 * * * *', async () => {
   try {
-    console.log('[CRON] Checking for late employees...');
+    console.log('[CRON] Checking for late employees (2+ hours)...');
 
     // Get Egypt/Cairo time
     const cairoTimeString = new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' });
@@ -7350,7 +7429,7 @@ cron.schedule('*/30 * * * *', async () => {
       ));
 
     for (const employee of allEmployees) {
-      if (!employee.shiftStartTime) continue;
+      if (!employee.shiftStartTime || !employee.shiftEndTime) continue;
 
       // Parse shift start time
       const [startHour, startMinute] = employee.shiftStartTime.split(':').map(Number);
@@ -7372,21 +7451,38 @@ cron.schedule('*/30 * * * *', async () => {
 
       if (todayAttendance) continue; // Employee already checked in
 
-      // Check if we already sent notification today
-      const todayStart = new Date(cairoTimeString);
-      todayStart.setHours(0, 0, 0, 0);
-
-      const [existingNotification] = await db
+      // Check if we already created absence notification today
+      const [existingAbsenceNotif] = await db
         .select()
-        .from(notifications)
+        .from(absenceNotifications)
         .where(and(
-          eq(notifications.type, 'ABSENCE_ALERT'),
-          eq(notifications.relatedId, employee.id),
-          gte(notifications.createdAt, todayStart)
+          eq(absenceNotifications.employeeId, employee.id),
+          eq(absenceNotifications.absenceDate, today)
         ))
         .limit(1);
 
-      if (existingNotification) continue; // Already notified
+      if (existingAbsenceNotif) continue; // Already created absence notification
+
+      // Calculate 2-day deduction amount
+      // Formula: (Shift Hours × Hourly Rate) × 2
+      const [shiftStartHour, shiftStartMinute] = employee.shiftStartTime.split(':').map(Number);
+      const [shiftEndHour, shiftEndMinute] = employee.shiftEndTime.split(':').map(Number);
+      const shiftHours = (shiftEndHour * 60 + shiftEndMinute - shiftStartHour * 60 - shiftStartMinute) / 60;
+      const hourlyRate = employee.hourlyRate ? parseFloat(employee.hourlyRate) : 0;
+      const twoDayDeduction = (shiftHours * hourlyRate) * 2;
+
+      // Create absence notification with calculated deduction
+      const [newAbsenceNotif] = await db
+        .insert(absenceNotifications)
+        .values({
+          employeeId: employee.id,
+          absenceDate: today,
+          status: 'pending',
+          deductionAmount: twoDayDeduction.toFixed(2),
+          createdAt: new Date(),
+          notifiedAt: new Date(),
+        })
+        .returning();
 
       // Determine who should receive the notification based on employee role
       let notificationRecipientId = null;
@@ -7418,18 +7514,18 @@ cron.schedule('*/30 * * * *', async () => {
       }
 
       if (notificationRecipientId) {
-        // Send notification
+        // Send notification with deduction details
         const roleLabel = employee.role === 'manager' ? 'المدير' : 'الموظف';
         await sendNotification(
           notificationRecipientId,
           'ABSENCE_ALERT',
-          `تأخير ${roleLabel}`,
-          `تنبيه: ${roleLabel} ${employee.fullName} لم يسجل حضوره بعد ساعتين من بداية الشيفت (${employee.shiftStartTime})`,
+          `غياب ${roleLabel}`,
+          `تنبيه: ${roleLabel} ${employee.fullName} لم يسجل حضوره بعد ساعتين من بداية الشيفت (${employee.shiftStartTime}). الخصم المقترح: ${twoDayDeduction.toFixed(2)} جنيه (يومين). يرجى الموافقة أو الرفض.`,
           employee.id,
-          employee.id
+          newAbsenceNotif.id
         );
 
-        console.log(`[CRON] ✅ Sent late notification for ${employee.role} ${employee.fullName} to recipient ${notificationRecipientId}`);
+        console.log(`[CRON] ✅ Created absence notification for ${employee.role} ${employee.fullName} - Deduction: ${twoDayDeduction.toFixed(2)} EGP`);
       } else {
         console.log(`[CRON] ❌ Could not find recipient for notification (employee: ${employee.fullName})`);
       }

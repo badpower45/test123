@@ -214,82 +214,284 @@ class _DetailedLeaveRequestCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
+      elevation: 3,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Employee name and branch
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Flexible(
-                  child: Text(
-                    request.employeeName,
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.textPrimary,
+            // Header with employee info
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: AppColors.primaryOrange.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: AppColors.primaryOrange,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(
+                          Icons.person,
+                          color: Colors.white,
+                          size: 24,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              request.employeeName,
+                              style: const TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.textPrimary,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Row(
+                              children: [
+                                Icon(Icons.work_outline, size: 14, color: AppColors.textSecondary),
+                                const SizedBox(width: 4),
+                                Text(
+                                  request.employeeRole.isNotEmpty ? request.employeeRole : 'موظف',
+                                  style: const TextStyle(
+                                    color: AppColors.textSecondary,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _InfoChip(
+                          icon: Icons.business,
+                          label: request.branchName ?? 'بدون فرع',
+                          color: AppColors.info,
+                        ),
+                      ),
+                      if (request.employeeSalary != null) ...[
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _InfoChip(
+                            icon: Icons.payments,
+                            label: '${request.employeeSalary} جنيه',
+                            color: AppColors.success,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 20),
+
+            // Leave type badge
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: request.type.toString().contains('emergency')
+                    ? AppColors.error.withOpacity(0.1)
+                    : AppColors.info.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: request.type.toString().contains('emergency')
+                      ? AppColors.error
+                      : AppColors.info,
+                  width: 1,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    request.type.toString().contains('emergency')
+                        ? Icons.warning_amber
+                        : Icons.event_available,
+                    size: 16,
+                    color: request.type.toString().contains('emergency')
+                        ? AppColors.error
+                        : AppColors.info,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    request.type.toString().contains('emergency') ? 'إجازة طارئة' : 'إجازة عادية',
+                    style: TextStyle(
+                      color: request.type.toString().contains('emergency')
+                          ? AppColors.error
+                          : AppColors.info,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
                     ),
                   ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // Leave details in cards
+            Row(
+              children: [
+                Expanded(
+                  child: _DetailCard(
+                    icon: Icons.calendar_today,
+                    title: 'من',
+                    value: _formatDate(request.startDate),
+                    color: AppColors.primaryOrange,
+                  ),
                 ),
-                Text(
-                  request.branchName ?? 'بدون فرع',
-                  style: const TextStyle(color: AppColors.textSecondary),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _DetailCard(
+                    icon: Icons.event,
+                    title: 'إلى',
+                    value: _formatDate(request.endDate),
+                    color: AppColors.primaryOrange,
+                  ),
                 ),
               ],
             ),
-            if (request.employeeRole.isNotEmpty)
-              Text(
-                'الرتبة: ${request.employeeRole}',
-                style: const TextStyle(color: AppColors.textTertiary, fontSize: 12),
-              ),
-            if (request.employeeSalary != null)
-              Text(
-                'الراتب: ${request.employeeSalary} جنيه',
-                style: const TextStyle(color: AppColors.textTertiary, fontSize: 12),
-              ),
 
-            const Divider(height: 24),
+            const SizedBox(height: 12),
 
-            // Leave details
-            _LeaveInfoRow(label: 'من', value: _formatDate(request.startDate)),
-            _LeaveInfoRow(label: 'إلى', value: _formatDate(request.endDate)),
-            if (request.reason != null && request.reason!.isNotEmpty)
-              _LeaveInfoRow(label: 'السبب', value: request.reason!),
-            if (request.daysCount > 0)
-              _LeaveInfoRow(label: 'عدد الأيام', value: request.daysCount.toString()),
-            if (request.allowanceAmount > 0)
-              _LeaveInfoRow(
-                label: 'بدل الإجازة',
-                value: '${request.allowanceAmount.toStringAsFixed(0)} جنيه',
+            Row(
+              children: [
+                Expanded(
+                  child: _DetailCard(
+                    icon: Icons.access_time,
+                    title: 'عدد الأيام',
+                    value: '${request.daysCount} يوم',
+                    color: AppColors.info,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _DetailCard(
+                    icon: Icons.attach_money,
+                    title: 'بدل الإجازة',
+                    value: '${request.allowanceAmount.toStringAsFixed(0)} جنيه',
+                    color: AppColors.success,
+                  ),
+                ),
+              ],
+            ),
+
+            // Reason section
+            if (request.reason != null && request.reason!.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceVariant,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.textTertiary.withOpacity(0.2)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: const [
+                        Icon(Icons.description, size: 16, color: AppColors.textSecondary),
+                        SizedBox(width: 6),
+                        Text(
+                          'السبب:',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      request.reason!,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        color: AppColors.textPrimary,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
               ),
+            ],
 
+            // Created date
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                const Icon(Icons.schedule, size: 14, color: AppColors.textTertiary),
+                const SizedBox(width: 4),
+                Text(
+                  'تاريخ الطلب: ${_formatDateTime(request.createdAt)}',
+                  style: const TextStyle(
+                    color: AppColors.textTertiary,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 20),
+            const Divider(height: 1),
             const SizedBox(height: 16),
 
             // Action buttons
             Row(
               children: [
                 Expanded(
-                  child: ElevatedButton(
+                  child: ElevatedButton.icon(
                     onPressed: onRejected,
+                    icon: const Icon(Icons.close, size: 20),
+                    label: const Text('رفض الطلب', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.error,
                       foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      elevation: 0,
                     ),
-                    child: const Text('رفض'),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: ElevatedButton(
+                  child: ElevatedButton.icon(
                     onPressed: onApproved,
+                    icon: const Icon(Icons.check, size: 20),
+                    label: const Text('موافقة', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.success,
                       foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      elevation: 0,
                     ),
-                    child: const Text('موافقة'),
                   ),
                 ),
               ],
@@ -301,35 +503,103 @@ class _DetailedLeaveRequestCard extends StatelessWidget {
   }
 
   String _formatDate(DateTime date) =>
-      '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+      '${date.day}/${date.month}/${date.year}';
+
+  String _formatDateTime(DateTime date) =>
+      '${date.day}/${date.month}/${date.year} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
 }
 
-class _LeaveInfoRow extends StatelessWidget {
-  const _LeaveInfoRow({required this.label, required this.value});
+// Helper widget for info chips
+class _InfoChip extends StatelessWidget {
+  const _InfoChip({
+    required this.icon,
+    required this.label,
+    required this.color,
+  });
 
+  final IconData icon;
   final String label;
-  final String value;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            label,
-            style: const TextStyle(color: AppColors.textSecondary, fontSize: 14),
-          ),
-          Flexible(
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 4),
+          Expanded(
             child: Text(
-              value,
-              textAlign: TextAlign.left,
-              style: const TextStyle(
-                color: AppColors.textPrimary,
-                fontSize: 14,
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 12,
                 fontWeight: FontWeight.w600,
               ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// Helper widget for detail cards
+class _DetailCard extends StatelessWidget {
+  const _DetailCard({
+    required this.icon,
+    required this.title,
+    required this.value,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String title;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 16, color: color),
+              const SizedBox(width: 6),
+              Text(
+                title,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: color.withOpacity(0.8),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.bold,
+              color: AppColors.textPrimary,
             ),
           ),
         ],
