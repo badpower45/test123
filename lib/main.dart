@@ -21,9 +21,14 @@ import 'screens/splash_screen.dart';
 import 'services/pulse_backend_client.dart';
 import 'services/pulse_sync_manager.dart';
 import 'theme/app_colors.dart';
+import 'config/supabase_config.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize Supabase
+  await SupabaseConfig.initialize();
+  
   await Hive.initFlutter();
   registerPulseAdapter();
   registerPulseLogEntryAdapter();
@@ -36,6 +41,10 @@ Future<void> main() async {
   await Hive.openBox<PulseLogEntry>(pulseHistoryBox);
   await Hive.openBox<Employee>(employeesBox);
   await Hive.openBox<EmployeeAdjustment>(employeeAdjustmentsBox);
+  // Open branch data box for offline support
+  await Hive.openBox('branch_data');
+  await Hive.openBox('local_attendance');
+  await Hive.openBox('local_pulses');
   await PulseSyncManager.initializeForMainIsolate();
   await PulseBackendClient.initialize();
   if (!kIsWeb && Platform.isAndroid) {

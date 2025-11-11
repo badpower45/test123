@@ -837,7 +837,9 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
         role: result.role,
         permissions: result.permissions,
         branch: result.branch,
-        monthlySalary: result.monthlySalary,
+        hourlyRate: result.hourlyRate,
+        shiftStartTime: result.shiftStartTime,
+        shiftEndTime: result.shiftEndTime,
       );
       await EmployeeRepository.upsert(employee);
     } else {
@@ -847,7 +849,9 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
         ..role = result.role
         ..permissions = result.permissions
         ..branch = result.branch
-        ..monthlySalary = result.monthlySalary
+        ..hourlyRate = result.hourlyRate
+        ..shiftStartTime = result.shiftStartTime
+        ..shiftEndTime = result.shiftEndTime
         ..touch();
       await EmployeeRepository.upsert(existing);
     }
@@ -1431,24 +1435,26 @@ class _PayrollInsights {
 
   factory _PayrollInsights.from(List<Employee> employees) {
     final activeEmployees = employees.where((employee) => employee.isActive).toList();
-    final totalSalary = activeEmployees.fold<double>(0, (sum, employee) => sum + employee.monthlySalary);
+    // Calculate estimated monthly salary: hourlyRate × 8 hours × 26 days
+    final totalSalary = activeEmployees.fold<double>(0, (sum, employee) => sum + (employee.hourlyRate * 8 * 26));
     final headcount = activeEmployees.length;
     final averageSalary = headcount == 0 ? 0.0 : totalSalary / headcount;
 
     final Map<String, _BranchPayroll> branchMap = {};
     for (final employee in activeEmployees) {
       final branchName = employee.branch.isNotEmpty ? employee.branch : 'فرع غير محدد';
+      final employeeMonthlySalary = employee.hourlyRate * 8 * 26;
       final existing = branchMap[branchName];
       if (existing == null) {
         branchMap[branchName] = _BranchPayroll(
           branchName: branchName,
           headcount: 1,
-          totalSalary: employee.monthlySalary,
+          totalSalary: employeeMonthlySalary,
         );
       } else {
         branchMap[branchName] = existing.copyWith(
           headcount: existing.headcount + 1,
-          totalSalary: existing.totalSalary + employee.monthlySalary,
+          totalSalary: existing.totalSalary + employeeMonthlySalary,
         );
       }
     }
@@ -1714,7 +1720,7 @@ class _EmployeeSnapshot {
     required this.totalLogged,
     required this.monthlyLogged,
     required this.branch,
-    required this.monthlySalary,
+    required this.hourlyRate,
   });
 
   final String employeeId;
@@ -1730,7 +1736,7 @@ class _EmployeeSnapshot {
   final int totalLogged;
   final int monthlyLogged;
   final String branch;
-  final double monthlySalary;
+  final double hourlyRate;
 }
 
 class _PulseSnapshot {
@@ -1795,7 +1801,7 @@ List<_EmployeeSnapshot> _buildEmployeeSnapshots(
     final employeeRecord = employeeDirectory[employeeId];
     final displayName = employeeRecord?.fullName ?? employeeId;
     final branchLabel = employeeRecord?.branch ?? 'فرع غير محدد';
-    final salaryValue = employeeRecord?.monthlySalary ?? 0;
+    final hourlyRateValue = employeeRecord?.hourlyRate ?? 0;
     final status = _deriveStatus(
       latest,
       pendingOffline,
@@ -1829,7 +1835,7 @@ List<_EmployeeSnapshot> _buildEmployeeSnapshots(
         totalLogged: totalLogged,
         monthlyLogged: monthlyLogged,
         branch: branchLabel,
-        monthlySalary: salaryValue,
+        hourlyRate: hourlyRateValue,
       ),
     );
   }
@@ -2074,7 +2080,7 @@ class _EmployeeCard extends StatelessWidget {
                     const Icon(Icons.payments_outlined, color: Colors.black54),
                     const SizedBox(width: 8),
                     Text(
-                      'الراتب الشهري: ${_formatCurrency(employee.monthlySalary)} ج.م',
+                      'سعر الساعة: ${_formatCurrency(employee.hourlyRate)} ج.م',
                     ),
                   ],
                 ),
@@ -2407,8 +2413,8 @@ class _MonitorTimelineSheet extends StatelessWidget {
                     ),
                     _MonitorDetailChip(
                       icon: Icons.payments_outlined,
-                      label: 'الراتب الشهري',
-                      value: '${_formatCurrency(snapshot.monthlySalary)} ج.م',
+                      label: 'سعر الساعة',
+                      value: '${_formatCurrency(snapshot.hourlyRate)} ج.م',
                       accentColor: AppColors.success,
                     ),
                     _MonitorDetailChip(
@@ -2663,7 +2669,7 @@ class _EmployeeFormSheetState extends State<_EmployeeFormSheet> {
     _nameController = TextEditingController(text: existing?.fullName ?? '');
     _pinController = TextEditingController(text: existing?.pin ?? '');
     _salaryController = TextEditingController(
-      text: existing?.monthlySalary.toStringAsFixed(2) ?? '',
+      text: existing?.hourlyRate.toStringAsFixed(2) ?? '',
     );
     _selectedBranch = existing?.branch ?? '';
     _role = existing?.role ?? EmployeeRole.staff;
@@ -2746,13 +2752,10 @@ class _EmployeeFormSheetState extends State<_EmployeeFormSheet> {
                       labelText: 'الفرع',
                       border: OutlineInputBorder(),
                     ),
-                    items: [
-                      const DropdownMenuItem(value: '', child: Text('اختر الفرع')),
-                      ...branches.map((branch) => DropdownMenuItem(
-                        value: branch['name'] ?? '',
-                        child: Text(branch['name'] ?? ''),
-                      )),
-                    ],
+                    items: branches.map<DropdownMenuItem<String>>((branch) => DropdownMenuItem<String>(
+                      value: branch['name'] ?? '',
+                      child: Text(branch['name'] ?? ''),
+                    )).toList(),
                     onChanged: (value) => setState(() => _selectedBranch = value ?? ''),
                     validator: (value) => value?.isEmpty == true ? 'مطلوب' : null,
                   );
@@ -2883,7 +2886,9 @@ class _EmployeeFormSheetState extends State<_EmployeeFormSheet> {
         role: _role,
         permissions: _selectedPermissions.toList(growable: false),
         branch: branch,
-        monthlySalary: salary,
+        hourlyRate: salary,
+        shiftStartTime: '',
+        shiftEndTime: '',
       ),
     );
   }
@@ -2897,7 +2902,9 @@ class _EmployeeFormResult {
     required this.role,
     required this.permissions,
     required this.branch,
-    required this.monthlySalary,
+    required this.hourlyRate,
+    required this.shiftStartTime,
+    required this.shiftEndTime,
   });
 
   final String id;
@@ -2906,7 +2913,9 @@ class _EmployeeFormResult {
   final EmployeeRole role;
   final List<EmployeePermission> permissions;
   final String branch;
-  final double monthlySalary;
+  final double hourlyRate;
+  final String shiftStartTime;
+  final String shiftEndTime;
 }
 
 class _AdjustmentFormSheet extends StatefulWidget {

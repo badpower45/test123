@@ -5,6 +5,7 @@ import 'package:geolocator/geolocator.dart';
 import '../models/pulse.dart';
 import '../services/location_service.dart';
 import '../services/wifi_service.dart';
+import 'blv/blv_manager.dart';
 import 'pulse_backend_client.dart';
 import 'pulse_history_repository.dart';
 import 'pulse_sync_manager.dart';
@@ -151,6 +152,20 @@ class BackgroundPulseService {
 
       final geofenceValid = isInside;
 
+      // Collect BLV environmental data
+      final blvManager = BLVManager();
+      Map<String, dynamic>? blvData;
+      
+      try {
+        if (blvManager.isReady()) {
+          final envData = await blvManager.collectEnvironmentalData();
+          blvData = envData?.toJson();
+        }
+      } catch (e) {
+        print('[BLV] Error collecting environmental data: $e');
+        blvData = null;
+      }
+
       final timestamp = DateTime.now().toUtc();
       final pulse = Pulse(
         employeeId: config.employeeId,
@@ -159,6 +174,16 @@ class BackgroundPulseService {
         timestamp: timestamp,
         wifiBssid: wifiBssid,
         isWithinGeofence: geofenceValid,
+        // BLV data (optional)
+        wifiCount: blvData?['wifi_count'] as int?,
+        wifiSignalStrength: blvData?['wifi_signal_strength'] as double?,
+        batteryLevel: blvData?['battery_level'] as double?,
+        isCharging: blvData?['is_charging'] as bool?,
+        accelVariance: blvData?['accel_variance'] as double?,
+        soundLevel: blvData?['sound_level'] as double?,
+        deviceOrientation: blvData?['device_orientation'] as String?,
+        deviceModel: blvData?['device_model'] as String?,
+        osVersion: blvData?['os_version'] as String?,
       );
 
       _pulseCounter++;

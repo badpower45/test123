@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import '../../theme/app_colors.dart';
 import '../../services/employee_repository.dart';
+import '../../services/supabase_attendance_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/attendance_api_service.dart';
 import '../../models/employee.dart';
 import '../login_screen.dart';
+import 'employee_payroll_report_page.dart';
 
 class ProfilePage extends StatefulWidget {
   final String employeeId;
@@ -19,6 +21,12 @@ class _ProfilePageState extends State<ProfilePage> {
     await _loadEmployee();
   }
   Employee? _employee;
+  String? _branchName;
+  Map<String, dynamic>? _supabaseEmployee;
+  String? _shiftType;
+  bool _isActive = true;
+  DateTime? _employmentDate;
+  String? _branchId;
   bool _loading = true;
 
   @override
@@ -28,11 +36,39 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _loadEmployee() async {
-    final emp = await EmployeeRepository.findById(widget.employeeId);
-    setState(() {
-      _employee = emp;
-      _loading = false;
-    });
+    setState(() => _loading = true);
+    
+    try {
+      // Get employee data from Supabase
+      final data = await SupabaseAttendanceService.getEmployeeStatus(widget.employeeId);
+      final employeeData = data['employee'];
+      
+      if (employeeData != null) {
+        // Extract branch name
+        _branchName = employeeData['branch']?['name'] ?? 'غير محدد';
+        
+        // Get from local cache (for other fields)
+        final emp = await EmployeeRepository.findById(widget.employeeId);
+        
+        setState(() {
+          _employee = emp;
+          _loading = false;
+        });
+      } else {
+        setState(() {
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      print('❌ Error loading employee: $e');
+      // Fallback to local cache
+      final emp = await EmployeeRepository.findById(widget.employeeId);
+      setState(() {
+        _employee = emp;
+        _branchName = emp?.branch ?? 'غير محدد';
+        _loading = false;
+      });
+    }
   }
 
   @override
@@ -136,18 +172,33 @@ class _ProfilePageState extends State<ProfilePage> {
                     _buildInfoCard(
                       icon: Icons.location_on,
                       label: 'الفرع',
-                      value: _employee!.branch,
+                      value: _branchName ?? 'غير محدد',
                       color: AppColors.info,
                     ),
                     
                     const SizedBox(height: 12),
                     
-                    _buildInfoCard(
-                      icon: Icons.payments,
-                      label: 'الراتب الشهري',
-                      value: '${_employee!.monthlySalary.toStringAsFixed(0)} جنيه',
-                      color: AppColors.success,
-                    ),
+                    if (_employee!.hourlyRate > 0)
+                      _buildInfoCard(
+                        icon: Icons.payments,
+                        label: 'سعر الساعة',
+                        value: '${_employee!.hourlyRate.toStringAsFixed(0)} جنيه/ساعة',
+                        color: AppColors.success,
+                      ),
+                    
+                    if (_employee!.hourlyRate > 0)
+                      const SizedBox(height: 12),
+                    
+                    if (_employee!.shiftStartTime != null && _employee!.shiftEndTime != null)
+                      _buildInfoCard(
+                        icon: Icons.access_time,
+                        label: 'مواعيد الشيفت',
+                        value: '${_employee!.shiftStartTime} - ${_employee!.shiftEndTime}',
+                        color: AppColors.info,
+                      ),
+                    
+                    if (_employee!.shiftStartTime != null && _employee!.shiftEndTime != null)
+                      const SizedBox(height: 12),
                     
                     const SizedBox(height: 32),
                     
@@ -272,6 +323,25 @@ class _ProfilePageState extends State<ProfilePage> {
                       title: 'المساعدة والدعم',
                       subtitle: 'تواصل مع فريق الدعم',
                       onTap: () {},
+                    ),
+                    
+                    const SizedBox(height: 12),
+                    
+                    _buildSettingItem(
+                      icon: Icons.receipt_long,
+                      title: 'تقرير المرتب',
+                      subtitle: 'عرض تفاصيل الحضور والمرتب',
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => EmployeePayrollReportPage(
+                              employeeId: widget.employeeId,
+                              employeeName: _employee?.fullName ?? 'الموظف',
+                            ),
+                          ),
+                        );
+                      },
                     ),
                     
                     const SizedBox(height: 12),

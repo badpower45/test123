@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import '../../theme/app_colors.dart';
 import '../../services/auth_service.dart';
 import '../../services/employee_repository.dart';
+import '../../services/supabase_attendance_service.dart';
 import '../../models/employee.dart';
 import '../login_screen.dart';
+import 'manager_payroll_report_page.dart';
 
 class ManagerProfilePage extends StatefulWidget {
   final String managerId;
@@ -16,6 +18,7 @@ class ManagerProfilePage extends StatefulWidget {
 
 class _ManagerProfilePageState extends State<ManagerProfilePage> {
   Employee? _employee;
+  String? _branchName;
   bool _loading = true;
 
   @override
@@ -25,11 +28,39 @@ class _ManagerProfilePageState extends State<ManagerProfilePage> {
   }
 
   Future<void> _loadEmployee() async {
-    final emp = await EmployeeRepository.findById(widget.managerId);
-    setState(() {
-      _employee = emp;
-      _loading = false;
-    });
+    setState(() => _loading = true);
+    
+    try {
+      // Get employee data from Supabase
+      final data = await SupabaseAttendanceService.getEmployeeStatus(widget.managerId);
+      final employeeData = data['employee'];
+      
+      if (employeeData != null) {
+        // Extract branch name
+        _branchName = employeeData['branch']?['name'] ?? 'غير محدد';
+        
+        // Get from local cache (for other fields)
+        final emp = await EmployeeRepository.findById(widget.managerId);
+        
+        setState(() {
+          _employee = emp;
+          _loading = false;
+        });
+      } else {
+        setState(() {
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      print('❌ Error loading manager: $e');
+      // Fallback to local cache
+      final emp = await EmployeeRepository.findById(widget.managerId);
+      setState(() {
+        _employee = emp;
+        _branchName = emp?.branch ?? 'غير محدد';
+        _loading = false;
+      });
+    }
   }
 
   @override
@@ -138,18 +169,63 @@ class _ManagerProfilePageState extends State<ManagerProfilePage> {
                             _buildInfoCard(
                               icon: Icons.location_on,
                               label: 'الفرع',
-                              value: _employee!.branch,
+                              value: _branchName ?? 'غير محدد',
                               color: AppColors.info,
                             ),
                             
                             const SizedBox(height: 12),
                             
-                            _buildInfoCard(
-                              icon: Icons.payments,
-                              label: 'الراتب الشهري',
-                              value: '${_employee!.monthlySalary.toStringAsFixed(0)} جنيه',
-                              color: AppColors.success,
+                            if (_employee!.hourlyRate > 0)
+                              _buildInfoCard(
+                                icon: Icons.payments,
+                                label: 'سعر الساعة',
+                                value: '${_employee!.hourlyRate.toStringAsFixed(0)} جنيه/ساعة',
+                                color: AppColors.success,
+                              ),
+                            
+                            if (_employee!.hourlyRate > 0)
+                              const SizedBox(height: 12),
+                            
+                            if (_employee!.shiftStartTime != null && _employee!.shiftEndTime != null)
+                              _buildInfoCard(
+                                icon: Icons.access_time,
+                                label: 'مواعيد الشيفت',
+                                value: '${_employee!.shiftStartTime} - ${_employee!.shiftEndTime}',
+                                color: AppColors.info,
+                              ),
+                            
+                            if (_employee!.shiftStartTime != null && _employee!.shiftEndTime != null)
+                              const SizedBox(height: 12),
+                            
+                            // Payroll Report Button
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton.icon(
+                                onPressed: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (context) => ManagerPayrollReportPage(
+                                        employeeId: widget.managerId,
+                                        employeeName: _employee?.fullName ?? 'المدير',
+                                      ),
+                                    ),
+                                  );
+                                },
+                                icon: const Icon(Icons.receipt_long),
+                                label: const Text('تقرير المرتب'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.teal,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(vertical: 16),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                              ),
                             ),
+                            
+                            const SizedBox(height: 12),
                             
                             const SizedBox(height: 32),
                             

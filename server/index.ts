@@ -1,4 +1,4 @@
-mport express from 'express';
+import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -10,11 +10,14 @@ import {
   employees, attendance, attendanceRequests, leaveRequests, advances,
   deductions, absenceNotifications, pulses, users, roles, permissions,
   rolePermissions, userRoles, branches, branchBssids, branchManagers, breaks,
-  deviceSessions, notifications, salaryCalculations, geofenceViolations
+  deviceSessions, notifications, salaryCalculations, geofenceViolations,
+  branchEnvironmentBaselines, pulseFlags, manualOverrides
 } from '../shared/schema.js';
 import { NewAttendance } from '../shared/schema.js';
 import { eq, and, gte, lte, lt, desc, sql, between, inArray, isNull, or } from 'drizzle-orm';
 import { requirePermission, getUserPermissions, checkUserPermission } from './auth.js';
+import { verifyPresence, createAutoFlags } from './services/blv-verification.js';
+import { calculateAllBaselines, updateAllBranchBaselines } from './services/baseline-calculation.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -618,7 +621,22 @@ app.post('/api/auth/login', async (req, res) => {
 // Check In
 app.post('/api/attendance/check-in', async (req, res) => {
   try {
-    const { employee_id, latitude, longitude, wifi_bssid } = req.body;
+    const { 
+      employee_id, 
+      latitude, 
+      longitude, 
+      wifi_bssid,
+      // BLV environmental data (optional)
+      wifi_count,
+      wifi_signal_strength,
+      battery_level,
+      is_charging,
+      accel_variance,
+      sound_level,
+      device_orientation,
+      device_model,
+      os_version
+    } = req.body;
 
     if (!employee_id) {
       return res.status(400).json({ error: 'Employee ID is required' });
@@ -628,7 +646,7 @@ app.post('/api/attendance/check-in', async (req, res) => {
     console.log(`[Check-In] 📍 Location: ${latitude}, ${longitude}`);
     console.log(`[Check-In] 📶 WiFi BSSID: ${wifi_bssid || 'NOT PROVIDED'}`);
     
-    // Fetch employee to check shift times
+    // Fetch employee
     const [employee] = await db
       .select()
       .from(employees)
@@ -639,9 +657,63 @@ app.post('/api/attendance/check-in', async (req, res) => {
       return res.status(404).json({ error: 'Employee not found' });
     }
 
-    // --- START VERIFICATION (WiFi OR Location) ---
+    console.log(`[Check-In Debug] => Employee: ${employee_id}, Role: ${employee.role}`);
+    
+    // ✅ SHIFT VALIDATION - Check if within shift hours
+    if (employee.shiftStartTime && employee.shiftEndTime) {
+      const now = new Date();
+      const currentTime = now.toTimeString().slice(0, 5); // HH:mm format
+      
+      const shiftStart = employee.shiftStartTime;
+      const shiftEnd = employee.shiftEndTime;
+      
+      // Handle shifts that cross midnight
+      const isWithinShift = shiftStart <= shiftEnd
+        ? currentTime >= shiftStart && currentTime <= shiftEnd
+        : currentTime >= shiftStart || currentTime <= shiftEnd;
+      
+      if (!isWithinShift) {
+        console.log(`[Check-In] ❌ REJECTED - Outside shift hours (${shiftStart} - ${shiftEnd}), Current: ${currentTime}`);
+        return res.status(403).json({
+          error: 'لا يمكن تسجيل الحضور خارج وقت الشيفت المحدد',
+          message: `وقت الشيفت من ${shiftStart} إلى ${shiftEnd}، الوقت الحالي: ${currentTime}`,
+          code: 'OUTSIDE_SHIFT_HOURS',
+        });
+      }
+      console.log(`[Check-In] ✅ Within shift hours (${shiftStart} - ${shiftEnd})`);
+    }
+
+    // --- START VERIFICATION (WiFi OR Location OR BLV) ---
     let isWifiValid = false;
     let isLocationValid = false;
+    let isBLVValid = false;
+
+    // 🔬 Try BLV verification first if environmental data provided
+    if (wifi_count !== undefined && accel_variance !== undefined && employee.branchId) {
+      try {
+        const blvResult = await verifyPresence(
+          employee_id,
+          employee.branchId,
+          {
+            wifiCount: wifi_count || 0,
+            wifiSignalStrength: wifi_signal_strength || -70,
+            batteryLevel: battery_level || 0.5,
+            isCharging: is_charging || false,
+            accelVariance: accel_variance || 0,
+            soundLevel: sound_level || 0,
+            deviceOrientation: device_orientation,
+            deviceModel: device_model || 'Unknown',
+            osVersion: os_version || 'Unknown'
+          },
+          wifi_bssid
+        );
+        
+        isBLVValid = blvResult.isValid;
+        console.log(`[Check-In] 🔬 BLV: ${isBLVValid ? 'VALID' : 'INVALID'} - Presence: ${blvResult.presenceScore.toFixed(2)}, Trust: ${blvResult.trustScore.toFixed(2)}`);
+      } catch (blvError) {
+        console.log(`[Check-In] ⚠️ BLV: SKIPPED - ${blvError}`);
+      }
+    }
 
     if (employee.branchId) {
       const [branch] = await db
@@ -730,86 +802,25 @@ app.post('/api/attendance/check-in', async (req, res) => {
           console.log(`[Check-In] ⚠️ No location provided`);
         }
 
-        // 3️⃣ Check: WiFi OR Location (at least one must be valid)
-        if (!isWifiValid && !isLocationValid) {
-          console.log(`[Check-In] ❌ REJECTED - Neither WiFi nor Location is valid`);
+        // 3️⃣ Check: WiFi OR Location OR BLV (at least one must be valid)
+        if (!isWifiValid && !isLocationValid && !isBLVValid) {
+          console.log(`[Check-In] ❌ REJECTED - WiFi, Location, and BLV all invalid`);
           return res.status(403).json({
             error: 'يجب أن تكون متصلاً بشبكة الواي فاي الخاصة بالفرع أو متواجداً في الموقع الصحيح لتسجيل الحضور.',
             message: 'تأكد من الاتصال بالـ WiFi الصحيح أو التواجد داخل الفرع.',
-            code: 'INVALID_WIFI_OR_LOCATION',
+            code: 'INVALID_WIFI_LOCATION_BLV',
           });
         }
 
-        console.log(`[Check-In] ✅ APPROVED - WiFi: ${isWifiValid}, Location: ${isLocationValid}`);
+        console.log(`[Check-In] ✅ APPROVED - WiFi: ${isWifiValid}, Location: ${isLocationValid}, BLV: ${isBLVValid}`);
       }
     }
     // --- END VERIFICATION ---
 
     // --- START DEBUG LOG ---
-    console.log(`[Check-In Debug] Employee: ${employee_id}, Role: ${employee.role}, Shift Start: ${employee.shiftStartTime}, Shift End: ${employee.shiftEndTime}`);
+    console.log(`[Check-In Debug] Employee: ${employee_id}, Role: ${employee.role}`);
     
-    // Get Egypt/Cairo time
-    const cairoTime = new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' });
-    const cairoDate = new Date(cairoTime);
-    console.log(`[Check-In Debug] Server Time (UTC): ${new Date().toISOString()}`);
-    console.log(`[Check-In Debug] Cairo Time: ${cairoTime}`);
-    console.log(`[Check-In Debug] Cairo Time (Date Object): ${cairoDate.toISOString()}`);
-    // --- END DEBUG LOG ---
-
-    // Validate shift time using Cairo timezone (skip for owner/admin)
-    const isPrivilegedRole = employee.role === 'owner' || employee.role === 'admin';
-    console.log(`[Check-In Debug] Is Privileged Role: ${isPrivilegedRole}`);
-    
-    if (employee.shiftStartTime && employee.shiftEndTime && !isPrivilegedRole) {
-      // Use Cairo time for validation
-      const currentHour = cairoDate.getHours();
-      const currentMinute = cairoDate.getMinutes();
-      const currentTime = currentHour * 60 + currentMinute; // Convert to minutes since midnight
-
-      console.log(`[Check-In Debug] Cairo Current Time: ${currentHour}:${currentMinute.toString().padStart(2, '0')} (${currentTime} minutes)`);
-
-      // Parse shift times (format: "HH:mm")
-      const [startHour, startMinute] = employee.shiftStartTime.split(':').map(Number);
-      const [endHour, endMinute] = employee.shiftEndTime.split(':').map(Number);
-      const shiftStart = startHour * 60 + startMinute;
-      const shiftEnd = endHour * 60 + endMinute;
-
-      console.log(`[Check-In Debug] Shift Window: ${employee.shiftStartTime} (${shiftStart} min) to ${employee.shiftEndTime} (${shiftEnd} min)`);
-
-      // Check if current time is within shift window
-      let isWithinShift = false;
-      if (shiftEnd > shiftStart) {
-        // Normal shift (e.g., 9:00 - 17:00)
-        isWithinShift = currentTime >= shiftStart && currentTime <= shiftEnd;
-        console.log(`[Check-In Debug] Normal shift check: ${currentTime} >= ${shiftStart} && ${currentTime} <= ${shiftEnd} = ${isWithinShift}`);
-      } else {
-        // Night shift crossing midnight (e.g., 21:00 - 05:00)
-        isWithinShift = currentTime >= shiftStart || currentTime <= shiftEnd;
-        console.log(`[Check-In Debug] Night shift check: ${currentTime} >= ${shiftStart} || ${currentTime} <= ${shiftEnd} = ${isWithinShift}`);
-      }
-
-      if (!isWithinShift) {
-        const formatTime = (minutes: number) => {
-          const h = Math.floor(minutes / 60);
-          const m = minutes % 60;
-          return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
-        };
-        
-        console.log(`[Check-In Debug] ❌ REJECTED - Outside shift time`);
-        
-        return res.status(400).json({ 
-          error: 'لا يمكنك تسجيل الحضور خارج وقت الشيفت المحدد',
-          message: `وقت الشيفت الخاص بك من ${employee.shiftStartTime} إلى ${employee.shiftEndTime}. الوقت الحالي: ${formatTime(currentTime)}`,
-          shiftStartTime: employee.shiftStartTime,
-          shiftEndTime: employee.shiftEndTime,
-          currentTime: formatTime(currentTime),
-          cairoTime: cairoTime,
-          code: 'OUTSIDE_SHIFT_TIME',
-        });
-      }
-      
-      console.log(`[Check-In Debug] ✅ APPROVED - Within shift time`);
-    }
+    // ✅ SHIFT VALIDATION REMOVED - Allow check-in anytime
 
     // Use Cairo timezone for date consistency
     const cairoTimeStr = new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' });
@@ -914,7 +925,22 @@ app.post('/api/attendance/check-in', async (req, res) => {
 // Check Out
 app.post('/api/attendance/check-out', async (req, res) => {
   try {
-    const { employee_id, latitude, longitude, wifi_bssid } = req.body;
+    const { 
+      employee_id, 
+      latitude, 
+      longitude, 
+      wifi_bssid,
+      // BLV environmental data (optional)
+      wifi_count,
+      wifi_signal_strength,
+      battery_level,
+      is_charging,
+      accel_variance,
+      sound_level,
+      device_orientation,
+      device_model,
+      os_version
+    } = req.body;
 
     console.log(`[Check-Out] 🔵 Request received for employee: ${employee_id}`);
     console.log(`[Check-Out] 📍 Location: ${latitude}, ${longitude}`);
@@ -992,9 +1018,37 @@ app.post('/api/attendance/check-out', async (req, res) => {
       .where(eq(employees.id, employee_id))
       .limit(1);
 
-    // --- START VERIFICATION (WiFi OR Location) ---
+    // --- START VERIFICATION (WiFi OR Location OR BLV) ---
     let isWifiValid = false;
     let isLocationValid = false;
+    let isBLVValid = false;
+
+    // 🔬 Try BLV verification first if environmental data provided
+    if (wifi_count !== undefined && accel_variance !== undefined && employee && employee.branchId) {
+      try {
+        const blvResult = await verifyPresence(
+          employee_id,
+          employee.branchId,
+          {
+            wifiCount: wifi_count || 0,
+            wifiSignalStrength: wifi_signal_strength || -70,
+            batteryLevel: battery_level || 0.5,
+            isCharging: is_charging || false,
+            accelVariance: accel_variance || 0,
+            soundLevel: sound_level || 0,
+            deviceOrientation: device_orientation,
+            deviceModel: device_model || 'Unknown',
+            osVersion: os_version || 'Unknown'
+          },
+          wifi_bssid
+        );
+        
+        isBLVValid = blvResult.isValid;
+        console.log(`[Check-Out] 🔬 BLV: ${isBLVValid ? 'VALID' : 'INVALID'} - Presence: ${blvResult.presenceScore.toFixed(2)}, Trust: ${blvResult.trustScore.toFixed(2)}`);
+      } catch (blvError) {
+        console.log(`[Check-Out] ⚠️ BLV: SKIPPED - ${blvError}`);
+      }
+    }
 
     if (employee && employee.branchId) {
       const [branch] = await db
@@ -1086,17 +1140,17 @@ app.post('/api/attendance/check-out', async (req, res) => {
           console.log(`[Check-Out] ⚠️ No location provided`);
         }
 
-        // 3️⃣ Check: WiFi OR Location (at least one must be valid)
-        if (!isWifiValid && !isLocationValid) {
-          console.log(`[Check-Out] ❌ REJECTED - Neither WiFi nor Location is valid`);
+        // 3️⃣ Check: WiFi OR Location OR BLV (at least one must be valid)
+        if (!isWifiValid && !isLocationValid && !isBLVValid) {
+          console.log(`[Check-Out] ❌ REJECTED - WiFi, Location, and BLV all invalid`);
           return res.status(403).json({
             error: 'يجب أن تكون متصلاً بشبكة الواي فاي الخاصة بالفرع أو متواجداً في الموقع الصحيح لتسجيل الانصراف.',
             message: 'تأكد من الاتصال بالـ WiFi الصحيح أو التواجد داخل الفرع.',
-            code: 'INVALID_WIFI_OR_LOCATION',
+            code: 'INVALID_WIFI_LOCATION_BLV',
           });
         }
 
-        console.log(`[Check-Out] ✅ APPROVED - WiFi: ${isWifiValid}, Location: ${isLocationValid}`);
+        console.log(`[Check-Out] ✅ APPROVED - WiFi: ${isWifiValid}, Location: ${isLocationValid}, BLV: ${isBLVValid}`);
       }
     }
     // --- END VERIFICATION ---
@@ -5580,7 +5634,7 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
   return R * c; // Distance in meters
 }
 
-// Receive and validate pulse from Flutter app
+// Receive and validate pulse from Flutter app (with BLV support)
 app.post('/api/pulses', async (req, res) => {
   try {
     const { 
@@ -5588,7 +5642,17 @@ app.post('/api/pulses', async (req, res) => {
       wifi_bssid, 
       latitude, 
       longitude,
-      timestamp 
+      timestamp,
+      // BLV environmental data
+      wifi_count,
+      wifi_signal_strength,
+      battery_level,
+      is_charging,
+      accel_variance,
+      sound_level,
+      device_orientation,
+      device_model,
+      os_version
     } = req.body;
 
     if (!employee_id || latitude === undefined || longitude === undefined) {
@@ -5719,10 +5783,53 @@ app.post('/api/pulses', async (req, res) => {
       ))
       .limit(1);
 
+    // ========================================================================
+    // BLV (Behavioral Location Verification) - NEW SYSTEM
+    // ========================================================================
+    let blvResult: any = null;
+    let presenceScore = 1.0;
+    let trustScore = 1.0;
+    let verificationMethod = 'WiFi'; // Default fallback
+    let pulseStatus = 'IN';
+    
+    // Try BLV verification if environmental data is provided
+    if (wifi_count !== undefined && accel_variance !== undefined && employee.branchId) {
+      try {
+        blvResult = await verifyPresence(
+          employee_id,
+          employee.branchId,
+          {
+            wifiCount: wifi_count || 0,
+            wifiSignalStrength: wifi_signal_strength || -70,
+            batteryLevel: battery_level || 0.5,
+            isCharging: is_charging || false,
+            accelVariance: accel_variance || 0,
+            soundLevel: sound_level || 0,
+            deviceOrientation: device_orientation,
+            deviceModel: device_model || 'Unknown',
+            osVersion: os_version || 'Unknown'
+          },
+          wifi_bssid
+        );
+        
+        presenceScore = blvResult.presenceScore;
+        trustScore = blvResult.trustScore;
+        verificationMethod = blvResult.verificationMethod;
+        pulseStatus = blvResult.status;
+        
+        console.log(`[BLV] Employee ${employee_id}: presence=${presenceScore.toFixed(2)}, trust=${trustScore.toFixed(2)}, method=${verificationMethod}, status=${pulseStatus}`);
+        
+      } catch (blvError) {
+        console.error('[BLV] Verification failed, falling back to WiFi/GPS:', blvError);
+        // Continue with legacy verification
+      }
+    }
+
     // NEW LOGIC: Calculate overall validity
-    // Rule: (WiFi valid OR Location valid) = valid pulse for payment
+    // Rule: (WiFi valid OR Location valid OR BLV valid) = valid pulse for payment
     // Exception: During ACTIVE break, all pulses are valid regardless
-    const overallValid = activeBreak ? true : (wifiValid || geofenceValid);
+    const blvValid = blvResult ? blvResult.isValid : false;
+    const overallValid = activeBreak ? true : (wifiValid || geofenceValid || blvValid);
 
     // Check if employee has active attendance (checked in today)
     const today = new Date().toISOString().split('T')[0];
@@ -5773,7 +5880,7 @@ app.post('/api/pulses', async (req, res) => {
       }
     }
 
-    // Store pulse in database
+    // Store pulse in database with BLV data
     const insertPulseResult = await db
       .insert(pulses)
       .values({
@@ -5782,12 +5889,31 @@ app.post('/api/pulses', async (req, res) => {
         latitude,
         longitude,
         bssidAddress: wifi_bssid,
-        isWithinGeofence: overallValid, // Changed to use overallValid (wifi AND geofence)
-        status: 'IN', // Default status
+        isWithinGeofence: overallValid,
+        status: pulseStatus, // Use BLV status
+        // BLV environmental data
+        wifiCount: wifi_count,
+        wifiSignalStrength: wifi_signal_strength,
+        batteryLevel: battery_level,
+        isCharging: is_charging,
+        accelVariance: accel_variance,
+        soundLevel: sound_level,
+        deviceOrientation: device_orientation,
+        presenceScore,
+        trustScore,
+        verificationMethod,
+        deviceModel: device_model,
+        osVersion: os_version,
+        rawEnvironmentData: blvResult ? JSON.stringify(blvResult.details) : null,
         createdAt: timestamp ? new Date(timestamp) : new Date(),
       })
-      .returning({ id: pulses.id, employeeId: pulses.employeeId, branchId: pulses.branchId, latitude: pulses.latitude, longitude: pulses.longitude, bssidAddress: pulses.bssidAddress, isWithinGeofence: pulses.isWithinGeofence, status: pulses.status, createdAt: pulses.createdAt });
+      .returning({ id: pulses.id, employeeId: pulses.employeeId, branchId: pulses.branchId, latitude: pulses.latitude, longitude: pulses.longitude, bssidAddress: pulses.bssidAddress, isWithinGeofence: pulses.isWithinGeofence, status: pulses.status, presenceScore: pulses.presenceScore, trustScore: pulses.trustScore, createdAt: pulses.createdAt });
     const pulse = extractFirstRow(insertPulseResult) as any;
+
+    // Create auto-flags if BLV detected issues
+    if (blvResult && blvResult.flags && blvResult.flags.length > 0) {
+      await createAutoFlags(pulse.id, employee_id, blvResult.flags, blvResult);
+    }
 
     res.json({
       success: true,
@@ -5799,6 +5925,12 @@ app.post('/api/pulses', async (req, res) => {
         distance_meters: Math.round(distance * 100) / 100,
         on_break: !!activeBreak,
         checked_in: !!todayAttendance,
+        // BLV scores
+        presence_score: presenceScore,
+        trust_score: trustScore,
+        verification_method: verificationMethod,
+        status: pulseStatus,
+        flags: blvResult?.flags || []
       }
     });
   } catch (error) {
@@ -7651,6 +7783,221 @@ cron.schedule('*/10 * * * *', async () => {
     console.log(`[CRON] Auto checkout completed: ${autoCheckoutCount} employees checked out`);
   } catch (error) {
     console.error('[CRON] Error during auto checkout:', error);
+  }
+});
+
+// Weekly baseline calculation (every Sunday at 2 AM)
+cron.schedule('0 2 * * 0', async () => {
+  console.log('[CRON] Running weekly baseline update...');
+  try {
+    await updateAllBranchBaselines();
+    console.log('[CRON] Baseline update completed successfully');
+  } catch (error) {
+    console.error('[CRON] Error during baseline update:', error);
+  }
+});
+
+// =============================================================================
+// BLV SYSTEM ENDPOINTS
+// =============================================================================
+
+// Get branch baseline data
+app.get('/api/baselines/:branchId', async (req, res) => {
+  try {
+    const { branchId } = req.params;
+
+    const baselines = await db
+      .select()
+      .from(branchEnvironmentBaselines)
+      .where(eq(branchEnvironmentBaselines.branchId, branchId))
+      .orderBy(branchEnvironmentBaselines.timeSlot);
+
+    res.json({ success: true, baselines });
+  } catch (error: any) {
+    console.error('Error fetching baselines:', error);
+    res.status(500).json({ error: 'Failed to fetch baselines' });
+  }
+});
+
+// Manually trigger baseline calculation
+app.post('/api/baselines/calculate', async (req, res) => {
+  try {
+    const { branchId, daysBack } = req.body;
+
+    if (!branchId) {
+      return res.status(400).json({ error: 'branchId is required' });
+    }
+
+    await calculateAllBaselines(branchId, daysBack || 14);
+
+    res.json({
+      success: true,
+      message: `Baselines calculated for branch ${branchId} using last ${daysBack || 14} days`
+    });
+  } catch (error: any) {
+    console.error('Error calculating baselines:', error);
+    res.status(500).json({ error: 'Failed to calculate baselines' });
+  }
+});
+
+// Get all unresolved flags (for managers)
+app.get('/api/flags', async (req, res) => {
+  try {
+    const { branchId, severity } = req.query;
+
+    let query = db
+      .select({
+        id: pulseFlags.id,
+        pulseId: pulseFlags.pulseId,
+        employeeId: pulseFlags.employeeId,
+        flagType: pulseFlags.flagType,
+        severity: pulseFlags.severity,
+        description: pulseFlags.description,
+        isResolved: pulseFlags.isResolved,
+        createdAt: pulseFlags.createdAt,
+        // Join employee info
+        employeeName: employees.fullName,
+        employeeRole: employees.role,
+      })
+      .from(pulseFlags)
+      .leftJoin(employees, eq(pulseFlags.employeeId, employees.id))
+      .where(eq(pulseFlags.isResolved, false))
+      .$dynamic();
+
+    if (branchId) {
+      query = query.where(eq(employees.branchId, branchId as string));
+    }
+
+    if (severity) {
+      query = query.where(eq(pulseFlags.severity, severity as string));
+    }
+
+    const flags = await query.orderBy(desc(pulseFlags.createdAt));
+
+    res.json({ success: true, flags });
+  } catch (error: any) {
+    console.error('Error fetching flags:', error);
+    res.status(500).json({ error: 'Failed to fetch flags' });
+  }
+});
+
+// Get employee's flags
+app.get('/api/flags/employee/:employeeId', async (req, res) => {
+  try {
+    const { employeeId } = req.params;
+    const { includeResolved } = req.query;
+
+    let query = db
+      .select()
+      .from(pulseFlags)
+      .where(eq(pulseFlags.employeeId, employeeId))
+      .$dynamic();
+
+    if (!includeResolved || includeResolved === 'false') {
+      query = query.where(eq(pulseFlags.isResolved, false));
+    }
+
+    const flags = await query.orderBy(desc(pulseFlags.createdAt));
+
+    res.json({ success: true, flags });
+  } catch (error: any) {
+    console.error('Error fetching employee flags:', error);
+    res.status(500).json({ error: 'Failed to fetch employee flags' });
+  }
+});
+
+// Resolve a flag
+app.post('/api/flags/:flagId/resolve', async (req, res) => {
+  try {
+    const { flagId } = req.params;
+    const { resolvedBy, resolution } = req.body;
+
+    if (!resolvedBy) {
+      return res.status(400).json({ error: 'resolvedBy (manager ID) is required' });
+    }
+
+    const updateResult = await db
+      .update(pulseFlags)
+      .set({
+        isResolved: true,
+        resolvedBy: resolvedBy,
+        resolvedAt: new Date(),
+        resolutionNote: resolution || 'Reviewed and approved',
+      })
+      .where(eq(pulseFlags.id, flagId))
+      .returning();
+
+    const updatedFlag = extractFirstRow(updateResult);
+
+    res.json({ success: true, flag: updatedFlag });
+  } catch (error: any) {
+    console.error('Error resolving flag:', error);
+    res.status(500).json({ error: 'Failed to resolve flag' });
+  }
+});
+
+// Create manual override
+app.post('/api/overrides', async (req, res) => {
+  try {
+    const { pulseId, employeeId, managerId, reason, newStatus, newPresenceScore } = req.body;
+
+    if (!pulseId || !employeeId || !managerId || !reason) {
+      return res.status(400).json({
+        error: 'pulseId, employeeId, managerId, and reason are required'
+      });
+    }
+
+    // Get original pulse data
+    const originalPulse = await db
+      .select()
+      .from(pulses)
+      .where(eq(pulses.id, pulseId))
+      .limit(1);
+
+    if (!originalPulse || originalPulse.length === 0) {
+      return res.status(404).json({ error: 'Pulse not found' });
+    }
+
+    const pulse = extractFirstRow(originalPulse) as any;
+
+    // Create override record
+    const insertResult = await db
+      .insert(manualOverrides)
+      .values({
+        employeeId: employeeId,
+        overrideBy: managerId,
+        overrideReason: reason,
+        originalPresenceScore: pulse.presenceScore,
+        originalTrustScore: pulse.trustScore,
+        originalStatus: pulse.status,
+        newPresenceScore: newPresenceScore || 1.0,
+        newTrustScore: 1.0, // Manager override = full trust
+        newStatus: newStatus || 'APPROVED',
+        timestamp: new Date(),
+      })
+      .returning();
+
+    const override = extractFirstRow(insertResult);
+
+    // Update pulse with override
+    await db
+      .update(pulses)
+      .set({
+        presenceScore: newPresenceScore || 1.0,
+        trustScore: 1.0,
+        status: newStatus || 'APPROVED',
+        verificationMethod: 'Manual',
+      })
+      .where(eq(pulses.id, pulseId));
+
+    res.json({
+      success: true,
+      override,
+      message: 'Manual override applied successfully'
+    });
+  } catch (error: any) {
+    console.error('Error creating override:', error);
+    res.status(500).json({ error: 'Failed to create override' });
   }
 });
 

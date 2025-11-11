@@ -5,6 +5,7 @@ import '../../services/auth_service.dart';
 import '../../services/attendance_api_service.dart';
 import '../login_screen.dart';
 import 'employee_home_page.dart';
+import 'employee_profile_screen.dart';
 import 'requests_page.dart';
 import 'reports_page.dart';
 import 'profile_page.dart';
@@ -42,7 +43,10 @@ class _EmployeeMainScreenState extends State<EmployeeMainScreen> {
       ),
       RefreshableTab(
         key: _tabKeys[1],
-        builder: (context) => RequestsPage(employeeId: widget.employeeId),
+        builder: (context) => RequestsPage(
+          employeeId: widget.employeeId,
+          hideBreakTab: true,
+        ),
       ),
       RefreshableTab(
         key: _tabKeys[2],

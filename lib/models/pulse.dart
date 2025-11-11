@@ -14,6 +14,16 @@ class Pulse extends HiveObject {
     this.isWithinGeofence,
     this.isFake = false,
     this.isSynced = true,
+    // BLV Environmental Data
+    this.wifiCount,
+    this.wifiSignalStrength,
+    this.batteryLevel,
+    this.isCharging,
+    this.accelVariance,
+    this.soundLevel,
+    this.deviceOrientation,
+    this.deviceModel,
+    this.osVersion,
   });
 
   final String employeeId;
@@ -26,6 +36,17 @@ class Pulse extends HiveObject {
   final bool? isWithinGeofence;
   final bool isFake;
   final bool isSynced;
+  
+  // BLV Environmental Data
+  final int? wifiCount;
+  final double? wifiSignalStrength;
+  final double? batteryLevel;
+  final bool? isCharging;
+  final double? accelVariance;
+  final double? soundLevel;
+  final String? deviceOrientation;
+  final String? deviceModel;
+  final String? osVersion;
 
   Map<String, dynamic> toJson() => {
         'user_id': employeeId,
@@ -48,6 +69,16 @@ class Pulse extends HiveObject {
         'is_within_geofence': isWithinGeofence,
         'is_fake': isFake,
         'timestamp': timestamp.toIso8601String(),
+        // BLV Environmental Data
+        'wifi_count': wifiCount,
+        'wifi_signal_strength': wifiSignalStrength,
+        'battery_level': batteryLevel,
+        'is_charging': isCharging,
+        'accel_variance': accelVariance,
+        'sound_level': soundLevel,
+        'device_orientation': deviceOrientation,
+        'device_model': deviceModel,
+        'os_version': osVersion,
       }..removeWhere((key, value) => value == null);
 
   static Pulse fromJson(Map<String, dynamic> json) => Pulse(

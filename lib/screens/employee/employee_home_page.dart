@@ -1,19 +1,25 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../../constants/restaurant_config.dart';
 import '../../models/attendance_request.dart';
 import '../../models/employee.dart';
-import '../../services/attendance_api_service.dart';
 import '../../services/branch_api_service.dart';
 import '../../services/requests_api_service.dart';
 import '../../services/sync_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/geofence_service.dart';
+import '../../services/supabase_attendance_service.dart';
+import '../../services/absence_service.dart';
+import '../../services/payroll_service.dart';
+import '../../services/offline_data_service.dart';
+import '../../services/pulse_tracking_service.dart';
 import '../../database/offline_database.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/violation_alert_dialog.dart';
 
 class EmployeeHomePage extends StatefulWidget {
   final String employeeId;
@@ -33,20 +39,163 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
   int _pendingCount = 0;
   Map<String, dynamic>? _branchData;
   List<String> _allowedBssids = [];
+  bool _isDataDownloaded = false;
+  bool _isSyncing = false;
+  
+  // ✅ NEW: Store attendance_id locally for check-out
+  String? _currentAttendanceId;
+  
+  final _offlineService = OfflineDataService();
+  final _pulseService = PulseTrackingService();
+  Timer? _shiftEndTimer; // ⏰ NEW: Timer for auto checkout at shift end
 
   @override
   void initState() {
     super.initState();
+    _checkOfflineDataStatus();
+    _loadBranchData(); // Load branch data first
     _checkCurrentStatus();
     _loadPendingCount();
+    
     // Refresh pending count every minute
     Timer.periodic(const Duration(minutes: 1), (_) => _loadPendingCount());
+    
+    // ⚠️ Listen to violation alerts
+    _pulseService.addListener(_checkForViolations);
+    
+    // ⏰ NEW: Check for auto checkout every minute
+    _shiftEndTimer = Timer.periodic(const Duration(minutes: 1), (_) => _checkAutoCheckout());
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _shiftEndTimer?.cancel(); // ⏰ Cancel shift timer
+    _pulseService.removeListener(_checkForViolations);
     super.dispose();
+  }
+
+  /// Check for violation alerts and show dialog
+  void _checkForViolations() {
+    if (!mounted) return;
+    
+    if (_pulseService.hasActiveViolation && 
+        _pulseService.violationMessage != null &&
+        _pulseService.violationSeverity != null) {
+      
+      // Show violation dialog
+      showDialog(
+        context: context,
+        barrierDismissible: false, // Force user to acknowledge
+        builder: (context) => ViolationAlertDialog(
+          message: _pulseService.violationMessage!,
+          severity: _pulseService.violationSeverity!,
+          onAcknowledge: () {
+            _pulseService.acknowledgeViolation();
+          },
+        ),
+      );
+    }
+  }
+
+  /// Load branch data from cache or Supabase with auto-refresh
+  Future<void> _loadBranchData() async {
+    try {
+      // On Web, use Hive-based OfflineDataService
+      if (kIsWeb) {
+        await _loadBranchDataForWeb();
+        return;
+      }
+      
+      // On Mobile/Desktop, use SQLite-based OfflineDatabase
+      final db = OfflineDatabase.instance;
+      
+      // Check if we need to refresh (older than 24 hours)
+      final needsRefresh = await db.needsCacheRefresh(widget.employeeId);
+      final cached = await db.getCachedBranchData(widget.employeeId);
+      
+      // Use cached data immediately if available (for fast startup)
+      if (cached != null && !needsRefresh) {
+        setState(() {
+          _branchData = cached;
+          // Parse multiple BSSIDs
+          final bssidsArray = cached['wifi_bssids_array'] as List<dynamic>?;
+          if (bssidsArray != null && bssidsArray.isNotEmpty) {
+            _allowedBssids = bssidsArray.map((e) => e.toString()).toList();
+          }
+        });
+        print('✅ Using cached branch data: ${cached['branch_name']} (${_allowedBssids.length} WiFi networks)');
+        return;
+      }
+      
+      // Need to fetch from Supabase (first time or refresh needed)
+      final syncService = SyncService.instance;
+      final hasInternet = await syncService.hasInternet();
+      
+      if (!hasInternet) {
+        if (cached != null) {
+          // Use stale cache if no internet
+          setState(() {
+            _branchData = cached;
+            final bssidsArray = cached['wifi_bssids_array'] as List<dynamic>?;
+            if (bssidsArray != null && bssidsArray.isNotEmpty) {
+              _allowedBssids = bssidsArray.map((e) => e.toString()).toList();
+            }
+          });
+          print('⚠️ Using stale cache (no internet): ${cached['branch_name']}');
+        } else {
+          print('⚠️ No internet and no cached branch data');
+        }
+        return;
+      }
+      
+      // Get employee data to find branch_id
+      final employeeData = await SupabaseAttendanceService.getEmployeeStatus(widget.employeeId);
+      final branchId = employeeData['employee']?['branch_id'];
+      
+      if (branchId == null) {
+        print('⚠️ Employee has no branch assigned');
+        return;
+      }
+      
+      // Fetch branch data from Supabase
+      final branchData = await BranchApiService.getBranchById(branchId);
+      
+      // Parse WiFi BSSIDs (can be comma-separated or array)
+      List<String> wifiBssids = [];
+      if (branchData['wifi_bssid'] != null && branchData['wifi_bssid'].toString().isNotEmpty) {
+        // Support comma-separated BSSIDs: "AA:BB:CC:DD:EE:FF,11:22:33:44:55:66"
+        wifiBssids = branchData['wifi_bssid']
+            .toString()
+            .split(',')
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty)
+            .toList();
+      }
+      
+      // Cache it locally for future use
+      await db.cacheBranchData(
+        employeeId: widget.employeeId,
+        branchId: branchData['id'],
+        branchName: branchData['name'],
+        wifiBssids: wifiBssids,
+        latitude: branchData['latitude'],
+        longitude: branchData['longitude'],
+        geofenceRadius: branchData['geofence_radius'],
+        dataVersion: branchData['updated_at'] != null 
+            ? DateTime.parse(branchData['updated_at']).millisecondsSinceEpoch ~/ 1000
+            : 1,
+      );
+      
+      setState(() {
+        _branchData = branchData;
+        _allowedBssids = wifiBssids;
+      });
+      
+      print('✅ Fetched and cached branch data: ${branchData['name']} (${wifiBssids.length} WiFi networks)');
+    } catch (e) {
+      print('❌ Error loading branch data: $e');
+    }
   }
 
   Future<void> _loadPendingCount() async {
@@ -60,34 +209,17 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
   }
 
   Future<void> _checkCurrentStatus() async {
-    // Use the correct API to get employee status
+    // Use Supabase to get employee status
     try {
-      final status = await AttendanceApiService.fetchEmployeeStatus(widget.employeeId);
-      final branchId = status['employee']?['branchId'];
+      final status = await SupabaseAttendanceService.getEmployeeStatus(widget.employeeId);
       
       setState(() {
-        _isCheckedIn = status['attendance']?['status'] == 'active';
+        _isCheckedIn = status['isCheckedIn'] as bool? ?? false;
         // Parse checkInTime and convert from UTC to local time
-        _checkInTime = status['attendance']?['checkInTime'] != null
-            ? DateTime.parse(status['attendance']['checkInTime']).toLocal()
+        _checkInTime = status['attendance']?['check_in_time'] != null
+            ? DateTime.parse(status['attendance']['check_in_time']).toLocal()
             : null;
       });
-      
-      // Fetch branch data if available
-      if (branchId != null && branchId.toString().isNotEmpty) {
-        try {
-          final branchResponse = await BranchApiService.getBranchById(branchId.toString());
-
-          setState(() {
-            _branchData = branchResponse['branch'];
-            _allowedBssids = (branchResponse['allowedBssids'] as List<dynamic>?)
-                ?.map((e) => e.toString().toUpperCase())
-                .toList() ?? [];
-          });
-        } catch (e) {
-          print('Failed to load branch data: $e');
-        }
-      }
       
       if (_isCheckedIn && _checkInTime != null) {
         _startTimer();
@@ -99,6 +231,74 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
 
   Future<void> reloadData() async {
     await _checkCurrentStatus();
+  }
+
+  /// Load branch data for Web platform (using Hive)
+  Future<void> _loadBranchDataForWeb() async {
+    try {
+      // Check cached data from Hive (employee-specific)
+      final cached = await _offlineService.getCachedBranchData(employeeId: widget.employeeId);
+      
+      if (cached != null) {
+        setState(() {
+          _branchData = cached;
+          // Parse BSSIDs from cached data
+          final wifiList = cached['wifi_bssids'];
+          if (wifiList is List && wifiList.isNotEmpty) {
+            _allowedBssids = wifiList.map((e) => e.toString()).toList();
+          } else {
+            final bssid = cached['bssid'];
+            if (bssid != null && bssid.toString().isNotEmpty) {
+              _allowedBssids = [bssid.toString()];
+            }
+          }
+        });
+        print('✅ Using cached branch data from Hive: ${cached['name']}');
+        return;
+      }
+      
+      // Need to fetch from Supabase
+      final syncService = SyncService.instance;
+      final hasInternet = await syncService.hasInternet();
+      
+      if (!hasInternet) {
+        print('⚠️ No internet and no cached branch data on Web');
+        return;
+      }
+      
+      // Get employee data to find branch name
+      final employeeData = await SupabaseAttendanceService.getEmployeeStatus(widget.employeeId);
+      final branchName = employeeData['employee']?['branch'];
+      
+      if (branchName == null) {
+        print('⚠️ Employee has no branch assigned');
+        return;
+      }
+      
+      // Download and cache branch data (with employee ID)
+      final branchData = await _offlineService.downloadBranchData(
+        branchName, 
+        employeeId: widget.employeeId,
+      );
+      
+      if (branchData != null) {
+        setState(() {
+          _branchData = branchData;
+          final wifiList = branchData['wifi_bssids'];
+          if (wifiList is List && wifiList.isNotEmpty) {
+            _allowedBssids = wifiList.map((e) => e.toString()).toList();
+          } else {
+            final bssid = branchData['bssid'];
+            if (bssid != null && bssid.toString().isNotEmpty) {
+              _allowedBssids = [bssid.toString()];
+            }
+          }
+        });
+        print('✅ Downloaded branch data on Web: ${branchData['name']}');
+      }
+    } catch (e) {
+      print('❌ Error loading branch data on Web: $e');
+    }
   }
 
   void _startTimer() {
@@ -121,11 +321,74 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
     return '$hours:$minutes:$seconds';
   }
 
+  /// ⏰ NEW: Check for automatic checkout at shift end
+  Future<void> _checkAutoCheckout() async {
+    if (!_isCheckedIn) return; // Not checked in
+    
+    try {
+      // Get employee data with shift times
+      final employeeData = await SupabaseAttendanceService.getEmployeeStatus(widget.employeeId);
+      final emp = employeeData['employee'];
+      
+      if (emp == null || emp['shift_end_time'] == null) {
+        // No shift time defined, no auto checkout
+        return;
+      }
+      
+      final shiftEndTime = emp['shift_end_time'] as String; // "17:00"
+      final now = DateTime.now();
+      final currentTime = TimeOfDay(hour: now.hour, minute: now.minute);
+      
+      // Parse shift end time
+      final parts = shiftEndTime.split(':');
+      if (parts.length != 2) return;
+      
+      final endHour = int.tryParse(parts[0]);
+      final endMinute = int.tryParse(parts[1]);
+      if (endHour == null || endMinute == null) return;
+      
+      final shiftEnd = TimeOfDay(hour: endHour, minute: endMinute);
+      
+      // Check if current time is past shift end time
+      final currentMinutes = currentTime.hour * 60 + currentTime.minute;
+      final endMinutes = shiftEnd.hour * 60 + shiftEnd.minute;
+      
+      if (currentMinutes >= endMinutes) {
+        print('⏰ Auto checkout triggered: Current time past shift end');
+        
+        // Show notification
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('⏰ تم تسجيل الانصراف تلقائياً - انتهى موعد الشيفت ($shiftEndTime)'),
+              backgroundColor: AppColors.warning,
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        }
+        
+        // Trigger automatic checkout
+        await _handleCheckOut();
+      }
+    } catch (e) {
+      print('❌ Error in auto checkout check: $e');
+      // Don't show error to user, just log it
+    }
+  }
+
   Future<void> _handleCheckIn() async {
     setState(() => _isLoading = true);
 
     try {
       print('🚀 Starting check-in process...');
+      print('📋 Employee ID: ${widget.employeeId}');
+      print('📦 Branch Data Available: ${_branchData != null}');
+      
+      if (_branchData != null) {
+        print('📍 Branch: ${_branchData!['name']}');
+        print('📍 Lat/Lng: ${_branchData!['latitude']}, ${_branchData!['longitude']}');
+        print('🎯 Radius: ${_branchData!['geofence_radius']}m');
+      }
 
       // Create a simple employee object for validation
       final authData = await AuthService.getLoginData();
@@ -137,10 +400,18 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         branch: authData['branch'] ?? 'المركز الرئيسي',
       );
 
+      print('👤 Employee: ${employee.fullName} (${employee.id})');
+      print('🏢 Branch: ${employee.branch}');
+
       // Use the new validation method for check-in (WiFi OR Location)
+      print('⏳ Starting validation...');
       final validation = await GeofenceService.validateForCheckIn(employee);
 
+      print('📊 Validation Result: ${validation.isValid}');
+      print('💬 Message: ${validation.message}');
+
       if (!validation.isValid) {
+        print('❌ Validation failed!');
         throw Exception(validation.message);
       }
 
@@ -160,36 +431,52 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
       final hasInternet = await syncService.hasInternet();
 
       if (hasInternet) {
-        // Online mode: Send to API directly
-        final response = await AttendanceApiService.checkIn(
+        // Online mode: Send to Supabase directly
+        print('🌐 Online mode - sending to Supabase with WiFi: $wifiBSSID');
+        final response = await SupabaseAttendanceService.checkIn(
           employeeId: widget.employeeId,
           latitude: latitude,
           longitude: longitude,
-          wifiBssid: wifiBSSID ?? '',
+          wifiBssid: wifiBSSID, // ✅ إضافة WiFi BSSID
         );
         
-        // Check if already checked in
-        if (response['alreadyCheckedIn'] == true) {
-          // Already checked in - update UI to show current status
-          final checkInTime = DateTime.parse(response['attendance']['checkInTime']).toLocal();
-          setState(() {
-            _isCheckedIn = true;
-            _checkInTime = checkInTime;
-            _isLoading = false;
-          });
-          _startTimer();
+        if (response == null) {
+          throw Exception('فشل تسجيل الحضور');
+        }
+        
+        print('✅ Check-in response: ${response['id']}');
+        
+        // Check shift absence (if employee has shift times)
+        if (_branchData != null) {
+          final employeeData = await SupabaseAttendanceService.getEmployeeStatus(widget.employeeId);
+          final emp = employeeData['employee'];
           
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(response['message'] ?? 'أنت مسجل حضورك بالفعل'),
-                backgroundColor: AppColors.info,
-                behavior: SnackBarBehavior.floating,
-              ),
+          if (emp != null && emp['shift_start_time'] != null) {
+            await AbsenceService.checkShiftAbsence(
+              employeeId: widget.employeeId,
+              branchId: _branchData!['branch_id'],
+              managerId: emp['branch']?['manager_id'] ?? '',
+              shiftStartTime: emp['shift_start_time'],
+              shiftEndTime: emp['shift_end_time'] ?? '17:00',
+              checkInTime: DateTime.now(),
+            );
+            
+            // Sync daily attendance for payroll
+            final hourlyRate = (emp['hourly_rate'] as num?)?.toDouble() ?? 0.0;
+            final checkInTimeStr = TimeOfDay.now().format(context);
+            
+            await PayrollService().syncDailyAttendance(
+              employeeId: widget.employeeId,
+              date: DateTime.now(),
+              checkInTime: checkInTimeStr,
+              checkOutTime: null,
+              hourlyRate: hourlyRate,
             );
           }
-          return;
         }
+        
+        // ✅ Store attendance_id for check-out
+        _currentAttendanceId = response['id'];
         
         // New check-in successful
         setState(() {
@@ -199,6 +486,12 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         });
         
         _startTimer();
+        
+        // ✅ Start pulse tracking when check-in succeeds
+        if (_branchData != null) {
+          await _pulseService.startTracking(widget.employeeId, attendanceId: response['id']);
+          print('🎯 Started pulse tracking after check-in');
+        }
         
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -211,37 +504,67 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         }
       } else {
         // Offline mode: Save locally
+        print('📴 Offline mode - saving locally with WiFi: $wifiBSSID');
+        
+        if (kIsWeb) {
+          // ❌ Web platform doesn't support full offline mode with SQLite
+          // Show error message
+          throw Exception(
+            'الاتصال بالإنترنت مطلوب لتسجيل الحضور على المتصفح.\n'
+            'يرجى التحقق من اتصالك والمحاولة مرة أخرى.'
+          );
+        }
+        
+        // Mobile: Use SQLite for offline storage
         final db = OfflineDatabase.instance;
+        
+        // Check if we have cached branch data (means we can work offline)
+        final hasCachedData = await db.hasCachedBranchData(widget.employeeId);
+        
         await db.insertPendingCheckin(
           employeeId: widget.employeeId,
           timestamp: DateTime.now(),
           latitude: latitude,
           longitude: longitude,
-          wifiBssid: wifiBSSID ?? '',
+          wifiBssid: wifiBSSID,
         );
         
         // Start sync service if not already running
         syncService.startPeriodicSync();
         
-        // Show offline notification
-        await NotificationService.instance.showOfflineModeNotification();
+        // Only show notification if we have cached data (true offline mode)
+        if (hasCachedData) {
+          await NotificationService.instance.showOfflineModeNotification();
+        }
         
         // تحديث الحالة فوراً
         setState(() {
           _isCheckedIn = true;
           _checkInTime = DateTime.now();
           _isLoading = false;
+          // ✅ No attendance_id in offline mode
+          _currentAttendanceId = null;
         });
         
         _startTimer();
         
+        // ✅ Start pulse tracking when check-in succeeds (offline mode, no attendance_id)
+        if (_branchData != null) {
+          await _pulseService.startTracking(widget.employeeId);
+          print('🎯 Started pulse tracking after offline check-in');
+        }
+        
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('📴 تم حفظ الحضور محلياً - سيتم الرفع عند توفر الإنترنت'),
-              backgroundColor: AppColors.warning,
+            SnackBar(
+              content: Text(
+                hasCachedData 
+                  ? '📴 تم حفظ الحضور محلياً - سيتم الرفع عند توفر الإنترنت'
+                  : '✓ تم تسجيل الحضور محلياً',
+              ),
+              backgroundColor: hasCachedData ? AppColors.warning : AppColors.success,
               behavior: SnackBarBehavior.floating,
-              duration: Duration(seconds: 5),
+              duration: const Duration(seconds: 5),
             ),
           );
         }
@@ -280,14 +603,43 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           );
         }
       } else {
-        // Show regular error
+        // Show general error with helpful details
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(errorMessage),
-              backgroundColor: AppColors.error,
-              behavior: SnackBarBehavior.floating,
-              duration: const Duration(seconds: 5),
+          showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('فشل تسجيل الحضور', textAlign: TextAlign.right),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      errorMessage,
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(fontSize: 16),
+                    ),
+                    const SizedBox(height: 16),
+                    const Divider(),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'تأكد من:',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                      textAlign: TextAlign.right,
+                    ),
+                    const SizedBox(height: 8),
+                    const Text('• تنزيل بيانات الفرع أولاً', textAlign: TextAlign.right),
+                    const Text('• التواجد في موقع الفرع', textAlign: TextAlign.right),
+                    const Text('• أو الاتصال بشبكة WiFi الخاصة بالفرع', textAlign: TextAlign.right),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('حسناً'),
+                ),
+              ],
             ),
           );
         }
@@ -330,35 +682,50 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
       final hasInternet = await syncService.hasInternet();
 
       if (hasInternet) {
-        // Online mode: Send to API directly
-        final response = await AttendanceApiService.checkOut(
-          employeeId: widget.employeeId,
+        // Online mode: Send to Supabase directly
+        // ✅ Use stored attendance_id if available, otherwise fetch
+        String? attendanceId = _currentAttendanceId;
+        Map<String, dynamic>? activeAttendanceRecord;
+        
+        if (attendanceId == null) {
+          activeAttendanceRecord = await SupabaseAttendanceService.getActiveAttendance(widget.employeeId);
+          
+          if (activeAttendanceRecord == null) {
+            throw Exception('لا يوجد سجل حضور نشط\nيرجى تسجيل الحضور أولاً');
+          }
+          
+          attendanceId = activeAttendanceRecord['id'] as String;
+        }
+        
+        final success = await SupabaseAttendanceService.checkOut(
+          attendanceId: attendanceId,
           latitude: position.latitude,
           longitude: position.longitude,
-          wifiBssid: validation.bssid, // Include BSSID for check-out validation
         );
 
-        // Check if already checked out
-        if (response['alreadyCheckedOut'] == true) {
-          // Already checked out - update UI
-          setState(() {
-            _isCheckedIn = false;
-            _checkInTime = null;
-            _elapsedTime = '00:00:00';
-            _isLoading = false;
-          });
-          _timer?.cancel();
+        if (!success) {
+          throw Exception('فشل تسجيل الانصراف');
+        }
 
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(response['message'] ?? 'لقد سجلت انصرافك بالفعل'),
-                backgroundColor: AppColors.info,
-                behavior: SnackBarBehavior.floating,
-              ),
-            );
-          }
-          return;
+        // Update daily attendance with check-out time
+        final employeeData = await SupabaseAttendanceService.getEmployeeStatus(widget.employeeId);
+        final emp = employeeData['employee'];
+        
+        if (emp != null && emp['hourly_rate'] != null && activeAttendanceRecord != null) {
+          final hourlyRate = (emp['hourly_rate'] as num?)?.toDouble() ?? 0.0;
+          final checkOutTimeStr = TimeOfDay.now().format(context);
+          
+          // Get check-in time from active attendance
+          final checkInDateTime = DateTime.parse(activeAttendanceRecord['check_in_time']);
+          final checkInTimeStr = TimeOfDay.fromDateTime(checkInDateTime).format(context);
+          
+          await PayrollService().syncDailyAttendance(
+            employeeId: widget.employeeId,
+            date: DateTime.now(),
+            checkInTime: checkInTimeStr,
+            checkOutTime: checkOutTimeStr,
+            hourlyRate: hourlyRate,
+          );
         }
 
         // New check-out successful
@@ -375,6 +742,9 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         // Offline mode: Save locally
         final db = OfflineDatabase.instance;
 
+        // Check if we have cached branch data (means we can work offline)
+        final hasCachedData = await db.hasCachedBranchData(widget.employeeId);
+
         // For checkout we need attendance_id, but in offline mode we might not have it
         // So we'll save with a placeholder and let the sync service handle it
         await db.insertPendingCheckout(
@@ -388,16 +758,22 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         // Start sync service if not already running
         syncService.startPeriodicSync();
 
-        // Show offline notification
-        await NotificationService.instance.showOfflineModeNotification();
+        // Only show notification if we have cached data (true offline mode)
+        if (hasCachedData) {
+          await NotificationService.instance.showOfflineModeNotification();
+        }
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('📴 تم حفظ الانصراف محلياً - سيتم الرفع عند توفر الإنترنت'),
-              backgroundColor: AppColors.warning,
+            SnackBar(
+              content: Text(
+                hasCachedData
+                  ? '📴 تم حفظ الانصراف محلياً - سيتم الرفع عند توفر الإنترنت'
+                  : '✓ تم تسجيل الانصراف محلياً',
+              ),
+              backgroundColor: hasCachedData ? AppColors.warning : AppColors.success,
               behavior: SnackBarBehavior.floating,
-              duration: Duration(seconds: 5),
+              duration: const Duration(seconds: 5),
             ),
           );
         }
@@ -408,9 +784,14 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         _checkInTime = null;
         _elapsedTime = '00:00:00';
         _isLoading = false;
+        _currentAttendanceId = null; // ✅ Clear attendance_id
       });
 
       _timer?.cancel();
+
+      // ✅ Stop pulse tracking when check-out
+      _pulseService.stopTracking();
+      print('🛑 Stopped pulse tracking after check-out');
 
       // Stop geofence monitoring on checkout
       GeofenceService.instance.stopMonitoring();
@@ -727,10 +1108,143 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
     );
   }
 
+  /// Check if offline data is downloaded
+  Future<void> _checkOfflineDataStatus() async {
+    final isDownloaded = await _offlineService.isBranchDataDownloaded(employeeId: widget.employeeId);
+    setState(() {
+      _isDataDownloaded = isDownloaded;
+    });
+    
+    if (isDownloaded) {
+      print('✅ Branch data found for employee: ${widget.employeeId}');
+    } else {
+      print('📥 No branch data - showing download button for employee: ${widget.employeeId}');
+    }
+  }
+
+  /// Download branch data for offline use
+  Future<void> _downloadBranchData() async {
+    setState(() => _isSyncing = true);
+    
+    try {
+      final authData = await AuthService.getLoginData();
+      final employeeBranch = authData['branch'] ?? 'المركز الرئيسي';
+      
+      // Download with employee ID
+      final branchData = await _offlineService.downloadBranchData(
+        employeeBranch, 
+        employeeId: widget.employeeId,
+      );
+      
+      if (branchData != null) {
+        setState(() {
+          _isDataDownloaded = true;
+          _branchData = branchData; // ✅ حفظ البيانات في المتغير
+          
+          // ✅ Parse BSSIDs for validation
+          final bssid = branchData['bssid'];
+          if (bssid != null && bssid.toString().isNotEmpty) {
+            _allowedBssids = [bssid.toString()];
+          }
+        });
+        
+        // ✅ Reload branch data to ensure SQLite is updated on mobile
+        if (!kIsWeb) {
+          await _loadBranchData();
+        }
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('✅ تم تنزيل بيانات الفرع'),
+              backgroundColor: AppColors.success,
+            ),
+          );
+        }
+        
+        // ❌ Don't start pulse tracking here - only start on check-in!
+        // The download button just prepares the data for offline use
+      } else {
+        throw Exception('فشل في تحميل بيانات الفرع');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('خطأ: $e'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
+    } finally {
+      setState(() => _isSyncing = false);
+    }
+  }
+
+  /// Sync local data to Supabase
+  Future<void> _syncToServer() async {
+    setState(() => _isSyncing = true);
+    
+    try {
+  await _offlineService.syncToSupabase();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ تم مزامنة البيانات ورفعها بالكامل'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('خطأ في المزامنة: $e'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
+    } finally {
+      setState(() => _isSyncing = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
+      appBar: AppBar(
+        title: const Text('الصفحة الرئيسية'),
+        backgroundColor: AppColors.primaryOrange,
+        actions: [
+          // Download/Sync Button
+          if (_isSyncing)
+            const Padding(
+              padding: EdgeInsets.all(16.0),
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                ),
+              ),
+            )
+          else if (!_isDataDownloaded)
+            IconButton(
+              icon: const Icon(Icons.download),
+              onPressed: _downloadBranchData,
+              tooltip: 'تحميل بيانات الفرع',
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.sync),
+              onPressed: _syncToServer,
+              tooltip: 'مزامنة البيانات',
+            ),
+        ],
+      ),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(20.0),
@@ -1075,6 +1589,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
     );
   }
 
+  // ignore: unused_element
   Widget _buildStatCard({
     required IconData icon,
     required String label,

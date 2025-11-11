@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../models/advance_request.dart';
-import '../../../services/requests_api_service.dart';
+import '../../../services/supabase_requests_service.dart';
 import '../../../theme/app_colors.dart';
 
 class AdvanceRequestsTab extends StatefulWidget {
@@ -19,7 +19,6 @@ class AdvanceRequestsTab extends StatefulWidget {
 class _AdvanceRequestsTabState extends State<AdvanceRequestsTab> {
   List<AdvanceRequest> _requests = <AdvanceRequest>[];
   bool _loading = true;
-  bool _deleting = false;
   String? _error;
   double? _currentEarnings;
   double? _maxAdvance;
@@ -38,7 +37,13 @@ class _AdvanceRequestsTabState extends State<AdvanceRequestsTab> {
     });
 
     try {
-      final requests = await RequestsApiService.fetchAdvanceRequests(widget.employeeId);
+      final requestsData = await SupabaseRequestsService.getSalaryAdvanceRequests(
+        employeeId: widget.employeeId,
+      );
+      
+      // Convert from Supabase format to AdvanceRequest model
+      final requests = requestsData.map((data) => AdvanceRequest.fromJson(data)).toList();
+      
       if (!mounted) {
         return;
       }
@@ -59,20 +64,16 @@ class _AdvanceRequestsTabState extends State<AdvanceRequestsTab> {
 
   Future<void> _loadCurrentEarnings() async {
     try {
-      final response = await RequestsApiService.fetchCurrentEarnings(widget.employeeId);
+      final response = await SupabaseRequestsService.getEmployeeSalaryInfo(widget.employeeId);
       if (!mounted) {
         return;
       }
 
-      final earnings = (response['currentEarnings'] ??
-              response['current_earnings'] ??
-              response['salary'])
-          as num?;
+      final earnings = (response['currentEarnings'] ?? response['current_earnings'] ?? 0) as num?;
       final maxAdvance = (response['maxAdvance'] ?? response['max_advance']) as num?;
       setState(() {
         _currentEarnings = earnings?.toDouble();
-        _maxAdvance =
-            maxAdvance?.toDouble() ?? (_currentEarnings != null ? _currentEarnings! * 0.3 : null);
+        _maxAdvance = maxAdvance?.toDouble() ?? (_currentEarnings != null ? _currentEarnings! * 0.3 : null);
       });
     } catch (_) {
       // Earnings information is optional; ignore failures silently.
@@ -104,40 +105,10 @@ class _AdvanceRequestsTabState extends State<AdvanceRequestsTab> {
     }
   }
 
-  Future<void> _deleteRejectedRequests() async {
-    setState(() => _deleting = true);
-    try {
-      await RequestsApiService.deleteRejectedAdvances(widget.employeeId);
-      await _loadRequests();
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('تم حذف الطلبات المرفوضة'),
-          backgroundColor: AppColors.success,
-        ),
-      );
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('تعذر الحذف: $error'),
-          backgroundColor: AppColors.error,
-        ),
-      );
-    } finally {
-      if (mounted) {
-        setState(() => _deleting = false);
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final hasRejected = _requests.any((request) => request.isRejected);
+    // الطلبات القديمة المرفوضة/الموافق عليها مش هتظهر خالص
+    // لأن getSalaryAdvanceRequests بترجع pending بس للموظفين
 
     return RefreshIndicator(
       onRefresh: _loadRequests,
@@ -156,26 +127,6 @@ class _AdvanceRequestsTabState extends State<AdvanceRequestsTab> {
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
           ),
-          if (hasRejected) ...[
-            const SizedBox(height: 12),
-            ElevatedButton.icon(
-              onPressed: _deleting ? null : _deleteRejectedRequests,
-              icon: _deleting
-                  ? const SizedBox(
-                      height: 18,
-                      width: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.delete_forever),
-              label: const Text('حذف الطلبات المرفوضة'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.error,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-            ),
-          ],
           const SizedBox(height: 24),
           if (_maxAdvance != null)
             Container(
@@ -213,9 +164,9 @@ class _AdvanceRequestsTabState extends State<AdvanceRequestsTab> {
                 ],
               ),
             ),
-          if (_maxAdvance != null) const SizedBox(height: 24),
+          const SizedBox(height: 24),
           const Text(
-            'الطلبات السابقة',
+            'الطلبات المعلقة',
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.bold,
@@ -248,66 +199,179 @@ class _AdvanceRequestCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final color = _statusColor(request);
     final statusText = _statusText(request);
+    final isApproved = request.isApproved;
+    final isRejected = request.isRejected;
+    
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      elevation: isApproved || isRejected ? 3 : 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: isApproved 
+              ? AppColors.success 
+              : isRejected 
+                  ? AppColors.error 
+                  : Colors.transparent,
+          width: isApproved || isRejected ? 2 : 0,
+        ),
+      ),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text(
-                  'طلب سلفة',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryOrange.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(
+                    Icons.attach_money,
+                    color: AppColors.primaryOrange,
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Text(
+                    'طلب سلفة',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
                 ),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
-                    color: color.withOpacity(0.1),
-                    border: Border.all(color: color),
-                    borderRadius: BorderRadius.circular(12),
+                    color: color,
+                    borderRadius: BorderRadius.circular(20),
                   ),
                   child: Text(
                     statusText,
-                    style: TextStyle(color: color, fontWeight: FontWeight.w600),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            Text(
-              'المبلغ: ${request.amount.toStringAsFixed(2)} جنيه',
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: AppColors.primaryOrange,
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: AppColors.primaryOrange.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.primaryOrange.withOpacity(0.2)),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Text(
+                        'المبلغ المطلوب',
+                        style: TextStyle(
+                          color: AppColors.textSecondary,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '${request.amount.toStringAsFixed(0)} جنيه',
+                    style: const TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.primaryOrange,
+                    ),
+                  ),
+                  if (request.eligibleAmount != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      '(الحد المتاح: ${request.eligibleAmount!.toStringAsFixed(0)} جنيه)',
+                      style: TextStyle(
+                        color: AppColors.textSecondary.withOpacity(0.8),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
-            if (request.eligibleAmount != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  'الحد المتاح: ${request.eligibleAmount!.toStringAsFixed(0)} جنيه',
-                  style: const TextStyle(color: AppColors.textSecondary),
+            
+            // نتيجة المراجعة
+            if (isApproved || isRejected) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: (isApproved ? AppColors.success : AppColors.error).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: isApproved ? AppColors.success : AppColors.error,
+                    width: 1,
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          isApproved ? Icons.check_circle : Icons.cancel,
+                          size: 18,
+                          color: isApproved ? AppColors.success : AppColors.error,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          isApproved ? 'تم الموافقة ✓' : 'تم الرفض ✗',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: isApproved ? AppColors.success : AppColors.error,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (request.reviewedBy != null) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        'تمت المراجعة بواسطة: ${request.reviewedBy}',
+                        style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                      ),
+                    ],
+                    if (isRejected && request.rejectionReason != null && request.rejectionReason!.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        'سبب الرفض: ${request.rejectionReason}',
+                        style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                      ),
+                    ],
+                  ],
                 ),
               ),
-            const SizedBox(height: 6),
-            Text(
-              'تاريخ الطلب: ${_formatDate(request.createdAt)}',
-              style: const TextStyle(color: AppColors.textTertiary),
+            ],
+            
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                const Icon(Icons.access_time, size: 14, color: AppColors.textTertiary),
+                const SizedBox(width: 4),
+                Text(
+                  'تاريخ الطلب: ${_formatDate(request.createdAt)}',
+                  style: const TextStyle(color: AppColors.textTertiary, fontSize: 12),
+                ),
+              ],
             ),
-            if (request.rejectionReason != null && request.rejectionReason!.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  'سبب الرفض: ${request.rejectionReason}',
-                  style: const TextStyle(color: AppColors.error),
-                ),
-              ),
           ],
         ),
       ),
@@ -468,10 +532,19 @@ class _AdvanceRequestSheetState extends State<_AdvanceRequestSheet> {
     setState(() => _isSubmitting = true);
 
     try {
-      final request = await RequestsApiService.submitAdvanceRequest(
+      final response = await SupabaseRequestsService.createSalaryAdvanceRequest(
         employeeId: widget.employeeId,
         amount: amount,
+        reason: 'طلب سلفة',
       );
+      
+      if (response == null) {
+        throw Exception('فشل إرسال الطلب');
+      }
+      
+      // Convert response to AdvanceRequest model  
+      final request = AdvanceRequest.fromJson(response);
+      
       if (!mounted) {
         return;
       }
@@ -481,10 +554,18 @@ class _AdvanceRequestSheetState extends State<_AdvanceRequestSheet> {
         return;
       }
       setState(() => _isSubmitting = false);
+      
+      // استخراج رسالة الخطأ من Exception
+      String errorMessage = error.toString();
+      if (errorMessage.startsWith('Exception: ')) {
+        errorMessage = errorMessage.substring(11);
+      }
+      
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('تعذر إرسال الطلب: $error'),
+          content: Text(errorMessage),
           backgroundColor: AppColors.error,
+          duration: const Duration(seconds: 4),
         ),
       );
     }

@@ -3,12 +3,14 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../theme/app_colors.dart';
 import '../../services/auth_service.dart';
 import '../../services/attendance_api_service.dart';
+import '../../services/blv/blv_manager.dart';
 import '../branch_manager_screen.dart';
 import '../employee/refreshable_tab.dart';
 import '../login_screen.dart';
 import 'manager_home_page.dart';
 import 'manager_report_page.dart';
 import 'manager_profile_page.dart';
+import 'blv_flags_page.dart';
 
 class ManagerMainScreen extends StatefulWidget {
   const ManagerMainScreen({
@@ -30,6 +32,7 @@ class _ManagerMainScreenState extends State<ManagerMainScreen> {
   int _currentIndex = 0;
   late List<Widget> _pages;
   late List<GlobalKey<RefreshableTabState>> _tabKeys;
+  int _unresolvedFlagsCount = 0;
 
   @override
   void initState() {
@@ -49,6 +52,21 @@ class _ManagerMainScreenState extends State<ManagerMainScreen> {
         builder: (context) => ManagerProfilePage(managerId: widget.managerId),
       ),
     ];
+    _loadUnresolvedFlagsCount();
+  }
+
+  Future<void> _loadUnresolvedFlagsCount() async {
+    try {
+      final blvManager = BLVManager();
+      final flags = await blvManager.fetchAllFlags();
+      if (mounted) {
+        setState(() {
+          _unresolvedFlagsCount = flags.length;
+        });
+      }
+    } catch (e) {
+      // Ignore errors silently
+    }
   }
 
   @override
@@ -59,6 +77,28 @@ class _ManagerMainScreenState extends State<ManagerMainScreen> {
         backgroundColor: AppColors.primaryOrange,
         foregroundColor: Colors.white,
         actions: [
+          // BLV Flags - تنبيهات النشاط المشبوه
+          IconButton(
+            icon: Badge(
+              isLabelVisible: _unresolvedFlagsCount > 0,
+              label: Text(_unresolvedFlagsCount.toString()),
+              backgroundColor: Colors.red,
+              child: const Icon(Icons.flag_outlined),
+            ),
+            tooltip: 'التنبيهات',
+            onPressed: () async {
+              await Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => BLVFlagsPage(
+                    managerId: widget.managerId,
+                    branchId: null, // Show all branches for this manager
+                  ),
+                ),
+              );
+              // Reload count after returning
+              _loadUnresolvedFlagsCount();
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.dashboard_customize),
             tooltip: 'لوحة تحكم المدير',

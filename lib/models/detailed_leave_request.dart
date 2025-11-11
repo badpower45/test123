@@ -38,6 +38,9 @@ class DetailedLeaveRequest {
   });
 
   factory DetailedLeaveRequest.fromJson(Map<String, dynamic> json) {
+    // Handle nested employee data from Supabase join
+    final employeeData = json['employees'] as Map<String, dynamic>?;
+    
     return DetailedLeaveRequest(
       // Original fields
       requestId: (json['requestId'] ?? json['id']) as String,
@@ -50,12 +53,12 @@ class DetailedLeaveRequest {
       allowanceAmount: ((json['allowanceAmount'] ?? json['allowance_amount']) as num?)?.toDouble() ?? 0,
       createdAt: DateTime.parse((json['createdAt'] ?? json['created_at']) as String),
 
-      // New employee detail fields
-      employeeId: (json['employeeId'] ?? json['employee_id']) as String,
-      employeeName: (json['employeeName'] ?? json['employee_name'] ?? 'غير معروف') as String,
-      employeeRole: (json['employeeRole'] ?? json['employee_role'] ?? 'staff') as String,
+      // Employee details (from nested 'employees' object or direct fields)
+      employeeId: (employeeData?['id'] ?? json['employeeId'] ?? json['employee_id']) as String,
+      employeeName: (employeeData?['full_name'] ?? json['employeeName'] ?? json['employee_name'] ?? 'غير معروف') as String,
+      employeeRole: (employeeData?['role'] ?? json['employeeRole'] ?? json['employee_role'] ?? 'staff') as String,
       employeeSalary: json['employeeSalary'] as String?,
-      branchName: json['branchName'] as String?,
+      branchName: (employeeData?['branch'] ?? json['branchName']) as String?,
     );
   }
 }

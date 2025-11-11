@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/employee.dart';
 import '../models/shift_status.dart';
 import 'attendance_api_service.dart';
+import 'offline_data_service.dart';
 
 class AuthService with ChangeNotifier {
   static late SharedPreferences _prefs;
@@ -79,6 +80,10 @@ class AuthService with ChangeNotifier {
 
   // --- الدالة المعدلة ---
   Future<void> logoutInstance() async {
+    // Get employee ID before clearing
+    final loginData = await getLoginData();
+    final employeeId = loginData['employeeId'];
+    
     // 1. التحقق إذا كان المستخدم "حاضر" حالياً
     if (_shiftStatus.isCheckedIn) {
       // 2. إذا كان كذلك، قم بتشغيل الانصراف الإجباري على الخادم
@@ -90,7 +95,18 @@ class AuthService with ChangeNotifier {
       }
     }
 
-    // 3. متابعة عملية تسجيل الخروج المحلية كالمعتاد
+    // 3. Clear employee-specific offline data
+    if (employeeId != null) {
+      try {
+        final offlineService = OfflineDataService();
+        await offlineService.clearBranchDataForEmployee(employeeId);
+        print('🗑️ Cleared offline data for employee: $employeeId');
+      } catch (e) {
+        print('⚠️ Error clearing employee offline data: $e');
+      }
+    }
+
+    // 4. متابعة عملية تسجيل الخروج المحلية كالمعتاد
     _employee = null;
     _shiftStatus = ShiftStatus.inactive();
 

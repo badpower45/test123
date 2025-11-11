@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import '../../../models/detailed_attendance_request.dart';
-import '../../../services/owner_api_service.dart';
+import '../../../services/supabase_requests_service.dart';
 import '../../../theme/app_colors.dart';
 
 class OwnerAttendanceRequestsScreen extends StatefulWidget {
-  const OwnerAttendanceRequestsScreen({super.key});
+  const OwnerAttendanceRequestsScreen({super.key, required this.ownerId});
+
+  final String ownerId;
 
   @override
   State<OwnerAttendanceRequestsScreen> createState() => _OwnerAttendanceRequestsScreenState();
@@ -14,6 +16,7 @@ class _OwnerAttendanceRequestsScreenState extends State<OwnerAttendanceRequestsS
   List<DetailedAttendanceRequest> _requests = [];
   bool _loading = true;
   String? _error;
+  String _filterStatus = 'pending'; // pending, approved, rejected, all
 
   @override
   void initState() {
@@ -24,7 +27,12 @@ class _OwnerAttendanceRequestsScreenState extends State<OwnerAttendanceRequestsS
   Future<void> _loadRequests() async {
     setState(() { _loading = true; _error = null; });
     try {
-      final requests = await OwnerApiService.getPendingAttendanceRequests('OWNER001');
+      final requestsData = await SupabaseRequestsService.getAllAttendanceRequestsWithEmployees(
+        status: _filterStatus == 'all' ? null : _filterStatus,
+      );
+      
+      final requests = requestsData.map((data) => DetailedAttendanceRequest.fromJson(data)).toList();
+      
       if (mounted) setState(() { _requests = requests; _loading = false; });
     } catch (error) {
       if (mounted) setState(() { _error = error.toString(); _loading = false; });
@@ -33,20 +41,24 @@ class _OwnerAttendanceRequestsScreenState extends State<OwnerAttendanceRequestsS
 
   Future<void> _approveRequest(String requestId) async {
     try {
-      await OwnerApiService.approveAttendanceRequest(
+      final success = await SupabaseRequestsService.reviewAttendanceRequest(
         requestId: requestId,
-        ownerUserId: 'OWNER001',
+        reviewedBy: widget.ownerId,
+        status: 'approved',
       );
+      
+      if (!success) {
+        throw Exception('فشل في الموافقة على الطلب');
+      }
+      
       if (mounted) {
-        setState(() {
-          _requests.removeWhere((req) => req.requestId == requestId);
-        });
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('تمت الموافقة على الطلب وتحديث الحضور بنجاح'),
+            content: Text('✓ تمت الموافقة على الطلب'),
             backgroundColor: AppColors.success,
           ),
         );
+        _loadRequests();
       }
     } catch (error) {
       if (mounted) {
@@ -60,16 +72,99 @@ class _OwnerAttendanceRequestsScreenState extends State<OwnerAttendanceRequestsS
     }
   }
 
+  Future<void> _rejectRequest(String requestId) async {
+    final reason = await _showRejectionDialog();
+    if (reason == null || reason.isEmpty) return;
+
+    try {
+      final success = await SupabaseRequestsService.reviewAttendanceRequest(
+        requestId: requestId,
+        reviewedBy: widget.ownerId,
+        status: 'rejected',
+        reviewNotes: reason,
+      );
+      
+      if (!success) {
+        throw Exception('فشل في رفض الطلب');
+      }
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✓ تم رفض الطلب'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        _loadRequests();
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('حدث خطأ: ${error.toString()}'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<String?> _showRejectionDialog() async {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('سبب الرفض'),
+        content: TextField(
+          controller: controller,
+          maxLines: 3,
+          decoration: const InputDecoration(
+            hintText: 'اكتب سبب رفض الطلب...',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('إلغاء'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryOrange),
+            child: const Text('رفض'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
-        title: const Text('طلبات الحضور المعلقة'),
+        title: const Text('طلبات الحضور'),
         centerTitle: true,
-        backgroundColor: Colors.white,
-        foregroundColor: AppColors.textPrimary,
+        backgroundColor: AppColors.primaryOrange,
+        foregroundColor: Colors.white,
         elevation: 0,
+        actions: [
+          // Filter dropdown
+          PopupMenuButton<String>(
+            initialValue: _filterStatus,
+            onSelected: (value) {
+              setState(() => _filterStatus = value);
+              _loadRequests();
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(value: 'pending', child: Text('المعلقة')),
+              const PopupMenuItem(value: 'approved', child: Text('الموافق عليها')),
+              const PopupMenuItem(value: 'rejected', child: Text('المرفوضة')),
+              const PopupMenuItem(value: 'all', child: Text('الكل')),
+            ],
+            icon: const Icon(Icons.filter_list),
+          ),
+        ],
       ),
       body: RefreshIndicator(
         onRefresh: _loadRequests,

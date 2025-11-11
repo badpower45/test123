@@ -161,14 +161,27 @@ class _ManagerEmployeeDetailPageState extends State<ManagerEmployeeDetailPage> {
                             
                             const SizedBox(height: 12),
                             
-                            _buildInfoCard(
-                              icon: Icons.payments,
-                              label: 'الراتب الشهري',
-                              value: '${_employee!.monthlySalary.toStringAsFixed(0)} جنيه',
-                              color: AppColors.success,
-                            ),
+                            if (_employee!.hourlyRate > 0)
+                              _buildInfoCard(
+                                icon: Icons.payments,
+                                label: 'سعر الساعة',
+                                value: '${_employee!.hourlyRate.toStringAsFixed(0)} جنيه/ساعة',
+                                color: AppColors.success,
+                              ),
                             
-                            const SizedBox(height: 12),
+                            if (_employee!.hourlyRate > 0)
+                              const SizedBox(height: 12),
+                            
+                            if (_employee!.shiftStartTime != null && _employee!.shiftEndTime != null)
+                              _buildInfoCard(
+                                icon: Icons.access_time,
+                                label: 'مواعيد الشيفت',
+                                value: '${_employee!.shiftStartTime} - ${_employee!.shiftEndTime}',
+                                color: AppColors.info,
+                              ),
+                            
+                            if (_employee!.shiftStartTime != null && _employee!.shiftEndTime != null)
+                              const SizedBox(height: 12),
                             
                             _buildInfoCard(
                               icon: _employee!.isActive ? Icons.check_circle : Icons.cancel,

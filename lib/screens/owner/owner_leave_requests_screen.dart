@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../models/detailed_leave_request.dart';
-import '../../services/owner_api_service.dart';
+import '../../services/supabase_requests_service.dart';
 import '../../theme/app_colors.dart';
 
 class OwnerLeaveRequestsScreen extends StatefulWidget {
@@ -17,7 +17,10 @@ class OwnerLeaveRequestsScreen extends StatefulWidget {
 }
 
 class _OwnerLeaveRequestsScreenState extends State<OwnerLeaveRequestsScreen> {
-  late Future<List<DetailedLeaveRequest>> _requestsFuture;
+  List<DetailedLeaveRequest> _requests = [];
+  bool _loading = true;
+  String? _error;
+  String _filterStatus = 'pending'; // pending, approved, rejected, all
 
   @override
   void initState() {
@@ -25,23 +28,50 @@ class _OwnerLeaveRequestsScreenState extends State<OwnerLeaveRequestsScreen> {
     _loadRequests();
   }
 
-  void _loadRequests() {
+  Future<void> _loadRequests() async {
     setState(() {
-      _requestsFuture = OwnerApiService.getPendingLeaveRequests(widget.ownerId);
+      _loading = true;
+      _error = null;
     });
+
+    try {
+      final requestsData = await SupabaseRequestsService.getAllLeaveRequestsWithEmployees(
+        status: _filterStatus == 'all' ? null : _filterStatus,
+      );
+
+      final requests = requestsData.map((data) => DetailedLeaveRequest.fromJson(data)).toList();
+
+      if (!mounted) return;
+      setState(() {
+        _requests = requests;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.toString();
+        _loading = false;
+      });
+    }
   }
 
   Future<void> _approveRequest(String requestId) async {
     try {
-      await OwnerApiService.approveLeaveRequest(
-        leaveRequestId: requestId,
-        ownerUserId: widget.ownerId,
+      final success = await SupabaseRequestsService.reviewLeaveRequest(
+        requestId: requestId,
+        reviewedBy: widget.ownerId,
+        status: 'approved',
       );
+
+      if (!success) {
+        throw Exception('فشل في الموافقة على الطلب');
+      }
+
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('✓ تمت الموافقة على الطلب وتسجيل الإجازة'),
+          content: Text('✓ تمت الموافقة على الطلب'),
           backgroundColor: AppColors.success,
         ),
       );
@@ -60,14 +90,20 @@ class _OwnerLeaveRequestsScreenState extends State<OwnerLeaveRequestsScreen> {
 
   Future<void> _rejectRequest(String requestId) async {
     final reason = await _showRejectionReasonDialog();
-    if (reason == null) return;
+    if (reason == null || reason.isEmpty) return;
 
     try {
-      await OwnerApiService.rejectLeaveRequest(
-        leaveRequestId: requestId,
-        ownerUserId: widget.ownerId,
-        reason: reason,
+      final success = await SupabaseRequestsService.reviewLeaveRequest(
+        requestId: requestId,
+        reviewedBy: widget.ownerId,
+        status: 'rejected',
+        reviewNotes: reason,
       );
+
+      if (!success) {
+        throw Exception('فشل في رفض الطلب');
+      }
+
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -124,77 +160,84 @@ class _OwnerLeaveRequestsScreenState extends State<OwnerLeaveRequestsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('طلبات الإجازات المعلقة'),
+        title: const Text('طلبات الإجازات'),
         backgroundColor: AppColors.primaryOrange,
         foregroundColor: Colors.white,
+        actions: [
+          // Filter dropdown
+          PopupMenuButton<String>(
+            initialValue: _filterStatus,
+            onSelected: (value) {
+              setState(() => _filterStatus = value);
+              _loadRequests();
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(value: 'pending', child: Text('المعلقة')),
+              const PopupMenuItem(value: 'approved', child: Text('الموافق عليها')),
+              const PopupMenuItem(value: 'rejected', child: Text('المرفوضة')),
+              const PopupMenuItem(value: 'all', child: Text('الكل')),
+            ],
+            icon: const Icon(Icons.filter_list),
+          ),
+        ],
       ),
-      body: FutureBuilder<List<DetailedLeaveRequest>>(
-        future: _requestsFuture,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snapshot.hasError) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.error_outline, size: 56, color: AppColors.error),
-                  const SizedBox(height: 16),
-                  Text(
-                    'خطأ: ${snapshot.error}',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: AppColors.textSecondary),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _error != null
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.error_outline, size: 56, color: AppColors.error),
+                      const SizedBox(height: 16),
+                      Text(
+                        'خطأ: $_error',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: AppColors.textSecondary),
+                      ),
+                      const SizedBox(height: 16),
+                      ElevatedButton(
+                        onPressed: _loadRequests,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.primaryOrange,
+                        ),
+                        child: const Text('إعادة المحاولة'),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 16),
-                  ElevatedButton(
-                    onPressed: _loadRequests,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primaryOrange,
+                )
+              : _requests.isEmpty
+                  ? const Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.inbox, size: 56, color: AppColors.textTertiary),
+                          SizedBox(height: 16),
+                          Text(
+                            'لا توجد طلبات',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : RefreshIndicator(
+                      onRefresh: () async => _loadRequests(),
+                      child: ListView.builder(
+                        padding: const EdgeInsets.all(16),
+                        itemCount: _requests.length,
+                        itemBuilder: (context, index) {
+                          return _DetailedLeaveRequestCard(
+                            request: _requests[index],
+                            onApproved: () => _approveRequest(_requests[index].requestId),
+                            onRejected: () => _rejectRequest(_requests[index].requestId),
+                          );
+                        },
+                      ),
                     ),
-                    child: const Text('إعادة المحاولة'),
-                  ),
-                ],
-              ),
-            );
-          }
-          if (!snapshot.hasData || snapshot.data!.isEmpty) {
-            return const Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.inbox, size: 56, color: AppColors.textTertiary),
-                  SizedBox(height: 16),
-                  Text(
-                    'لا توجد طلبات معلقة',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                ],
-              ),
-            );
-          }
-
-          final requests = snapshot.data!;
-          return RefreshIndicator(
-            onRefresh: () async => _loadRequests(),
-            child: ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: requests.length,
-              itemBuilder: (context, index) {
-                return _DetailedLeaveRequestCard(
-                  request: requests[index],
-                  onApproved: () => _approveRequest(requests[index].requestId),
-                  onRejected: () => _rejectRequest(requests[index].requestId),
-                );
-              },
-            ),
-          );
-        },
-      ),
     );
   }
 }

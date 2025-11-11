@@ -1,18 +1,20 @@
 import 'package:flutter/material.dart';
 import '../../theme/app_colors.dart';
 import '../../models/employee.dart';
-import '../../services/employee_repository.dart';
+import '../../services/branch_api_service.dart';
 import 'manager_employee_detail_page.dart';
 import 'manager_add_employee_page.dart';
 
 class ManagerEmployeesPage extends StatefulWidget {
   final String managerId;
-  final String managerBranch;
+  final String branchId;
+  final String branchName;
   
   const ManagerEmployeesPage({
     super.key,
     required this.managerId,
-    required this.managerBranch,
+    required this.branchId,
+    required this.branchName,
   });
 
   @override
@@ -33,11 +35,36 @@ class _ManagerEmployeesPageState extends State<ManagerEmployeesPage> {
   Future<void> _loadEmployees() async {
     setState(() => _loading = true);
     try {
-      final allEmployees = await EmployeeRepository.all();
-      // Filter employees by manager's branch
-      final branchEmployees = allEmployees
-          .where((emp) => emp.branch == widget.managerBranch)
-          .toList();
+      // ✅ Fetch employees directly from API instead of local cache
+      final employeesData = await BranchApiService.getBranchEmployees(widget.branchId);
+      
+      // Convert API response to Employee models
+      final branchEmployees = employeesData.map((empData) {
+        return Employee(
+          id: empData['id'] as String,
+          fullName: empData['full_name'] as String,
+          pin: empData['pin'] as String,
+          role: _parseRole(empData['role'] as String),
+          permissions: _parsePermissions(empData['permissions']),
+          isActive: empData['is_active'] as bool? ?? true,
+          branch: widget.branchName,
+          hourlyRate: (empData['hourly_rate'] as num?)?.toDouble() ?? 0.0,
+          shiftStartTime: empData['shift_start_time'] as String?,
+          shiftEndTime: empData['shift_end_time'] as String?,
+          address: empData['address'] as String?,
+          birthDate: empData['birth_date'] != null 
+              ? DateTime.parse(empData['birth_date']) 
+              : null,
+          email: empData['email'] as String?,
+          phone: empData['phone'] as String?,
+          createdAt: empData['created_at'] != null 
+              ? DateTime.parse(empData['created_at']) 
+              : DateTime.now(),
+          updatedAt: empData['updated_at'] != null 
+              ? DateTime.parse(empData['updated_at']) 
+              : DateTime.now(),
+        );
+      }).toList();
       
       setState(() {
         _employees = branchEmployees;
@@ -48,10 +75,55 @@ class _ManagerEmployeesPageState extends State<ManagerEmployeesPage> {
       setState(() => _loading = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('فشل تحميل الموظفين')),
+          SnackBar(content: Text('فشل تحميل الموظفين: ${e.toString()}')),
         );
       }
     }
+  }
+
+  EmployeeRole _parseRole(String role) {
+    switch (role.toLowerCase()) {
+      case 'owner':
+        return EmployeeRole.owner;
+      case 'manager':
+        return EmployeeRole.manager;
+      case 'admin':
+        return EmployeeRole.admin;
+      case 'hr':
+        return EmployeeRole.hr;
+      case 'monitor':
+        return EmployeeRole.monitor;
+      default:
+        return EmployeeRole.staff;
+    }
+  }
+
+  List<EmployeePermission> _parsePermissions(dynamic permissions) {
+    if (permissions == null) return [];
+    if (permissions is List) {
+      return permissions.map((p) {
+        switch (p.toString().toLowerCase()) {
+          case 'monitor_access':
+          case 'monitoraccess':
+            return EmployeePermission.monitorAccess;
+          case 'manage_scheduling':
+          case 'managescheduling':
+            return EmployeePermission.manageScheduling;
+          case 'view_payroll':
+          case 'viewpayroll':
+            return EmployeePermission.viewPayroll;
+          case 'apply_discounts':
+          case 'applydiscounts':
+            return EmployeePermission.applyDiscounts;
+          case 'manage_employees':
+          case 'manageemployees':
+            return EmployeePermission.manageEmployees;
+          default:
+            return null;
+        }
+      }).whereType<EmployeePermission>().toList();
+    }
+    return [];
   }
 
   List<Employee> get _filteredEmployees {
@@ -96,7 +168,7 @@ class _ManagerEmployeesPageState extends State<ManagerEmployeesPage> {
             MaterialPageRoute(
               builder: (context) => ManagerAddEmployeePage(
                 managerId: widget.managerId,
-                managerBranch: widget.managerBranch,
+                managerBranch: widget.branchName,
               ),
             ),
           );

@@ -56,7 +56,7 @@ class AuthApiService {
             role: mappedRole,
             permissions: const [], // Server doesn't return permissions yet
             branch: employeeData['branch'] ?? '',
-            monthlySalary: 0, // Server doesn't return salary in login
+            hourlyRate: 0, // Server doesn't return hourly rate in login
           );
 
           print('🔍 LOGIN DEBUG - Employee object role: ${employee.role}');
@@ -121,7 +121,7 @@ class AuthApiService {
             role: _mapRoleFromString(managerData['role']),
             permissions: const [],
             branch: managerData['branch'] ?? '',
-            monthlySalary: 0,
+            hourlyRate: 0,
           );
         } else {
           throw Exception('البريد الإلكتروني أو كلمة المرور غير صحيحة');

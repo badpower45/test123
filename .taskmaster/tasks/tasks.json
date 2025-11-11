@@ -1,0 +1,346 @@
+{
+  "master": {
+    "tasks": [
+      {
+        "id": "1",
+        "title": "Finalize Supabase Database Schema for BLV",
+        "description": "Create and configure the required Supabase PostgreSQL tables to support the Behavioral Location Verification (BLV) system, including data collection during the learning phase, storing learned patterns, and logging real-time validation attempts.",
+        "details": "Using the Supabase dashboard or SQL migration scripts, create the tables as defined in the PRD's 'Data Model' section. Ensure all columns, types, foreign key relationships, and default values are correctly implemented. The key tables to create are `blv_patterns`, `blv_learning_data`, `blv_validation_logs`, `pulses`, `attendance`, and update the `branches` table with BLV-related fields. Pay close attention to JSONB types for sensor data storage. \n\nExample SQL:\n```sql\n-- Branch BLV patterns (Functional Fingerprint)\nCREATE TABLE blv_patterns (\n  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n  branch_id UUID REFERENCES branches(id) ON DELETE CASCADE,\n  learning_complete BOOLEAN DEFAULT FALSE,\n  wifi_bssids JSONB,\n  gps_center_lat DECIMAL,\n  gps_center_lng DECIMAL,\n  cell_towers JSONB,\n  sound_avg_db INTEGER,\n  sound_std_deviation DECIMAL,\n  light_avg_lux INTEGER,\n  motion_patterns JSONB,\n  bluetooth_beacons JSONB,\n  created_at TIMESTAMPTZ DEFAULT NOW()\n);\n\n-- Raw BLV data collection (during learning)\nCREATE TABLE blv_learning_data (\n  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n  branch_id UUID REFERENCES branches(id) ON DELETE CASCADE,\n  employee_id TEXT,\n  timestamp TIMESTAMPTZ DEFAULT NOW(),\n  wifi_data JSONB, gps_data JSONB, cell_data JSONB, sound_data JSONB, motion_data JSONB, light_data JSONB, bluetooth_data JSONB, battery_data JSONB\n);\n```",
+        "testStrategy": "Verify that all tables (`blv_patterns`, `blv_learning_data`, `blv_validation_logs`, `pulses`, etc.) exist in the Supabase schema via the dashboard. Attempt to insert and select sample data for each table to ensure constraints, relationships, and default values work as expected. Confirm that Row-Level Security (RLS) policies can be applied to these tables.",
+        "priority": "high",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-11-09T01:51:38.223Z"
+      },
+      {
+        "id": "2",
+        "title": "Integrate Remaining Sensor Packages into Flutter App",
+        "description": "Expand the sensor integration in the Flutter application to collect all data points required for the BLV Functional Fingerprint. This includes Cell Tower, Ambient Sound, Motion, Light, Bluetooth, and Battery data.",
+        "details": "Add the specified Flutter packages to `pubspec.yaml` and implement a unified `SensorService` to abstract data collection. \nPackages to add: `telephony`, `noise_meter`, `sensors_plus`, `light_sensor`, `flutter_blue_plus`, `battery_plus`. \nCreate wrapper functions for each sensor to handle permissions (especially for location, microphone, and bluetooth) and provide a consistent output format. The service should have a method like `collectSensorSnapshot()` that returns a map of all current sensor readings. \n\nPseudo-code:\n```dart\nclass SensorService {\n  Future<Map<String, dynamic>> collectSensorSnapshot() async {\n    // Note: GPS and WiFi are already implemented per PRD\n    final cellData = await Telephony.instance.getCellTowerInfo();\n    final soundData = await NoiseMeter().getNoiseReading();\n    final motionData = await SensorsPlatform.instance.accelerometerEvents.first;\n    final lightData = await LightSensor.lightSensorStream.first;\n    final btData = await FlutterBluePlus.startScan();\n    final batteryData = await Battery().getBatteryLevel();\n    \n    return {\n      'cell': cellData.toJson(),\n      'sound': {'db': soundData.meanDecibel},\n      'motion': {'x': motionData.x, 'y': motionData.y, 'z': motionData.z},\n      'light': {'lux': lightData},\n      'bluetooth': btData.map((d) => d.device.id.toString()).toList(),\n      'battery': {'level': batteryData, 'charging': await Battery().onBatteryStateChanged.first}\n    };\n  }\n}\n```",
+        "testStrategy": "Run the app on physical Android and iOS devices. Create a debug screen that displays live data from all newly integrated sensors. Verify that permissions are requested correctly and that the data format matches expectations. Test in different environments (quiet/loud, bright/dark) to confirm sensor responsiveness.",
+        "priority": "high",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-11-09T01:52:18.524Z"
+      },
+      {
+        "id": "3",
+        "title": "Implement Raw Data Collection for 14-Day Learning Phase",
+        "description": "Create the functionality within the app to collect and upload sensor snapshots to Supabase during a branch's 14-day learning phase. This data will be stored in the `blv_learning_data` table.",
+        "details": "When an employee at a branch still in the learning phase checks in, trigger the `SensorService.collectSensorSnapshot()` method periodically (e.g., every 10-15 minutes). The collected data snapshot should be sent to a Supabase Edge Function or directly inserted into the `blv_learning_data` table using `supabase-flutter`. The payload must include `branch_id`, `employee_id`, and the JSONB data for each sensor. Ensure this process runs in the background and is battery-efficient.",
+        "testStrategy": "Simulate a branch in its learning phase. Check-in as an employee and monitor the Supabase `blv_learning_data` table. Verify that new rows are being inserted periodically with complete sensor data. Check the app's battery consumption profile to ensure it remains within the acceptable limits (<5% per 8-hour shift).",
+        "priority": "high",
+        "dependencies": [
+          "1",
+          "2"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-11-09T01:52:23.778Z"
+      },
+      {
+        "id": "4",
+        "title": "Create Supabase Edge Function for BLV Pattern Analysis",
+        "description": "Develop and deploy a Deno-based Supabase Edge Function (`analyze_learning_data`) that processes the raw data from `blv_learning_data` to generate a branch's unique 'Functional Fingerprint' and store it in the `blv_patterns` table.",
+        "details": "This function will be triggered manually or on a schedule (e.g., daily). It should:\n1. Query `blv_learning_data` for a specific `branch_id` over the last 14 days.\n2. Aggregate and analyze the data to find statistical patterns (e.g., median GPS coordinates, most frequent WiFi BSSIDs and cell tower IDs, average sound/light levels).\n3. Use statistical methods to calculate averages, standard deviations, and frequency distributions.\n4. `upsert` the calculated patterns into the `blv_patterns` table for the given branch.\n5. Set `learning_complete` to `true` in both `blv_patterns` and `branches` tables upon successful completion after day 14.\n\nPseudo-code (Deno/TypeScript):\n```typescript\n// In /supabase/functions/analyze-learning-data/index.ts\nimport { createClient } from 'https://esm.sh/@supabase/supabase-js@2'\n\nserve(async (req) => {\n  const { branchId } = await req.json();\n  const supabase = createClient(Deno.env.get('SUPABASE_URL'), Deno.env.get('SUPABASE_ANON_KEY'));\n  \n  const { data: learningData, error } = await supabase\n    .from('blv_learning_data').select('*').eq('branch_id', branchId);\n\n  // ... complex analysis logic here ...\n  const wifiPatterns = calculateMostFrequent(learningData, 'wifi_data.bssid');\n  const gpsCenter = calculateMedianLatLon(learningData, 'gps_data');\n  const soundAvg = calculateAverage(learningData, 'sound_data.db');\n\n  await supabase.from('blv_patterns').upsert({\n    branch_id: branchId,\n    wifi_bssids: wifiPatterns,\n    gps_center_lat: gpsCenter.lat,\n    // ... and so on\n    learning_complete: true\n  });\n\n  return new Response('OK');\n});\n```",
+        "testStrategy": "Populate the `blv_learning_data` table with a large, varied dataset for a mock branch. Invoke the Edge Function with the mock branch's ID. Verify that a new record is created/updated in the `blv_patterns` table. Inspect the generated pattern data (e.g., `wifi_bssids`, `gps_center_lat`) to ensure the calculations are logical and accurate based on the input data.",
+        "priority": "high",
+        "dependencies": [
+          "3"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-11-09T01:52:29.570Z"
+      },
+      {
+        "id": "5",
+        "title": "Create Supabase Edge Function for Real-Time BLV Scoring",
+        "description": "Develop the primary validation engine as a Supabase Edge Function (`process_blv_checkin`) that receives a live sensor snapshot, compares it against the branch's learned fingerprint, calculates a weighted score, and returns an approval or rejection decision.",
+        "details": "This function will:\n1. Receive a sensor snapshot and `branch_id` from the Flutter app.\n2. Fetch the learned fingerprint for the `branch_id` from the `blv_patterns` table.\n3. For each sensor data point (WiFi, GPS, etc.), compare the live data with the stored pattern and calculate a component score based on the weights specified in the PRD (e.g., WiFi: 30%, GPS: 20%).\n4. Sum the component scores to get a `total_score`.\n5. Compare the `total_score` against the threshold (70).\n6. Log the entire transaction, including all component scores and the final decision, into the `blv_validation_logs` table.\n7. Return a JSON response with `{ is_approved: boolean, total_score: number }`.",
+        "testStrategy": "Use a testing tool like Postman or `curl` to invoke the deployed Edge Function. Send various mock sensor snapshot payloads: one that should pass (high score), one that should fail (low score), and one that spoofs GPS but fails on other factors. Verify that the function returns the correct `is_approved` status and that a corresponding record with accurate scores is created in `blv_validation_logs`.",
+        "priority": "high",
+        "dependencies": [
+          "4"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-11-09T01:52:37.197Z"
+      },
+      {
+        "id": "6",
+        "title": "Integrate BLV Scoring into Mobile Check-in Flow",
+        "description": "Modify the existing check-in/out functionality in the Flutter app to use the new BLV real-time scoring system. The app will send sensor data to the backend and handle the approval/rejection response.",
+        "details": "On pressing the 'Check-In' button:\n1. Call `SensorService.collectSensorSnapshot()` to get live data.\n2. Invoke the `process_blv_checkin` Supabase Edge Function with the snapshot payload.\n3. Await the response `{ is_approved, total_score }`.\n4. If `is_approved` is true, proceed with the check-in logic (e.g., create a record in the `attendance` table) and show a success UI.\n5. If `is_approved` is false, display a 'Verification Failed' message to the user, potentially showing the score for transparency. Log this as a failed attempt locally if needed.\n6. This flow applies to check-in, check-out, and pulse validations.",
+        "testStrategy": "On a device with a completed branch fingerprint, perform a check-in from within the branch's physical location. Verify the UI shows 'Approved' and the `attendance` table is updated. Then, attempt to check-in from outside the branch. Verify the UI shows 'Rejected' and no `attendance` record is created. Check the `blv_validation_logs` for both attempts.",
+        "priority": "high",
+        "dependencies": [
+          "2",
+          "5"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-11-09T01:52:42.201Z"
+      },
+      {
+        "id": "7",
+        "title": "Implement Background 'Pulse' System for Continuous Verification",
+        "description": "Develop a background service in Flutter that triggers a BLV validation check every 5 minutes for checked-in employees to ensure they remain at the branch.",
+        "details": "Use the `flutter_background_service` package to run a persistent background task after a successful check-in. \n1. The service should wake up every 5 minutes.\n2. It will perform a lightweight sensor scan and call the `process_blv_checkin` Edge Function (or a dedicated `process_pulse` function).\n3. The result of the pulse (score, approved status) should be logged to the `pulses` table, linked to the current `attendance` record.\n4. If a pulse fails, update the parent `attendance` record to start tracking `pause_duration_minutes`. When a subsequent pulse succeeds, stop the pause timer.",
+        "testStrategy": "Check-in successfully. Leave the app in the background or lock the phone. Wait for 15-20 minutes. Check the `pulses` table in Supabase to verify that 3-4 pulse records have been created. Then, move out of the valid zone (e.g., turn off WiFi) and wait for another pulse. Verify the new pulse record has `is_valid: false` and the `attendance` record is updated to reflect a pause.",
+        "priority": "high",
+        "dependencies": [
+          "6"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-11-09T01:52:47.166Z"
+      },
+      {
+        "id": "8",
+        "title": "Develop Employee UI for BLV Status and Transparency",
+        "description": "Create a new screen or widget in the employee-facing UI that displays the current check-in status, the score from the last validation (check-in or pulse), and a history of their validation events for transparency.",
+        "details": "Design a UI component that shows:\n- Current Status: 'Checked-In', 'Checked-Out', 'Out of Range'.\n- Last Score: 'BLV Score: 87%'.\n- A list/timeline view that fetches data from the `blv_validation_logs` and `pulses` tables for the logged-in employee.\n- Each item in the history should show the timestamp, validation type ('Check-in', 'Pulse'), score, and status (Approved/Rejected).\n- Use Supabase Realtime subscriptions to update the current status and score live without needing a manual refresh.",
+        "testStrategy": "As a test employee, check-in and out multiple times, and let the pulse system run. Navigate to the new UI screen. Verify that the current status is correct and updates in real-time. Check that the history list populates correctly with data from the `blv_validation_logs` and `pulses` tables, matching what's in the database.",
+        "priority": "medium",
+        "dependencies": [
+          "7"
+        ],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement Data Fetching for Validation History",
+            "description": "Develop and integrate the necessary data layer methods to fetch the historical validation events for the logged-in employee from the `blv_validation_logs` and `pulses` tables.",
+            "dependencies": [],
+            "details": "Create repository methods or service functions to query Supabase for `blv_validation_logs` and `pulses` records. These queries should be filtered by the current employee's ID and ordered by timestamp to form a chronological history. Combine results from both tables, ensuring common fields (timestamp, type, score, status) are available.\n<info added on 2025-11-09T02:03:12.625Z>\n{\n  \"text\": \"Implementation completed. A `BLVValidationEvent` model was created in `lib/models/blv_validation_event.dart` to handle data from both `pulses` and `blv_validation_logs` tables. A new `SupabaseBLVService` was implemented in `lib/services/supabase_blv_service.dart`. This service provides methods for fetching the combined and chronologically sorted validation history, retrieving statistics, and managing real-time subscriptions. It also supports filtering by date range and includes helper methods for today, week, and month-specific data.\"\n}\n</info added on 2025-11-09T02:03:12.625Z>",
+            "status": "done",
+            "testStrategy": "Write unit tests for the data fetching functions, mocking Supabase responses. Verify that data is correctly retrieved, filtered for the employee, and combined from both tables as expected. Ensure correct sorting by timestamp.",
+            "updatedAt": "2025-11-09T02:03:27.145Z",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Develop Current Status and Last Score Display UI",
+            "description": "Create the visual component responsible for displaying the current check-in status and the score from the last validation event (check-in or pulse).",
+            "dependencies": [],
+            "details": "Design and implement a dedicated UI widget to present 'Current Status' (e.g., 'Checked-In', 'Checked-Out', 'Out of Range') and 'Last Score' (e.g., 'BLV Score: 87%'). This component should be able to accept these values as input and display them clearly. Initially, use static or mock data for display.\n<info added on 2025-11-09T02:07:32.704Z>\n\"Implementation is complete. Three reusable widgets have been created: 1) `BLVStatusCard` (lib/widgets/blv_status_card.dart) is the main status card, featuring gradient backgrounds, current status, and the last BLV score with a circular progress indicator. 2) `BLVScoreBreakdown` (lib/widgets/blv_score_breakdown.dart) provides a detailed view of individual component scores (WiFi, GPS, Cell, Sound, Motion, Bluetooth, Light, Battery) with progress bars. 3) `BLVQuickStatus` (lib/widgets/blv_quick_status.dart) is a compact, tappable status widget for the home page. All widgets support color coding based on score ranges (green for 80+, orange for 60-79, red for <60) and handle null scores gracefully.\"\n</info added on 2025-11-09T02:07:32.704Z>",
+            "status": "done",
+            "testStrategy": "Develop a Storybook entry or a dedicated test screen for the UI component. Verify that it renders correctly with various status and score values (e.g., different statuses, 0% score, 100% score). Check responsiveness and styling.",
+            "parentId": "undefined",
+            "updatedAt": "2025-11-09T02:07:43.687Z"
+          },
+          {
+            "id": 3,
+            "title": "Develop Validation History List UI",
+            "description": "Build the UI component to display a chronological list or timeline of the employee's validation events, showing timestamp, validation type, score, and approval status.",
+            "dependencies": [
+              1
+            ],
+            "details": "Design and implement a scrollable list or timeline widget that can display an array of validation event objects. Each item in the list should clearly show the timestamp, validation type ('Check-in', 'Pulse'), the score, and the status (Approved/Rejected). This UI will consume the data fetched by subtask 1.\n<info added on 2025-11-09T02:12:43.467Z>\n{\n  \"content\": \"Completed implementation with two main widgets. `BLVValidationHistoryItem` (located at `lib/widgets/blv_validation_history_item.dart`) is a card-based widget for individual list items, showing validation type, status badge, timestamp, and score. `BLVValidationHistoryList` (`lib/widgets/blv_validation_history_list.dart`) is a full scrollable list view featuring date-based grouping (Today, Yesterday, etc.), pull-to-refresh support, empty state handling, and a modal bottom sheet that displays a `BLVScoreBreakdown` on tap. The UI includes smart date formatting and color-coded status indicators, all implemented using built-in Flutter formatting without external dependencies.\"\n}\n</info added on 2025-11-09T02:12:43.467Z>",
+            "status": "done",
+            "testStrategy": "Create a test harness for the history list UI component. Provide it with a diverse array of mock validation history data, including both check-ins and pulses, approved and rejected states. Verify correct rendering, ordering, and display of all required fields for each history item.",
+            "parentId": "undefined",
+            "updatedAt": "2025-11-09T02:12:54.571Z"
+          },
+          {
+            "id": 4,
+            "title": "Integrate Supabase Realtime for Live Updates",
+            "description": "Implement Supabase Realtime subscriptions to ensure the 'Current Status' and 'Last Score' displayed in the UI are updated live without manual refreshing.",
+            "dependencies": [
+              2
+            ],
+            "details": "Set up a Supabase Realtime subscription channel for the logged-in employee's relevant tables (e.g., `attendance`, `blv_validation_logs`, `pulses`) or specific views that aggregate this information. Listen for changes that indicate a new check-in/out event or a new validation score. Parse the real-time data and update the state of the 'Current Status' and 'Last Score' UI component (from subtask 2).\n<info added on 2025-11-09T02:17:45.797Z>\n```json\n\"Real-time integration is complete. A central `BLVProvider` has been created at `lib/providers/blv_provider.dart`, which uses the `ChangeNotifier` pattern for state management. It automatically initiates Supabase real-time subscriptions to manage and update the latest validation data, history, and stats. A simple wrapper, `BLVRealtimeStatusWidget` (`lib/widgets/blv_realtime_status_widget.dart`), was also created for easy integration into the UI. A full implementation example can be found in `lib/screens/employee/blv_status_example_screen.dart`, and an integration guide is available at `lib/widgets/BLV_INTEGRATION_GUIDE.md`. The system now automatically updates the UI in real-time upon new validation events in the database without any need for manual refreshes.\"\n```\n</info added on 2025-11-09T02:17:45.797Z>",
+            "status": "done",
+            "testStrategy": "Run the application with the real-time integration. Perform check-in/check-out actions and trigger pulse events (manually or via test scripts). Observe the UI to ensure the 'Current Status' and 'Last Score' fields update instantaneously and accurately after each relevant event without refreshing the screen.",
+            "parentId": "undefined",
+            "updatedAt": "2025-11-09T02:17:59.924Z"
+          },
+          {
+            "id": 5,
+            "title": "Assemble Employee BLV Status Screen and Integrate",
+            "description": "Combine all developed UI components and data fetching logic into the final employee-facing screen or widget, and integrate it into the main application flow.",
+            "dependencies": [
+              1,
+              2,
+              3,
+              4
+            ],
+            "details": "Create the main screen/widget that hosts the 'Current Status', 'Last Score' (with real-time updates), and the 'Validation History List'. Ensure proper state management to pass data from fetching methods and real-time subscriptions to the respective UI components. Handle loading states, error conditions, and user experience considerations for the overall screen. Integrate this screen into the application's navigation.\n<info added on 2025-11-09T02:25:08.860Z>\n{\n  \"update\": \"Final integration is complete. The production-ready EmployeeBLVStatusScreen has been created at lib/screens/employee/employee_blv_status_screen.dart. This screen features a two-tab interface (Overview and History), a statistics dashboard, period filtering, a recent activity preview, pull-to-refresh, and a BLV information dialog. For documentation, BLV_HOME_PAGE_INTEGRATION.md was created with step-by-step integration instructions, and BLV_EMPLOYEE_UI_COMPLETE.md was created to document all 12 new files, features, integration points, and testing/deployment guidelines. The complete BLV Employee UI system is ready for production.\"\n}\n</info added on 2025-11-09T02:25:08.860Z>",
+            "status": "done",
+            "testStrategy": "Perform end-to-end testing of the complete screen. As a test employee, navigate to the screen. Verify initial data loads correctly. Perform check-ins, check-outs, and allow pulses to run. Confirm the current status and score update live. Verify the history list accurately populates and updates with new events. Test edge cases like no history data or network interruptions.",
+            "parentId": "undefined",
+            "updatedAt": "2025-11-09T02:25:23.746Z"
+          }
+        ],
+        "updatedAt": "2025-11-09T02:25:23.746Z"
+      },
+      {
+        "id": "9",
+        "title": "Implement Manager/Owner Fraud Detection Alerts",
+        "description": "Set up a notification system to alert Managers and Owners in real-time when a significant fraud attempt is detected, such as a check-in rejection with a very low BLV score.",
+        "details": "Use Supabase Database Webhooks or a Postgres Function with a trigger on the `blv_validation_logs` table. \n1. Create a trigger `ON INSERT` to `blv_validation_logs`.\n2. The trigger function will check if `is_approved` is `false` and `total_score` is below a critical threshold (e.g., 20).\n3. If the condition is met, the function should call another Edge Function responsible for sending notifications.\n4. This notification function will use FCM (Firebase Cloud Messaging) to send a push notification to the relevant branch manager and/or owner's device. The payload should contain details like employee name, branch, and time of the attempt.",
+        "testStrategy": "As a test employee, perform a blatant fraud attempt (e.g., using a mock payload that guarantees a very low score). Verify that a push notification is received on a separate device logged in as the manager of that branch. The notification content should accurately describe the fraud event. Check server logs to ensure the trigger and function executed correctly.",
+        "priority": "medium",
+        "dependencies": [
+          "6"
+        ],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Develop Postgres Trigger Function Stub",
+            "description": "Create the initial PostgreSQL function that will be attached to the `blv_validation_logs` table via a trigger to initiate fraud detection.",
+            "dependencies": [],
+            "details": "Implement a `pl/pgSQL` function, e.g., `blv_fraud_alert_function()`, that accepts `NEW` and `OLD` records from `blv_validation_logs`. This function will be called `ON INSERT`. Initially, it should contain a placeholder or logging statement to confirm execution.\n<info added on 2025-11-09T02:32:47.190Z>\n{\n  \"update_string\": \"A comprehensive Postgres trigger system has been implemented in migrations/add_fraud_detection_trigger.sql. This includes the creation of a fraud_alerts table and the detect_blv_fraud() trigger function. The function activates on INSERT to blv_validation_logs, automatically flagging events with low scores (<40) or rejections. It assigns configurable severity levels, such as 0.9 for critical scores below 20 and 0.6-0.7 for warnings. The migration also adds helper functions for managing alerts (get_unresolved_alerts, resolve_alert), an analytics function (get_fraud_statistics), and RLS policies to restrict data access to managers and owners.\"\n}\n</info added on 2025-11-09T02:32:47.190Z>",
+            "status": "done",
+            "testStrategy": "Create the function and a trigger `ON INSERT` to `blv_validation_logs`. Insert a dummy record into `blv_validation_logs` and verify that the function is executed (e.g., by checking database logs or a temporary debug table).",
+            "parentId": "undefined",
+            "updatedAt": "2025-11-09T02:33:01.558Z"
+          },
+          {
+            "id": 2,
+            "title": "Implement Fraud Detection Logic in Trigger Function",
+            "description": "Enhance the `blv_fraud_alert_function` to include the specific conditions for identifying a potential fraud attempt based on check-in status and BLV score.",
+            "dependencies": [
+              1
+            ],
+            "details": "Modify `blv_fraud_alert_function()` to check if `NEW.is_approved` is `false` AND `NEW.total_score` is below a critical threshold (e.g., 20). If the condition is met, the function should prepare for invoking an external notification service, potentially using `pg_net` to call an Edge Function.",
+            "status": "done",
+            "testStrategy": "Insert records into `blv_validation_logs` that meet and do not meet the fraud conditions (is_approved=false, total_score<20). Verify that the function correctly identifies fraud cases by logging a specific message or flag within the function (e.g., to a temporary debug table or `RAISE NOTICE`).",
+            "parentId": "undefined",
+            "updatedAt": "2025-11-09T02:33:07.127Z"
+          },
+          {
+            "id": 3,
+            "title": "Create Supabase Edge Function for Notification Dispatch",
+            "description": "Develop a Supabase Edge Function that serves as an HTTP endpoint to receive fraud alert details from the Postgres trigger and prepare for notification sending.",
+            "dependencies": [
+              2
+            ],
+            "details": "Create a new Edge Function, e.g., `send-fraud-notification`, accessible via HTTP POST. It should be designed to receive a JSON payload from the Postgres trigger function, containing details such as `employee_name`, `branch_name`, `timestamp`, `total_score`, and `branch_id`. Initially, the function can just log the received payload.\n<info added on 2025-11-09T02:34:44.189Z>\n```json\n\"A new `fraud-alert-dispatcher.ts` service has been created to handle the notification logic. This service includes `formatFraudAlertMessage()` for rich text formatting, `handleFraudAlert()` for processing individual alerts, and `processPendingAlerts()` for batching. A `shouldSendNotification()` function checks notification preferences, including quiet hours. The service integrates with the existing `notification-service.ts` for dispatching to Slack and Telegram. Severity-based routing is now supported: critical alerts (total_score > 0.8) are sent to all channels, while warning alerts (total_score > 0.5) are sent to Slack only.\"\n```\n</info added on 2025-11-09T02:34:44.189Z>",
+            "status": "done",
+            "testStrategy": "Manually call the `send-fraud-notification` Edge Function using `curl` or a similar tool with a sample JSON payload. Verify that the function is invoked successfully and correctly logs the received data in the Supabase Edge Function logs.",
+            "parentId": "undefined",
+            "updatedAt": "2025-11-09T02:34:57.680Z"
+          },
+          {
+            "id": 4,
+            "title": "Integrate FCM Notification Logic into Edge Function",
+            "description": "Implement Firebase Cloud Messaging (FCM) logic within the `send-fraud-notification` Edge Function to construct and send push notifications.",
+            "dependencies": [
+              3
+            ],
+            "details": "Within the `send-fraud-notification` Edge Function, integrate a mechanism (e.g., Node.js `node-fetch` and FCM HTTP v1 API) to send push notifications. The payload should dynamically include the fraud details received (employee name, branch, score, time) and target manager/owner devices associated with the branch, based on registered FCM tokens stored in the database.",
+            "status": "done",
+            "testStrategy": "Integrate mock FCM sending or a test FCM project. Simulate sending a notification to a test device within the Edge Function. Verify the Edge Function's logs indicate a successful (or attempted) FCM send request and that the notification payload is correctly structured. Check for any errors during FCM interaction.",
+            "parentId": "undefined",
+            "updatedAt": "2025-11-09T02:35:02.983Z"
+          },
+          {
+            "id": 5,
+            "title": "Configure FCM and Test End-to-End Notification Flow",
+            "description": "Finalize FCM setup, ensure manager/owner device registration for notifications, and conduct comprehensive end-to-end testing of the fraud alert system.",
+            "dependencies": [
+              4
+            ],
+            "details": "Configure the FCM project in Firebase, obtain necessary server keys/credentials, and securely store them (e.g., as Supabase secrets). Ensure a mechanism exists for manager/owner devices to register their FCM tokens with the backend. Update the Edge Function to use the actual FCM credentials and target devices. Perform an end-to-end test by simulating a low-score check-in rejection and verifying that a push notification is received on a registered manager/owner device.\n<info added on 2025-11-09T02:37:56.413Z>\n{\n  \"text\": \"The fraud alert system implementation is complete. A new `SupabaseFraudAlertsService` was created in `lib/services/supabase_fraud_alerts_service.dart`, which includes a `FraudAlert` model and methods for fetching unresolved alerts, resolving alerts, retrieving statistics, and handling real-time subscriptions. A full UI, `FraudAlertsScreen`, was also built at `lib/screens/owner/fraud_alerts_screen.dart`. This screen provides managers and owners with a view of fraud alerts, including a statistics header, real-time notifications, severity color coding, a filter for resolved/unresolved alerts, pull-to-refresh, and a detailed modal for resolving alerts with notes. The end-to-end fraud detection and notification system is now considered ready for production.\"\n}\n</info added on 2025-11-09T02:37:56.413Z>",
+            "status": "done",
+            "testStrategy": "As a test employee, perform a blatant fraud attempt (e.g., using a mock payload that guarantees a very low BLV score) in the mobile app. Verify that a push notification is received on a separate device logged in as the manager or owner of that branch. The notification content should accurately describe the fraud event (employee name, branch, time, score). Check Supabase logs for trigger execution, Edge Function invocation, and FCM payload.",
+            "parentId": "undefined",
+            "updatedAt": "2025-11-09T02:38:10.088Z"
+          }
+        ],
+        "updatedAt": "2025-11-09T02:38:10.088Z"
+      },
+      {
+        "id": "10",
+        "title": "Automate Payroll Calculation Based on Verified Hours",
+        "description": "Develop a Supabase Edge Function that runs on a schedule (e.g., every 15 days) to calculate payroll for each employee based on their verified working hours, factoring in deductions for 'Out of Range' time.",
+        "details": "Create a scheduled Edge Function (`calculate-payroll`):\n1. The function queries all `attendance` records within the pay period.\n2. For each record, it calculates `total_hours` from `check_in_time` to `check_out_time`.\n3. It subtracts `pause_duration_minutes` (accumulated from failed pulses) from the total duration to get `blv_verified_hours`.\n4. It fetches the employee's `hourly_rate` from the `employees` table.\n5. It calculates `gross_pay = blv_verified_hours * hourly_rate`.\n6. It considers deductions from `salary_advances`.\n7. The final calculated data is inserted as a new record into the `payroll` table for that employee and period.",
+        "testStrategy": "Manually create a set of `attendance` records for a test employee over a 15-day period, including some with `pause_duration_minutes`. Execute the `calculate-payroll` function. Query the `payroll` table and verify that a new payroll record exists for the employee. Manually recalculate the expected `net_pay` and ensure it matches the value computed by the function.",
+        "priority": "medium",
+        "dependencies": [
+          "7"
+        ],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Design and Implement Payroll Database Schema",
+            "description": "Create or update the Supabase database schema to include the 'payroll' table with all necessary columns (e.g., 'employee_id', 'pay_period_start', 'pay_period_end', 'blv_verified_hours', 'hourly_rate', 'gross_pay', 'deductions', 'net_pay', 'status'). Ensure the 'employees' table has an 'hourly_rate' column and verify or create the 'salary_advances' table structure for deductions.",
+            "dependencies": [],
+            "details": "Define SQL DDL for the 'payroll' table, including primary keys and foreign keys (e.g., 'employee_id' referencing the 'employees' table). Add an 'hourly_rate' column (type NUMERIC or DECIMAL) to the 'employees' table if it doesn't exist. Confirm the structure of the 'salary_advances' table, ensuring it can track deductions per employee per period.",
+            "status": "done",
+            "testStrategy": "Verify that the 'payroll', 'employees' (with 'hourly_rate' column), and 'salary_advances' tables exist in the Supabase schema. Attempt to insert and select sample data for each table to ensure columns, data types, and constraints (like foreign keys) work as expected via the Supabase SQL Editor.",
+            "parentId": "undefined",
+            "updatedAt": "2025-11-09T02:44:19.852Z"
+          },
+          {
+            "id": 2,
+            "title": "Develop Supabase Edge Function: Data Retrieval and Core Hours Calculation",
+            "description": "Create the initial Supabase Edge Function named 'calculate-payroll'. This function will be responsible for querying all 'attendance' records for a specified pay period, calculating the 'total_hours' from 'check_in_time' to 'check_out_time' for each record, and then deriving 'blv_verified_hours' by subtracting 'pause_duration_minutes' (accumulated from failed pulses).",
+            "dependencies": [
+              1
+            ],
+            "details": "Implement the Edge Function using Deno. The function should accept 'pay_period_start' and 'pay_period_end' as parameters. Query the 'attendance' table within this period. For each attendance record, calculate the time difference between 'check_in_time' and 'check_out_time'. Subtract the 'pause_duration_minutes' from this total duration to get 'blv_verified_hours'.",
+            "status": "done",
+            "testStrategy": "Write unit tests for the Edge Function's core logic using mock 'attendance' data. Test scenarios including valid check-ins/check-outs with zero 'pause_duration_minutes', with various positive 'pause_duration_minutes', and edge cases like overnight shifts. Verify the accurate calculation of 'blv_verified_hours'.",
+            "parentId": "undefined",
+            "updatedAt": "2025-11-09T02:48:55.195Z"
+          },
+          {
+            "id": 3,
+            "title": "Integrate Hourly Rate and Calculate Gross Pay in Edge Function",
+            "description": "Extend the 'calculate-payroll' Supabase Edge Function to fetch the 'hourly_rate' for each employee from the 'employees' table. Once retrieved, calculate the 'gross_pay' for each employee based on their 'blv_verified_hours' multiplied by their respective 'hourly_rate'.",
+            "dependencies": [
+              2
+            ],
+            "details": "Within the existing 'calculate-payroll' Edge Function, after determining the 'blv_verified_hours' for each employee, perform a join or separate query to the 'employees' table using the 'employee_id' to retrieve their 'hourly_rate'. Calculate 'gross_pay = blv_verified_hours * hourly_rate'. Ensure appropriate error handling for missing hourly rates.",
+            "status": "done",
+            "testStrategy": "Extend the existing unit tests to include mock data for the 'employees' table with varying 'hourly_rate' values. Verify that the Edge Function correctly fetches the 'hourly_rate' and calculates 'gross_pay' accurately for different combinations of 'blv_verified_hours' and 'hourly_rate'.",
+            "parentId": "undefined",
+            "updatedAt": "2025-11-09T02:49:01.424Z"
+          },
+          {
+            "id": 4,
+            "title": "Add Deductions Logic and Persist Payroll Records",
+            "description": "Further extend the 'calculate-payroll' Edge Function to incorporate deductions, such as those from 'salary_advances', for each employee within the pay period. Finally, insert the complete calculated payroll data (including 'gross_pay', 'total_deductions', and 'net_pay') as a new record into the 'payroll' table for each employee.",
+            "dependencies": [
+              3
+            ],
+            "details": "Implement logic within the Edge Function to query the 'salary_advances' table for any applicable deductions for each employee during the specified pay period. Sum up these deductions and subtract them from the 'gross_pay' to determine 'net_pay'. Construct and execute an SQL INSERT statement to add the final payroll record to the 'payroll' table.",
+            "status": "done",
+            "testStrategy": "Create mock data for the 'salary_advances' table, including scenarios with no advances, single advances, and multiple advances for different employees. Test the Edge Function's deduction logic and ensure 'net_pay' is calculated correctly. Verify that the function successfully inserts well-formed records into a mock 'payroll' table, containing all calculated fields.",
+            "parentId": "undefined",
+            "updatedAt": "2025-11-09T02:49:07.844Z"
+          },
+          {
+            "id": 5,
+            "title": "Deploy and Schedule Payroll Calculation Edge Function",
+            "description": "Deploy the completed 'calculate-payroll' Edge Function to the Supabase environment. Configure a scheduled trigger using Supabase's 'pg_cron' feature to execute this function automatically every 15 days, passing the appropriate 'pay_period_start' and 'pay_period_end' parameters.",
+            "dependencies": [
+              4
+            ],
+            "details": "Use the Supabase CLI to deploy the 'calculate-payroll' Edge Function. Write the necessary `pg_cron` SQL script to schedule the execution. The cron job should dynamically determine the 'pay_period_start' and 'pay_period_end' based on the current execution date to cover the preceding 15-day period. Ensure the cron job is correctly enabled and configured for recurring execution.",
+            "status": "done",
+            "testStrategy": "Manually invoke the deployed Edge Function with specific 'pay_period_start' and 'pay_period_end' dates. Verify that payroll records are generated correctly in the 'payroll' table. For scheduling, set up a temporary `pg_cron` schedule (e.g., every 5 minutes) for a brief period. Monitor `pg_cron` logs and the `payroll` table to confirm automatic execution and data insertion. Disable the test schedule after successful verification.",
+            "parentId": "undefined",
+            "updatedAt": "2025-11-09T02:49:14.852Z"
+          }
+        ],
+        "updatedAt": "2025-11-09T02:49:14.852Z"
+      }
+    ],
+    "metadata": {
+      "version": "1.0.0",
+      "lastModified": "2025-11-09T02:49:14.854Z",
+      "taskCount": 10,
+      "completedCount": 10,
+      "tags": [
+        "master"
+      ]
+    }
+  }
+}

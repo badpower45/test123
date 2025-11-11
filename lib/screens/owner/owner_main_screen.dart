@@ -19,6 +19,7 @@ import '../login_screen.dart';
 import 'employee_attendance_table_screen.dart';
 import 'owner_set_branch_bssid_screen.dart';
 import 'branch_location_picker_screen.dart';
+import 'owner_comprehensive_payroll_page.dart';
 
 class OwnerMainScreen extends StatefulWidget {
   const OwnerMainScreen({super.key, required this.ownerId, this.ownerName});
@@ -51,7 +52,7 @@ class _OwnerMainScreenState extends State<OwnerMainScreen> {
       _OwnerEmployeesTab(key: _employeesTabKey, ownerId: widget.ownerId),
       _OwnerBranchesTab(key: _branchesTabKey, ownerId: widget.ownerId),
       _OwnerPresenceTab(ownerId: widget.ownerId),
-      _OwnerPayrollTab(ownerId: widget.ownerId),
+      const OwnerComprehensivePayrollPage(), // New comprehensive payroll system
     ];
   }
 
@@ -2806,6 +2807,7 @@ class _EditEmployeeDialogState extends State<_EditEmployeeDialog> {
     }
   }
 
+  @override
   @override
   Widget build(BuildContext context) {
     return AlertDialog(

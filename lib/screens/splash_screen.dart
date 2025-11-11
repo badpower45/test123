@@ -5,7 +5,7 @@ import '../theme/app_colors.dart';
 import '../services/auth_service.dart';
 import '../models/employee.dart';
 import 'login_screen.dart';
-import 'owner/owner_main_screen.dart';
+import 'owner/owner_main_screen_new.dart';
 import 'manager/manager_main_screen.dart';
 import 'employee/employee_main_screen.dart';
 import 'branch_manager_screen.dart';
@@ -147,7 +147,7 @@ class _SplashScreenState extends State<SplashScreen>
       Widget targetScreen;
 
       if (role.toLowerCase() == 'owner') {
-        targetScreen = OwnerMainScreen(ownerId: employeeId, ownerName: fullName);
+        targetScreen = OwnerMainScreenNew(ownerId: employeeId, ownerName: fullName);
       } else if (role.toLowerCase() == 'admin' || role.toLowerCase() == 'hr') {
         targetScreen = BranchManagerScreen(managerId: employeeId, branchName: branch);
       } else if (role.toLowerCase() == 'manager') {

@@ -43,7 +43,7 @@ dependencies:
   hive_flutter: ^1.1.0
   path_provider: ^2.1.4
   permission_handler: ^11.3.1
-  supabase_flutter: ^2.5.4
+  supabase_flutter: ^2.10.3
   google_fonts: ^6.2.1
   universal_io: ^2.2.2
   network_info_plus: ^5.0.0
@@ -56,6 +56,11 @@ dependencies:
   google_maps_flutter: ^2.9.0
   flutter_map: ^7.0.2
   latlong2: ^0.9.1
+  # BLV System Dependencies
+  sensors_plus: ^6.0.1  # Accelerometer for motion detection
+  battery_plus: ^6.0.2  # Battery level & charging status
+  noise_meter: ^5.0.1  # Ambient sound level
+  wifi_scan: ^0.4.1  # WiFi network scanning
 
 dev_dependencies:
   flutter_test:

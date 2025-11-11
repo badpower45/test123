@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 import '../services/branch_manager_api_service.dart';
+import 'manager/manager_absences_page.dart';
 
 
 class BranchManagerScreen extends StatefulWidget {
@@ -228,31 +229,54 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
   }
 
   Widget _buildStatCard(String title, String value, IconData icon, Color color) {
+    // Check if this is the absence card
+    final isAbsenceCard = title == 'تنبيهات الغياب';
+    
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 32, color: color),
-            const SizedBox(height: 8),
-            Text(
-              value,
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                color: color,
+      child: InkWell(
+        onTap: isAbsenceCard ? () {
+          // Navigate to absences page
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ManagerAbsencesPage(
+                managerId: widget.managerId,
+                branchId: '', // TODO: Get actual branch ID
               ),
             ),
-            const SizedBox(height: 4),
-            Text(
-              title,
-              style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
-              textAlign: TextAlign.center,
-            ),
-          ],
+          ).then((_) => _fetchData()); // Refresh when coming back
+        } : null,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 32, color: color),
+              const SizedBox(height: 8),
+              Text(
+                value,
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                title,
+                style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                textAlign: TextAlign.center,
+              ),
+              if (isAbsenceCard && int.tryParse(value) != null && int.parse(value) > 0)
+                const Padding(
+                  padding: EdgeInsets.only(top: 4),
+                  child: Icon(Icons.arrow_forward, size: 16, color: AppColors.textSecondary),
+                ),
+            ],
+          ),
         ),
       ),
     );

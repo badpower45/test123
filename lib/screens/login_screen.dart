@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 
+import '../config/app_config.dart';
 import '../models/employee.dart';
 import '../screens/branch_manager_screen.dart';
 import '../screens/employee/employee_main_screen.dart';
+import '../screens/employee/onboarding/employee_onboarding_flow.dart';
 import '../screens/manager/manager_main_screen.dart';
-import '../screens/owner/owner_main_screen.dart';
-import '../services/auth_api_service.dart';
+import '../screens/owner/owner_main_screen_new.dart';
 import '../services/auth_service.dart';
 import '../services/device_service.dart';
+import '../services/blv/blv_manager.dart';
+import '../services/supabase_auth_service.dart';
 import '../theme/app_colors.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -53,11 +56,12 @@ class _LoginScreenState extends State<LoginScreen> {
     FocusScope.of(context).unfocus();
 
     try {
-      // Authenticate with server
-      final employee = await AuthApiService.login(
-        employeeId: employeeId,
-        pin: pin,
-      );
+      // Authenticate with Supabase
+      final employee = await SupabaseAuthService.login(employeeId, pin);
+      
+      if (employee == null) {
+        throw Exception('معرف الموظف أو الرقم السري غير صحيح');
+      }
 
       // Register device for single device login
       try {
@@ -86,6 +90,25 @@ class _LoginScreenState extends State<LoginScreen> {
         fullName: employee.fullName,
       );
 
+      // Initialize BLV system for environmental tracking
+      if (employee.branch.isNotEmpty) {
+        try {
+          final blvManager = BLVManager();
+          
+          // Note: We need to fetch branchId from employee.branch name
+          // For now, we'll initialize without baseline (will load later)
+          await blvManager.initialize(
+            baseUrl: AppConfig.apiBaseUrl, // Uses API_BASE_URL from env or localhost:3000
+            authToken: employee.id,
+          );
+          
+          print('✅ [BLV] System initialized for ${employee.branch}');
+        } catch (e) {
+          print('⚠️ [BLV] Failed to initialize: $e');
+          // Continue even if BLV fails - don't block login
+        }
+      }
+
       if (!mounted) return;
 
       // DEBUG: Print navigation decision
@@ -98,10 +121,10 @@ class _LoginScreenState extends State<LoginScreen> {
 
       // Navigate based on role
       if (employee.role == EmployeeRole.owner) {
-        print('🔍 NAVIGATION DEBUG - Navigating to OwnerMainScreen');
+        print('🔍 NAVIGATION DEBUG - Navigating to OwnerMainScreenNew');
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
-            builder: (_) => OwnerMainScreen(
+            builder: (_) => OwnerMainScreenNew(
               ownerId: employee.id,
               ownerName: employee.fullName,
             ),
@@ -131,17 +154,33 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         );
       } else {
-        // Regular employee goes to employee main screen
+        // Regular employee - check if needs onboarding
         print('🔍 NAVIGATION DEBUG - Navigating to EmployeeMainScreen (staff/default)');
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (_) => EmployeeMainScreen(
-              employeeId: employee.id,
-              role: employee.role.name,
-              branch: employee.branch,
+        
+        // Check if employee needs onboarding
+        final needsOnboarding = await SupabaseAuthService.needsOnboarding(employee.id);
+        
+        if (needsOnboarding) {
+          print('🔍 NAVIGATION DEBUG - Employee needs onboarding, showing onboarding flow');
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) => EmployeeOnboardingFlow(
+                employeeId: employee.id,
+                email: employee.email ?? '',
+              ),
             ),
-          ),
-        );
+          );
+        } else {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) => EmployeeMainScreen(
+                employeeId: employee.id,
+                role: employee.role.name,
+                branch: employee.branch,
+              ),
+            ),
+          );
+        }
       }
     } catch (e) {
       if (!mounted) return;

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../models/leave_request.dart';
-import '../../../services/requests_api_service.dart';
+import '../../../services/supabase_requests_service.dart';
 import '../../../theme/app_colors.dart';
 
 class LeaveRequestsTab extends StatefulWidget {
@@ -19,7 +19,6 @@ class LeaveRequestsTab extends StatefulWidget {
 class _LeaveRequestsTabState extends State<LeaveRequestsTab> {
   List<LeaveRequest> _requests = <LeaveRequest>[];
   bool _loading = true;
-  bool _deleting = false;
   String? _error;
 
   @override
@@ -35,7 +34,13 @@ class _LeaveRequestsTabState extends State<LeaveRequestsTab> {
     });
 
     try {
-      final requests = await RequestsApiService.fetchLeaveRequests(widget.employeeId);
+      final requestsData = await SupabaseRequestsService.getLeaveRequests(
+        employeeId: widget.employeeId,
+      );
+      
+      // Convert from Supabase format to LeaveRequest model
+      final requests = requestsData.map((data) => LeaveRequest.fromJson(data)).toList();
+      
       if (!mounted) {
         return;
       }
@@ -75,40 +80,10 @@ class _LeaveRequestsTabState extends State<LeaveRequestsTab> {
     }
   }
 
-  Future<void> _deleteRejectedRequests() async {
-    setState(() => _deleting = true);
-    try {
-      await RequestsApiService.deleteRejectedLeaves(widget.employeeId);
-      await _loadRequests();
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('تم حذف الطلبات المرفوضة'),
-          backgroundColor: AppColors.success,
-        ),
-      );
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('تعذر الحذف: $error'),
-          backgroundColor: AppColors.error,
-        ),
-      );
-    } finally {
-      if (mounted) {
-        setState(() => _deleting = false);
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final hasRejected = _requests.any((r) => r.isRejected);
+    // الطلبات القديمة المرفوضة/الموافق عليها مش هتظهر خالص
+    // لأن getLeaveRequests بترجع pending بس للموظفين
 
     return RefreshIndicator(
       onRefresh: _loadRequests,
@@ -129,31 +104,9 @@ class _LeaveRequestsTabState extends State<LeaveRequestsTab> {
               ),
             ),
           ),
-          if (hasRejected) ...[
-            const SizedBox(height: 12),
-            ElevatedButton.icon(
-              onPressed: _deleting ? null : _deleteRejectedRequests,
-              icon: _deleting
-                  ? const SizedBox(
-                      height: 18,
-                      width: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.delete_forever),
-              label: const Text('حذف الطلبات المرفوضة'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.error,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-            ),
-          ],
           const SizedBox(height: 24),
           const Text(
-            'الطلبات السابقة',
+            'الطلبات المعلقة',
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.bold,
@@ -186,63 +139,230 @@ class _LeaveRequestCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final statusColor = _statusColor(request);
     final statusText = _statusText(request);
+    final isApproved = request.isApproved;
+    final isRejected = request.isRejected;
+    
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      elevation: isApproved || isRejected ? 3 : 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: isApproved 
+              ? AppColors.success 
+              : isRejected 
+                  ? AppColors.error 
+                  : Colors.transparent,
+          width: isApproved || isRejected ? 2 : 0,
+        ),
+      ),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Row(
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: statusColor.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    Icons.beach_access, 
+                    color: statusColor,
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'طلب إجازة',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${_formatDate(request.startDate)} → ${_formatDate(request.endDate)}',
+                        style: const TextStyle(
+                          color: AppColors.textSecondary,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: statusColor,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    statusText,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            
+            // معلومات الإجازة
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade50,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                children: [
+                  _LeaveInfoRow(
+                    icon: Icons.calendar_today,
+                    label: 'من تاريخ',
+                    value: _formatDate(request.startDate),
+                  ),
+                  const Divider(height: 16),
+                  _LeaveInfoRow(
+                    icon: Icons.event,
+                    label: 'إلى تاريخ',
+                    value: _formatDate(request.endDate),
+                  ),
+                  if (request.daysCount > 0) ...[
+                    const Divider(height: 16),
+                    _LeaveInfoRow(
+                      icon: Icons.schedule,
+                      label: 'عدد الأيام',
+                      value: '${request.daysCount} يوم',
+                    ),
+                  ],
+                  if (request.allowanceAmount > 0) ...[
+                    const Divider(height: 16),
+                    _LeaveInfoRow(
+                      icon: Icons.attach_money,
+                      label: 'بدل الإجازة',
+                      value: '${request.allowanceAmount.toStringAsFixed(0)} جنيه',
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            
+            if (request.reason.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(Icons.beach_access, color: statusColor),
+                    const Icon(Icons.description, size: 16, color: Colors.blue),
                     const SizedBox(width: 8),
-                    Text(
-                      statusText,
-                      style: TextStyle(
-                        color: statusColor,
-                        fontWeight: FontWeight.bold,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'السبب:',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: Colors.blue,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            request.reason,
+                            style: const TextStyle(
+                              color: AppColors.textPrimary,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],
                 ),
+              ),
+            ],
+            
+            // نتيجة المراجعة
+            if (isApproved || isRejected) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: (isApproved ? AppColors.success : AppColors.error).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: isApproved ? AppColors.success : AppColors.error,
+                    width: 1,
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          isApproved ? Icons.check_circle : Icons.cancel,
+                          size: 18,
+                          color: isApproved ? AppColors.success : AppColors.error,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          isApproved ? 'تم الموافقة ✓' : 'تم الرفض ✗',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: isApproved ? AppColors.success : AppColors.error,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (request.reviewedBy != null) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        'تمت المراجعة بواسطة: ${request.reviewedBy}',
+                        style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                      ),
+                    ],
+                    if (isRejected && request.rejectionReason != null && request.rejectionReason!.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        'سبب الرفض: ${request.rejectionReason}',
+                        style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+            
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                const Icon(Icons.access_time, size: 14, color: AppColors.textTertiary),
+                const SizedBox(width: 4),
                 Text(
-                  _formatDate(request.createdAt),
+                  'تاريخ الطلب: ${_formatDate(request.createdAt)}',
                   style: const TextStyle(color: AppColors.textTertiary, fontSize: 12),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            _LeaveInfoRow(label: 'من', value: _formatDate(request.startDate)),
-            _LeaveInfoRow(label: 'إلى', value: _formatDate(request.endDate)),
-            if (request.daysCount > 0)
-              _LeaveInfoRow(label: 'عدد الأيام', value: request.daysCount.toString()),
-            if (request.allowanceAmount > 0)
-              _LeaveInfoRow(
-                label: 'بدل الإجازة',
-                value: '${request.allowanceAmount.toStringAsFixed(0)} جنيه',
-              ),
-            if (request.reason.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Text(
-                  'السبب: ${request.reason}',
-                  style: const TextStyle(color: AppColors.textSecondary),
-                ),
-              ),
-            if (request.rejectionReason != null && request.rejectionReason!.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Text(
-                  'ملاحظة: ${request.rejectionReason}',
-                  style: const TextStyle(color: AppColors.error),
-                ),
-              ),
           ],
         ),
       ),
@@ -275,28 +395,42 @@ class _LeaveRequestCard extends StatelessWidget {
 }
 
 class _LeaveInfoRow extends StatelessWidget {
-  const _LeaveInfoRow({required this.label, required this.value});
+  const _LeaveInfoRow({
+    required this.label,
+    required this.value,
+    this.icon,
+  });
 
   final String label;
   final String value;
+  final IconData? icon;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            label,
-            style: const TextStyle(color: AppColors.textSecondary, fontSize: 14),
-          ),
-          Text(
-            value,
-            style: const TextStyle(color: AppColors.textPrimary, fontSize: 14, fontWeight: FontWeight.w600),
-          ),
+    return Row(
+      children: [
+        if (icon != null) ...[
+          Icon(icon, size: 16, color: AppColors.textSecondary),
+          const SizedBox(width: 8),
         ],
-      ),
+        Text(
+          label,
+          style: const TextStyle(
+            color: AppColors.textSecondary,
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const Spacer(),
+        Text(
+          value,
+          style: const TextStyle(
+            color: AppColors.textPrimary,
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -457,12 +591,21 @@ class _LeaveRequestSheetState extends State<_LeaveRequestSheet> {
     setState(() => _isSubmitting = true);
 
     try {
-      final request = await RequestsApiService.submitLeaveRequest(
+      final response = await SupabaseRequestsService.createLeaveRequest(
         employeeId: widget.employeeId,
+        leaveType: _selectedType == LeaveType.emergency ? 'emergency' : 'normal',
         startDate: _startDate!,
         endDate: _endDate!,
-        reason: reason.isEmpty ? null : reason,
+        reason: reason.isEmpty ? 'طلب إجازة' : reason,
       );
+      
+      if (response == null) {
+        throw Exception('فشل إرسال الطلب');
+      }
+      
+      // Convert response to LeaveRequest model
+      final request = LeaveRequest.fromJson(response);
+      
       if (!mounted) {
         return;
       }

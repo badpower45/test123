@@ -1,15 +1,25 @@
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../../constants/restaurant_config.dart';
 import '../../models/attendance_request.dart';
+import '../../models/employee.dart';
 import '../../services/attendance_api_service.dart';
+import '../../services/auth_service.dart';
 import '../../services/branch_api_service.dart';
+import '../../services/geofence_service.dart';
 import '../../services/location_service.dart';
-import '../../services/wifi_service.dart';
+import '../../services/notification_service.dart';
 import '../../services/requests_api_service.dart';
+import '../../services/supabase_attendance_service.dart';
+import '../../services/sync_service.dart';
+import '../../services/wifi_service.dart';
+import '../../services/offline_data_service.dart';
+import '../../database/offline_database.dart';
 import '../../theme/app_colors.dart';
 import 'manager_send_requests_page.dart';
 import 'manager_employees_page.dart';
@@ -29,20 +39,236 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
   String _elapsedTime = '00:00:00';
   Timer? _timer;
   bool _isLoading = false;
+  int _pendingCount = 0;
   String? _branchId;
   Map<String, dynamic>? _branchData;
   List<String> _allowedBssids = [];
+  
+  final _offlineService = OfflineDataService();
 
   @override
   void initState() {
     super.initState();
+    _loadBranchData(); // Load branch data first
     _checkCurrentStatus();
+    _loadPendingCount();
+    // Refresh pending count every minute
+    Timer.periodic(const Duration(minutes: 1), (_) => _loadPendingCount());
   }
 
   @override
   void dispose() {
     _timer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _loadPendingCount() async {
+    // Skip SQLite on Web (returns 0)
+    final db = OfflineDatabase.instance;
+    final count = await db.getPendingCount();
+    if (mounted) {
+      setState(() {
+        _pendingCount = count;
+      });
+    }
+  }
+
+  /// Load branch data from cache or Supabase with auto-refresh
+  Future<void> _loadBranchData() async {
+    try {
+      // On Web, use Hive-based OfflineDataService
+      if (kIsWeb) {
+        await _loadBranchDataForWeb();
+        return;
+      }
+      
+      // On Mobile/Desktop, use SQLite-based OfflineDatabase
+      final db = OfflineDatabase.instance;
+      
+      // Check if we need to refresh (older than 24 hours)
+      final needsRefresh = await db.needsCacheRefresh(widget.managerId);
+      final cached = await db.getCachedBranchData(widget.managerId);
+      
+      // Use cached data immediately if available (for fast startup)
+      if (cached != null && !needsRefresh) {
+        setState(() {
+          _branchData = cached;
+          // Parse multiple BSSIDs
+          final bssidsArray = cached['wifi_bssids_array'] as List<dynamic>?;
+          if (bssidsArray != null && bssidsArray.isNotEmpty) {
+            _allowedBssids = bssidsArray.map((e) => e.toString()).toList();
+          }
+        });
+        print('✅ [Manager] Using cached branch data: ${cached['branch_name']} (${_allowedBssids.length} WiFi networks)');
+        return;
+      }
+      
+      // Need to fetch from Supabase (first time or refresh needed)
+      final syncService = SyncService.instance;
+      final hasInternet = await syncService.hasInternet();
+      
+      if (!hasInternet) {
+        if (cached != null) {
+          // Use stale cache if no internet
+          setState(() {
+            _branchData = cached;
+            final bssidsArray = cached['wifi_bssids_array'] as List<dynamic>?;
+            if (bssidsArray != null && bssidsArray.isNotEmpty) {
+              _allowedBssids = bssidsArray.map((e) => e.toString()).toList();
+            }
+          });
+          print('⚠️ [Manager] Using stale cache (no internet): ${cached['branch_name']}');
+        } else {
+          print('⚠️ [Manager] No internet and no cached branch data');
+        }
+        return;
+      }
+      
+      // Get employee data to find branch name
+      final employeeData = await SupabaseAttendanceService.getEmployeeStatus(widget.managerId);
+      final branchName = employeeData['employee']?['branch'] ?? 
+                        employeeData['employee']?['branch_name'];
+      
+      if (branchName == null || branchName.toString().isEmpty) {
+        print('⚠️ [Manager] Manager has no branch assigned');
+        print('⚠️ Employee data: $employeeData');
+        return;
+      }
+      
+      print('📍 [Manager] Branch name: $branchName');
+      
+      // Fetch branch data from Supabase by name
+      final branchList = await BranchApiService.getBranches();
+      final branchData = branchList.firstWhere(
+        (b) => b['name'] == branchName,
+        orElse: () => <String, dynamic>{},
+      );
+      
+      if (branchData.isEmpty) {
+        print('❌ [Manager] Branch not found: $branchName');
+        return;
+      }
+      
+      print('✅ [Manager] Found branch: ${branchData['name']} (${branchData['id']})');
+      
+      // Parse WiFi BSSIDs (can be comma-separated or array)
+      List<String> wifiBssids = [];
+      if (branchData['wifi_bssid'] != null && branchData['wifi_bssid'].toString().isNotEmpty) {
+        wifiBssids = branchData['wifi_bssid']
+            .toString()
+            .split(',')
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty)
+            .toList();
+      }
+      
+      // Parse location
+      double? latitude;
+      double? longitude;
+      if (branchData['location'] != null) {
+        try {
+          final location = branchData['location'];
+          if (location is Map) {
+            latitude = (location['latitude'] ?? location['lat'])?.toDouble();
+            longitude = (location['longitude'] ?? location['lng'] ?? location['long'])?.toDouble();
+          } else if (location is String) {
+            final decoded = jsonDecode(location);
+            latitude = (decoded['latitude'] ?? decoded['lat'])?.toDouble();
+            longitude = (decoded['longitude'] ?? decoded['lng'] ?? decoded['long'])?.toDouble();
+          }
+        } catch (e) {
+          print('⚠️ Error parsing location: $e');
+        }
+      }
+      
+      final geofenceRadius = (branchData['geofence_radius'] ?? 
+                             branchData['geofenceRadius'] ?? 
+                             100.0).toDouble();
+      
+      // Cache it locally for future use
+      await db.cacheBranchData(
+        employeeId: widget.managerId,
+        branchId: branchData['id'],
+        branchName: branchData['name'],
+        wifiBssids: wifiBssids,
+        latitude: latitude,
+        longitude: longitude,
+        geofenceRadius: geofenceRadius,
+        dataVersion: branchData['updated_at'] != null 
+            ? DateTime.parse(branchData['updated_at']).millisecondsSinceEpoch ~/ 1000
+            : 1,
+      );
+      
+      setState(() {
+        _branchData = branchData;
+        _branchId = branchData['id'];
+        _allowedBssids = wifiBssids;
+      });
+      
+      print('✅ [Manager] Fetched and cached branch data: ${branchData['name']} (${wifiBssids.length} WiFi networks)');
+    } catch (e) {
+      print('❌ [Manager] Error loading branch data: $e');
+    }
+  }
+
+  /// Load branch data for Web platform (using Hive)
+  Future<void> _loadBranchDataForWeb() async {
+    try {
+      // Check cached data from Hive (employee-specific)
+      final cached = await _offlineService.getCachedBranchData(employeeId: widget.managerId);
+      
+      if (cached != null) {
+        setState(() {
+          _branchData = cached;
+          _branchId = cached['id'];
+          // Parse BSSIDs from cached data
+          final bssid = cached['bssid'];
+          if (bssid != null && bssid.toString().isNotEmpty) {
+            _allowedBssids = [bssid.toString()];
+          }
+        });
+        print('✅ [Manager] Using cached branch data from Hive: ${cached['name']}');
+        return;
+      }
+      
+      // Need to fetch from Supabase
+      final syncService = SyncService.instance;
+      final hasInternet = await syncService.hasInternet();
+      
+      if (!hasInternet) {
+        print('⚠️ [Manager] No internet and no cached branch data on Web');
+        return;
+      }
+      
+      // Get manager data to find branch name
+      final managerData = await SupabaseAttendanceService.getEmployeeStatus(widget.managerId);
+      final branchName = managerData['employee']?['branch'];
+      
+      if (branchName == null) {
+        print('⚠️ [Manager] Employee has no branch assigned');
+        return;
+      }
+      
+      // Download and cache branch data (with manager ID)
+      final branchData = await _offlineService.downloadBranchData(
+        branchName,
+        employeeId: widget.managerId,
+      );
+      
+      if (branchData != null) {
+        setState(() {
+          _branchData = branchData;
+          _branchId = branchData['id'];
+          final bssid = branchData['bssid'];
+          if (bssid != null && bssid.toString().isNotEmpty) {
+            _allowedBssids = [bssid.toString()];
+          }
+        });
+        print('✅ [Manager] Downloaded branch data on Web: ${branchData['name']}');
+      }
+    } catch (e) {
+      print('❌ [Manager] Error loading branch data on Web: $e');
+    }
   }
 
   Future<void> _checkCurrentStatus() async {
@@ -179,12 +405,15 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
       final latitude = position?.latitude ?? 0.0;
       final longitude = position?.longitude ?? 0.0;
 
-      await AttendanceApiService.checkIn(
+      final response = await SupabaseAttendanceService.checkIn(
         employeeId: widget.managerId,
         latitude: latitude,
         longitude: longitude,
-        wifiBssid: wifiBSSID ?? '',
       );
+
+      if (response == null) {
+        throw Exception('فشل تسجيل الحضور');
+      }
 
       setState(() {
         _isCheckedIn = true;
@@ -223,7 +452,7 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
     try {
       print('🚪 Manager check-out started...');
       
-      // استخدام الخدمات المحسّنة
+      // استخدام الخدمات المحسّنة مع التنفيذ المتوازي
       final locationService = LocationService();
       
       final position = await locationService.tryGetPosition();
@@ -233,50 +462,27 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
       } catch (e) {
         print('⚠️ WiFi error: $e');
       }
-      
-      print('  Position: ${position != null ? "(${position.latitude}, ${position.longitude})" : "null"}');
-      print('  Accuracy: ${position?.accuracy.toStringAsFixed(1) ?? "N/A"}m');
-      print('  WiFi BSSID: ${wifiBSSID ?? "null"}');
-      print('  Allowed BSSIDs: $_allowedBssids');
 
-      // التحقق من WiFi BSSID
-      if (_allowedBssids.isNotEmpty) {
-        if (wifiBSSID == null || wifiBSSID.isEmpty) {
-          throw Exception(
-            'يجب الاتصال بشبكة WiFi الفرع.\n'
-            'لم يتم اكتشاف شبكة WiFi.\n'
-            'يرجى التأكد من تفعيل WiFi والاتصال بشبكة الفرع.'
-          );
-        }
-        
+      print('📍 Position: ${position?.latitude}, ${position?.longitude}');
+      print('📶 WiFi BSSID: $wifiBSSID');
+
+      // Validate: WiFi OR Location OR BLV (at least one must be valid)
+      bool isWifiValid = false;
+      bool isLocationValid = false;
+
+      // 1️⃣ Check WiFi
+      if (_allowedBssids.isNotEmpty && wifiBSSID != null && wifiBSSID.isNotEmpty) {
         final normalizedCurrent = wifiBSSID.toUpperCase().trim();
-        final isAllowedWifi = _allowedBssids.any((allowed) {
-          final normalizedAllowed = allowed.toUpperCase().trim();
-          return normalizedCurrent == normalizedAllowed;
+        isWifiValid = _allowedBssids.any((allowed) {
+          return allowed.toUpperCase().trim() == normalizedCurrent;
         });
-        
-        if (!isAllowedWifi) {
-          throw Exception(
-            'أنت غير متصل بشبكة الفرع المسموح بها.\n'
-            'BSSID الحالي: $normalizedCurrent\n'
-            'يرجى الاتصال بشبكة WiFi الخاصة بالفرع.'
-          );
-        }
-        
-        print('✅ WiFi validation passed: $normalizedCurrent');
+        print('✅ WiFi check: ${isWifiValid ? "VALID" : "INVALID"} - $normalizedCurrent');
+      } else {
+        print('⚠️ WiFi check: SKIPPED (no WiFi or no allowed BSSIDs)');
       }
 
-      if (RestaurantConfig.enforceLocation && _branchData != null) {
-        if (position == null) {
-          throw Exception('تعذر تحديد موقعك، يرجى تفعيل خدمة تحديد الموقع والمحاولة مرة أخرى.');
-        }
-        
-        // قبول أي دقة
-        if (position.accuracy > 500) {
-          print('⚠️ Poor accuracy: ${position.accuracy.toStringAsFixed(0)}m - but accepting it');
-        }
-        
-        // Use branch coordinates if available
+      // 2️⃣ Check Location
+      if (RestaurantConfig.enforceLocation && _branchData != null && position != null) {
         final branchLat = _branchData!['latitude'] as double?;
         final branchLng = _branchData!['longitude'] as double?;
         final branchRadius = (_branchData!['geofence_radius'] as int?) ?? 200;
@@ -289,38 +495,47 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
             position.longitude,
           );
           
-          print('📍 Geofence check (checkout):');
-          print('  Distance: ${distance.toStringAsFixed(1)}m');
-          print('  Allowed radius: ${branchRadius}m');
-          print('  Accuracy: ${position.accuracy.toStringAsFixed(1)}m');
-          
-          // هامش كبير جداً للدقة الضعيفة
-          final accuracyMargin = position.accuracy > 100 
-              ? position.accuracy * 1.5
-              : position.accuracy * 1.0;
+          final accuracyMargin = position.accuracy > 100 ? position.accuracy * 1.5 : position.accuracy * 1.0;
           final effectiveRadius = branchRadius + accuracyMargin;
           
-          print('  Effective radius (with margin): ${effectiveRadius.toStringAsFixed(1)}m');
-          print('  Within range: ${distance <= effectiveRadius}');
-          
-          if (distance > effectiveRadius) {
-            throw Exception(
-              'أنت خارج نطاق الموقع المسموح للمطعم.\n'
-              'المسافة: ${distance.toStringAsFixed(0)}م من ${branchRadius}م\n'
-              'دقة GPS: ${position.accuracy.toStringAsFixed(0)}م'
-            );
-          }
+          isLocationValid = distance <= effectiveRadius;
+          print('✅ Location check: ${isLocationValid ? "VALID" : "INVALID"} - ${distance.toStringAsFixed(0)}m from ${effectiveRadius.toStringAsFixed(0)}m');
+        } else {
+          print('⚠️ Location check: SKIPPED (no branch coordinates)');
         }
+      } else {
+        print('⚠️ Location check: SKIPPED (disabled or no position)');
       }
+
+      // 3️⃣ Require at least ONE to be valid (WiFi OR Location OR BLV will be checked by backend)
+      if (!isWifiValid && !isLocationValid) {
+        throw Exception(
+          'يجب أن تكون متصلاً بشبكة الواي فاي الخاصة بالفرع أو متواجداً في الموقع الصحيح.\n'
+          'تأكد من الاتصال بالـ WiFi الصحيح أو التواجد داخل الفرع.'
+        );
+      }
+
+      print('✅ Validation PASSED - WiFi: $isWifiValid, Location: $isLocationValid');
 
       final latitude = position?.latitude ?? RestaurantConfig.latitude;
       final longitude = position?.longitude ?? RestaurantConfig.longitude;
 
-      await AttendanceApiService.checkOut(
-        employeeId: widget.managerId,
+      // Get active attendance first
+      final activeAttendance = await SupabaseAttendanceService.getActiveAttendance(widget.managerId);
+      
+      if (activeAttendance == null) {
+        throw Exception('لا يوجد سجل حضور نشط');
+      }
+
+      final success = await SupabaseAttendanceService.checkOut(
+        attendanceId: activeAttendance['id'],
         latitude: latitude,
         longitude: longitude,
       );
+
+      if (!success) {
+        throw Exception('فشل تسجيل الانصراف');
+      }
 
       setState(() {
         _isCheckedIn = false;
@@ -612,11 +827,21 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
                 child: InkWell(
                   borderRadius: BorderRadius.circular(16),
                   onTap: () {
+                    if (_branchId == null || _branchId!.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('خطأ: لا يوجد فرع مرتبط بحسابك'),
+                          backgroundColor: AppColors.error,
+                        ),
+                      );
+                      return;
+                    }
                     Navigator.of(context).push(
                       MaterialPageRoute(
                         builder: (_) => ManagerEmployeesPage(
                           managerId: widget.managerId,
-                          managerBranch: _branchData?['branch_name'] ?? '',
+                          branchId: _branchId!,
+                          branchName: _branchData?['branch_name'] ?? 'الفرع',
                         ),
                       ),
                     );

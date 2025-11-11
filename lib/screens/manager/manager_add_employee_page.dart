@@ -23,20 +23,22 @@ class _ManagerAddEmployeePageState extends State<ManagerAddEmployeePage> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _pinController = TextEditingController();
-  final _salaryController = TextEditingController();
+  final _hourlyRateController = TextEditingController();
   final _addressController = TextEditingController();
   final _emailController = TextEditingController();
   final _phoneController = TextEditingController();
   
   EmployeeRole _selectedRole = EmployeeRole.staff;
   DateTime? _birthDate;
+  TimeOfDay? _shiftStartTime;
+  TimeOfDay? _shiftEndTime;
   bool _loading = false;
 
   @override
   void dispose() {
     _nameController.dispose();
     _pinController.dispose();
-    _salaryController.dispose();
+    _hourlyRateController.dispose();
     _addressController.dispose();
     _emailController.dispose();
     _phoneController.dispose();
@@ -72,15 +74,29 @@ class _ManagerAddEmployeePageState extends State<ManagerAddEmployeePage> {
     setState(() => _loading = true);
 
     try {
+      // Generate employee ID from name and timestamp
+      final timestamp = DateTime.now().millisecondsSinceEpoch.toString().substring(7);
+      final namePart = _nameController.text.trim().replaceAll(' ', '_').substring(0, 
+        _nameController.text.trim().replaceAll(' ', '_').length > 10 ? 10 : _nameController.text.trim().replaceAll(' ', '_').length
+      );
+      final generatedId = '${namePart}_$timestamp';
+      
       final response = await http.post(
         Uri.parse('$apiBaseUrl/employees'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
+          'id': generatedId, // Generate unique ID
           'fullName': _nameController.text.trim(),
           'pin': _pinController.text.trim(),
           'role': _selectedRole.name,
           'branch': widget.managerBranch,
-          'monthlySalary': double.tryParse(_salaryController.text) ?? 0,
+          'hourlyRate': double.tryParse(_hourlyRateController.text) ?? 0,
+          'shiftStartTime': _shiftStartTime != null 
+              ? '${_shiftStartTime!.hour.toString().padLeft(2, '0')}:${_shiftStartTime!.minute.toString().padLeft(2, '0')}'
+              : null,
+          'shiftEndTime': _shiftEndTime != null
+              ? '${_shiftEndTime!.hour.toString().padLeft(2, '0')}:${_shiftEndTime!.minute.toString().padLeft(2, '0')}'
+              : null,
           'address': _addressController.text.trim().isNotEmpty 
               ? _addressController.text.trim() 
               : null,
@@ -241,23 +257,109 @@ class _ManagerAddEmployeePageState extends State<ManagerAddEmployeePage> {
               const SizedBox(height: 16),
 
               TextFormField(
-                controller: _salaryController,
+                controller: _hourlyRateController,
                 decoration: _buildInputDecoration(
-                  label: 'الراتب الشهري',
+                  label: 'سعر الساعة',
                   icon: Icons.payments,
-                  suffix: 'جنيه',
+                  suffix: 'ج.م/ساعة',
                 ),
                 keyboardType: TextInputType.number,
                 validator: (value) {
                   if (value == null || value.trim().isEmpty) {
-                    return 'الرجاء إدخال الراتب';
+                    return 'الرجاء إدخال سعر الساعة';
                   }
-                  final salary = double.tryParse(value);
-                  if (salary == null || salary < 0) {
-                    return 'الرجاء إدخال راتب صحيح';
+                  final rate = double.tryParse(value);
+                  if (rate == null || rate < 0) {
+                    return 'الرجاء إدخال سعر صحيح';
                   }
                   return null;
                 },
+              ),
+
+              const SizedBox(height: 16),
+
+              // Shift Start Time
+              InkWell(
+                onTap: () async {
+                  final time = await showTimePicker(
+                    context: context,
+                    initialTime: _shiftStartTime ?? const TimeOfDay(hour: 9, minute: 0),
+                  );
+                  if (time != null) {
+                    setState(() => _shiftStartTime = time);
+                  }
+                },
+                child: InputDecorator(
+                  decoration: _buildInputDecoration(
+                    label: 'بداية الشيفت',
+                    icon: Icons.access_time,
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        _shiftStartTime == null
+                            ? 'اختر وقت بداية الشيفت'
+                            : _shiftStartTime!.format(context),
+                        style: TextStyle(
+                          color: _shiftStartTime == null
+                              ? Colors.grey.shade600
+                              : AppColors.textPrimary,
+                        ),
+                      ),
+                      if (_shiftStartTime != null)
+                        IconButton(
+                          icon: const Icon(Icons.clear, size: 20),
+                          onPressed: () => setState(() => _shiftStartTime = null),
+                        )
+                      else
+                        const Icon(Icons.schedule, size: 20),
+                    ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 16),
+
+              // Shift End Time
+              InkWell(
+                onTap: () async {
+                  final time = await showTimePicker(
+                    context: context,
+                    initialTime: _shiftEndTime ?? const TimeOfDay(hour: 17, minute: 0),
+                  );
+                  if (time != null) {
+                    setState(() => _shiftEndTime = time);
+                  }
+                },
+                child: InputDecorator(
+                  decoration: _buildInputDecoration(
+                    label: 'نهاية الشيفت',
+                    icon: Icons.access_time_filled,
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        _shiftEndTime == null
+                            ? 'اختر وقت نهاية الشيفت'
+                            : _shiftEndTime!.format(context),
+                        style: TextStyle(
+                          color: _shiftEndTime == null
+                              ? Colors.grey.shade600
+                              : AppColors.textPrimary,
+                        ),
+                      ),
+                      if (_shiftEndTime != null)
+                        IconButton(
+                          icon: const Icon(Icons.clear, size: 20),
+                          onPressed: () => setState(() => _shiftEndTime = null),
+                        )
+                      else
+                        const Icon(Icons.schedule, size: 20),
+                    ],
+                  ),
+                ),
               ),
 
               const SizedBox(height: 32),

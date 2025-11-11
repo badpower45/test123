@@ -34,7 +34,8 @@
       "Bash(node ./node_modules/typescript/bin/tsc:*)",
       "Bash(flutter clean:*)",
       "Bash(timeout 120 bash:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(task-master set-status:*)"
     ],
     "deny": [],
     "ask": []

@@ -46,6 +46,11 @@
             android:name="flutterEmbedding"
             android:value="2" />
 
+        <!-- Google Maps API Key -->
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="AIzaSyBXGZ8vQZ3q0YhJ8hF5K_9n7g_xN8Y3pQc" />
+
         <!-- Background Service for Geofencing -->
         <service
             android:name="id.flutter.flutter_background_service.BackgroundService"
