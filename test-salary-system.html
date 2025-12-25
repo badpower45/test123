@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Test Salary System</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+  <h1>Test Salary Calculation System</h1>
+  
+  <div style="margin: 20px;">
+    <h2>Step 1: Calculate Daily Salaries</h2>
+    <button onclick="calculateForEmpp()">Calculate for empp</button>
+    <button onclick="autoCalculateAll()">Auto Calculate All Employees</button>
+    <pre id="calc-result"></pre>
+  </div>
+
+  <div style="margin: 20px;">
+    <h2>Step 2: Check up_to_date_salary</h2>
+    <button onclick="checkUpToDate()">Check up_to_date_salary Table</button>
+    <pre id="uptodate-result"></pre>
+  </div>
+
+  <div style="margin: 20px;">
+    <h2>Step 3: Check Advance Info</h2>
+    <button onclick="checkAdvanceInfo()">Check Advance Info for empp</button>
+    <pre id="advance-result"></pre>
+  </div>
+
+  <script>
+    const SUPABASE_URL = 'https://bbxuyuaemigrqsvsnxkj.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJieHV5dWFlbWlncnFzdnNueGtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzA5NzY2NzEsImV4cCI6MjA0NjU1MjY3MX0.shsuWES_CYcluj77ao5P_MKစီ6r5vHBxKpeSVqmfPI';
+    
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    async function calculateForEmpp() {
+      const result = document.getElementById('calc-result');
+      result.textContent = 'Calculating...';
+      
+      try {
+        const { data, error } = await supabase.functions.invoke('calculate-daily-salary', {
+          body: { 
+            employee_id: 'empp',
+            recalculate_period: true
+          }
+        });
+        
+        if (error) throw error;
+        result.textContent = JSON.stringify(data, null, 2);
+      } catch (error) {
+        result.textContent = 'Error: ' + error.message;
+      }
+    }
+
+    async function autoCalculateAll() {
+      const result = document.getElementById('calc-result');
+      result.textContent = 'Calculating for all employees...';
+      
+      try {
+        const { data, error } = await supabase.functions.invoke('auto-calculate-salaries');
+        
+        if (error) throw error;
+        result.textContent = JSON.stringify(data, null, 2);
+      } catch (error) {
+        result.textContent = 'Error: ' + error.message;
+      }
+    }
+
+    async function checkUpToDate() {
+      const result = document.getElementById('uptodate-result');
+      result.textContent = 'Checking...';
+      
+      try {
+        const { data, error } = await supabase
+          .from('up_to_date_salary')
+          .select('*')
+          .eq('employee_id', 'empp')
+          .maybeSingle();
+        
+        if (error) throw error;
+        result.textContent = JSON.stringify(data, null, 2);
+      } catch (error) {
+        result.textContent = 'Error: ' + error.message;
+      }
+    }
+
+    async function checkAdvanceInfo() {
+      const result = document.getElementById('advance-result');
+      result.textContent = 'Checking...';
+      
+      try {
+        // First check up_to_date_salary
+        const { data: upToDate, error: err1 } = await supabase
+          .from('up_to_date_salary')
+          .select('total_net_salary')
+          .eq('employee_id', 'empp')
+          .maybeSingle();
+        
+        if (err1) throw err1;
+
+        const totalNetSalary = upToDate?.total_net_salary || 0;
+        const maxAdvance = totalNetSalary * 0.30;
+
+        result.textContent = `Up-to-date Salary Data:\n${JSON.stringify(upToDate, null, 2)}\n\n` +
+          `Total Net Salary: ${totalNetSalary} EGP\n` +
+          `Max Advance (30%): ${maxAdvance} EGP`;
+      } catch (error) {
+        result.textContent = 'Error: ' + error.message;
+      }
+    }
+  </script>
+</body>
+</html>

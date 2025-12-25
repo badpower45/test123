@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Execute Migration - Current Salary System</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 900px;
+            margin: 50px auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .container {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+        h1 {
+            color: #667eea;
+            text-align: center;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+        }
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            width: 100%;
+            margin: 10px 0;
+            transition: transform 0.2s;
+        }
+        button:hover {
+            transform: scale(1.02);
+        }
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        #output {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f5f5f5;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            white-space: pre-wrap;
+            max-height: 500px;
+            overflow-y: auto;
+            direction: ltr;
+            text-align: left;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .warning {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        .info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        .step {
+            margin: 15px 0;
+            padding: 15px;
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            border-radius: 5px;
+        }
+        .step-title {
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Execute Migration</h1>
+        <p class="subtitle">تنفيذ جدول الراتب الحالي بعد خصم السلف</p>
+        
+        <div class="step">
+            <div class="step-title">📊 النظام الجديد:</div>
+            <ul>
+                <li><strong>Current Salary</strong> = Total Net Salary - Approved Advances</li>
+                <li><strong>Available Advance</strong> = Current Salary × 30%</li>
+                <li>المربع الأزرق يعرض <strong>Current Salary</strong></li>
+                <li>المتاح للسحب = حد أقصى حقيقي (مش عرض فقط)</li>
+            </ul>
+        </div>
+
+        <button onclick="executeMigration()" id="executeBtn">
+            ⚡ تنفيذ Migration الآن
+        </button>
+
+        <button onclick="testSystem()" id="testBtn" disabled>
+            🧪 اختبار النظام بعد التنفيذ
+        </button>
+
+        <button onclick="viewData()" id="viewBtn" disabled>
+            👁️ عرض البيانات
+        </button>
+
+        <div id="output"></div>
+    </div>
+
+    <script>
+        const SUPABASE_URL = 'https://oecrjncxusupqocqwogk.supabase.co';
+        const SERVICE_ROLE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9lY3JqbmN4dXN1cHFvY3F3b2drIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTcyNzk3Mzc2OSwiZXhwIjoyMDQzNTQ5NzY5fQ.CBjR5p7fSgPzohXxhE5sQFP2hBo6lY7TgABQLqK5_Ro';
+
+        const supabase = window.supabase.createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+        
+        function log(message, type = 'info') {
+            const output = document.getElementById('output');
+            output.className = type;
+            output.textContent += message + '\n';
+            output.scrollTop = output.scrollHeight;
+            console.log(message);
+        }
+
+        function clearLog() {
+            document.getElementById('output').textContent = '';
+        }
+
+        async function executeMigration() {
+            clearLog();
+            const btn = document.getElementById('executeBtn');
+            btn.disabled = true;
+            btn.textContent = '⏳ جاري التنفيذ...';
+
+            try {
+                log('📊 Step 1: Creating up_to_date_salary_with_advances table...', 'info');
+
+                // Create table
+                const createTableSQL = `
+                    CREATE TABLE IF NOT EXISTS up_to_date_salary_with_advances (
+                      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                      employee_id TEXT NOT NULL UNIQUE REFERENCES employees(id) ON DELETE CASCADE,
+                      total_net_salary DECIMAL(10, 2) DEFAULT 0,
+                      total_approved_advances DECIMAL(10, 2) DEFAULT 0,
+                      current_salary DECIMAL(10, 2) DEFAULT 0,
+                      available_advance_30_percent DECIMAL(10, 2) DEFAULT 0,
+                      last_updated TIMESTAMPTZ DEFAULT NOW(),
+                      created_at TIMESTAMPTZ DEFAULT NOW()
+                    );
+                `;
+
+                const { error: createErr } = await supabase.rpc('exec_sql', { sql: createTableSQL });
+                if (createErr && !createErr.message.includes('already exists')) {
+                    throw createErr;
+                }
+                log('✅ Table created/verified', 'success');
+
+                // Create index
+                log('📊 Step 2: Creating index...', 'info');
+                const createIndexSQL = `
+                    CREATE INDEX IF NOT EXISTS idx_up_to_date_salary_with_advances_employee 
+                    ON up_to_date_salary_with_advances(employee_id);
+                `;
+                await supabase.rpc('exec_sql', { sql: createIndexSQL }).catch(e => {
+                    if (!e.message.includes('already exists')) throw e;
+                });
+                log('✅ Index created', 'success');
+
+                // Enable RLS
+                log('📊 Step 3: Setting up RLS...', 'info');
+                await supabase.rpc('exec_sql', { 
+                    sql: 'ALTER TABLE up_to_date_salary_with_advances ENABLE ROW LEVEL SECURITY;' 
+                });
+                log('✅ RLS enabled', 'success');
+
+                // Create RPC function
+                log('📊 Step 4: Creating get_current_salary_info RPC...', 'info');
+                const rpcSQL = `
+                    CREATE OR REPLACE FUNCTION get_current_salary_info(p_employee_id TEXT)
+                    RETURNS TABLE (
+                      current_salary DECIMAL(10, 2),
+                      available_advance DECIMAL(10, 2),
+                      total_net_salary DECIMAL(10, 2),
+                      total_approved_advances DECIMAL(10, 2)
+                    ) 
+                    SECURITY DEFINER
+                    AS $$
+                    BEGIN
+                      RETURN QUERY
+                      SELECT 
+                        COALESCE(c.current_salary, 0::DECIMAL(10, 2)),
+                        COALESCE(c.available_advance_30_percent, 0::DECIMAL(10, 2)),
+                        COALESCE(c.total_net_salary, 0::DECIMAL(10, 2)),
+                        COALESCE(c.total_approved_advances, 0::DECIMAL(10, 2))
+                      FROM up_to_date_salary_with_advances c
+                      WHERE c.employee_id = p_employee_id;
+                      
+                      IF NOT FOUND THEN
+                        RETURN QUERY
+                        SELECT 
+                          0::DECIMAL(10, 2),
+                          0::DECIMAL(10, 2),
+                          0::DECIMAL(10, 2),
+                          0::DECIMAL(10, 2);
+                      END IF;
+                    END;
+                    $$ LANGUAGE plpgsql;
+                `;
+                const { error: rpcErr } = await supabase.rpc('exec_sql', { sql: rpcSQL });
+                if (rpcErr) throw rpcErr;
+                log('✅ RPC function created', 'success');
+
+                // Initialize data
+                log('📊 Step 5: Initializing data from up_to_date_salary...', 'info');
+                const { data: upToDateData, error: fetchErr } = await supabase
+                    .from('up_to_date_salary')
+                    .select('employee_id, total_net_salary');
+
+                if (fetchErr) throw fetchErr;
+                log(`Found ${upToDateData.length} employees in up_to_date_salary`, 'info');
+
+                for (const emp of upToDateData) {
+                    // Get approved advances
+                    const { data: advances } = await supabase
+                        .from('salary_advances')
+                        .select('amount')
+                        .eq('employee_id', emp.employee_id)
+                        .eq('status', 'approved');
+
+                    const totalAdvances = (advances || []).reduce((sum, a) => sum + parseFloat(a.amount || 0), 0);
+                    const currentSalary = parseFloat(emp.total_net_salary || 0) - totalAdvances;
+                    const available = currentSalary * 0.30;
+
+                    // Upsert
+                    const { error: upsertErr } = await supabase
+                        .from('up_to_date_salary_with_advances')
+                        .upsert({
+                            employee_id: emp.employee_id,
+                            total_net_salary: emp.total_net_salary,
+                            total_approved_advances: totalAdvances,
+                            current_salary: currentSalary,
+                            available_advance_30_percent: available,
+                        }, { onConflict: 'employee_id' });
+
+                    if (upsertErr) throw upsertErr;
+                    log(`✅ ${emp.employee_id}: Current=${currentSalary.toFixed(2)}, Available=${available.toFixed(2)}`, 'success');
+                }
+
+                log('\n🎉 Migration completed successfully!', 'success');
+                log('✅ Table created', 'success');
+                log('✅ RPC function ready', 'success');
+                log('✅ Data initialized', 'success');
+                
+                document.getElementById('testBtn').disabled = false;
+                document.getElementById('viewBtn').disabled = false;
+                btn.textContent = '✅ تم التنفيذ بنجاح';
+
+            } catch (error) {
+                log(`\n❌ Error: ${error.message}`, 'error');
+                log(JSON.stringify(error, null, 2), 'error');
+                btn.disabled = false;
+                btn.textContent = '❌ حدث خطأ - حاول مرة أخرى';
+            }
+        }
+
+        async function testSystem() {
+            clearLog();
+            log('🧪 Testing current salary system...', 'info');
+
+            try {
+                // Test RPC for empp
+                log('\n📞 Calling get_current_salary_info for empp...', 'info');
+                const { data, error } = await supabase.rpc('get_current_salary_info', {
+                    p_employee_id: 'empp'
+                });
+
+                if (error) throw error;
+
+                log('✅ RPC Response:', 'success');
+                log(JSON.stringify(data, null, 2), 'success');
+
+                if (data && data.length > 0) {
+                    const info = data[0];
+                    log(`\n📊 Employee empp:`, 'info');
+                    log(`   Total Net Salary: ${info.total_net_salary} EGP`, 'info');
+                    log(`   Approved Advances: ${info.total_approved_advances} EGP`, 'info');
+                    log(`   Current Salary: ${info.current_salary} EGP`, 'info');
+                    log(`   Available for Advance (30%): ${info.available_advance} EGP`, 'success');
+                }
+
+            } catch (error) {
+                log(`\n❌ Test Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function viewData() {
+            clearLog();
+            log('👁️ Viewing up_to_date_salary_with_advances data...', 'info');
+
+            try {
+                const { data, error } = await supabase
+                    .from('up_to_date_salary_with_advances')
+                    .select('*')
+                    .order('created_at', { ascending: false });
+
+                if (error) throw error;
+
+                log(`\n📊 Found ${data.length} records:\n`, 'info');
+                data.forEach(row => {
+                    log(`Employee: ${row.employee_id}`, 'info');
+                    log(`  Total Net: ${row.total_net_salary} EGP`, 'info');
+                    log(`  Approved Advances: ${row.total_approved_advances} EGP`, 'warning');
+                    log(`  Current Salary: ${row.current_salary} EGP`, 'success');
+                    log(`  Available (30%): ${row.available_advance_30_percent} EGP`, 'success');
+                    log(`  Last Updated: ${new Date(row.last_updated).toLocaleString('ar-EG')}`, 'info');
+                    log('---', 'info');
+                });
+
+            } catch (error) {
+                log(`\n❌ View Error: ${error.message}`, 'error');
+            }
+        }
+    </script>
+</body>
+</html>

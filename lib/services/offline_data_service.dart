@@ -4,6 +4,7 @@ import 'package:hive/hive.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import '../database/offline_database.dart';
+import 'supabase_function_client.dart';
 
 /// Service for managing offline data storage and sync
 /// Downloads branch data from Supabase and stores it locally
@@ -29,7 +30,7 @@ class OfflineDataService {
       // Get branch info from Supabase (correct column names)
       final response = await _supabase
           .from('branches')
-          .select('id, name, latitude, longitude, wifi_bssid, geofence_radius, created_at')
+          .select('id, name, latitude, longitude, wifi_bssid, geofence_radius, distance_from_radius, created_at')
           .eq('name', employeeBranch)
           .maybeSingle();
       
@@ -48,6 +49,11 @@ class OfflineDataService {
       final geofenceRadius = (response['geofence_radius'] ?? 
                              response['geofenceRadius'] ?? 
                              100.0).toDouble();
+      
+      // Get distance_from_radius (additional pulse tolerance)
+      final distanceFromRadius = (response['distance_from_radius'] ?? 
+                                 response['distanceFromRadius'] ?? 
+                                 100.0).toDouble();
 
       Map<String, dynamic>? employeeInfo;
       double? hourlyRate;
@@ -123,6 +129,7 @@ class OfflineDataService {
         'bssid': response['wifi_bssid'], // Map wifi_bssid to bssid for consistency
         'wifi_bssids': distinctWifiBssids,
         'geofence_radius': geofenceRadius,
+        'distance_from_radius': distanceFromRadius,
         'downloaded_at': DateTime.now().toIso8601String(),
         'employee_id': employeeId, // Store which employee this data belongs to
         'shift_start_time': employeeInfo?['shift_start_time'],
@@ -165,11 +172,12 @@ class OfflineDataService {
       print('✅ تم تنزيل بيانات الفرع');
       print('📍 Location: ${branchData['latitude']}, ${branchData['longitude']}');
       if (distinctWifiBssids.isNotEmpty) {
-        print('� Wi-Fi networks: ${distinctWifiBssids.join(', ')}');
+        print('Wi-Fi networks: ${distinctWifiBssids.join(', ')}');
       } else {
-        print('📶 Wi-Fi networks: none provided');
+        print('Wi-Fi networks: none provided');
       }
   print('🎯 Geofence Radius: ${branchData['geofence_radius']}m');
+  print('📡 Pulse Distance: ${branchData['distance_from_radius']}m');
   print('⏰ Shift: ${branchData['shift_start_time']} → ${branchData['shift_end_time']}');
   print('💵 Hourly Rate: ${branchData['hourly_rate']}');
 
@@ -288,6 +296,7 @@ class OfflineDataService {
     required double latitude,
     required double longitude,
     String? bssid,
+    String? notes,
   }) async {
     try {
       final box = await Hive.openBox(_attendanceBox);
@@ -299,6 +308,7 @@ class OfflineDataService {
         'latitude': latitude,
         'longitude': longitude,
         'bssid': bssid,
+        'notes': notes,
         'synced': false,
       };
 
@@ -367,60 +377,99 @@ class OfflineDataService {
     double? longitude,
     double? distanceFromCenter,
     String? attendanceId,
+    String? branchId,
     String? wifiBssid,
     bool validatedByWifi = false,
     bool validatedByLocation = false,
   }) async {
     try {
       // 1️⃣ Save to Supabase FIRST
+      bool savedToSupabase = false;
       try {
-        final payload = <String, dynamic>{
+        // Validate attendance_id before sending (avoid placeholders)
+        String? validAttendanceId = attendanceId;
+        if (validAttendanceId != null) {
+          final trimmed = validAttendanceId.trim();
+          final isPlaceholder = RegExp(r'(pending|local|temp|dummy)', caseSensitive: false).hasMatch(trimmed) || trimmed.length < 8;
+          final uuidRegex = RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$', caseSensitive: false);
+          if (isPlaceholder || !uuidRegex.hasMatch(trimmed)) {
+            validAttendanceId = null; // Strip invalid
+          }
+        }
+
+        final pulsePayload = <String, dynamic>{
           'employee_id': employeeId,
-          'attendance_id': attendanceId,
+          if (validAttendanceId != null) 'attendance_id': validAttendanceId,
+          'branch_id': branchId,
           'latitude': latitude,
           'longitude': longitude,
           'inside_geofence': insideGeofence,
+          'is_within_geofence': insideGeofence,
           'distance_from_center': distanceFromCenter,
+          'wifi_bssid': wifiBssid,
+          'validated_by_wifi': validatedByWifi,
+          'validated_by_location': validatedByLocation,
           'timestamp': timestamp.toUtc().toIso8601String(),
-        };
+        }..removeWhere((key, value) => value == null);
 
-        payload.removeWhere((key, value) => value == null);
-
-        await _supabase.from('location_pulses').insert(payload);
+        await SupabaseFunctionClient.post('sync-pulses', {
+          'pulses': [pulsePayload],
+        });
+        savedToSupabase = true;
         final distanceText = distanceFromCenter != null
             ? '${distanceFromCenter.toStringAsFixed(1)}m'
             : 'n/a';
-        print('✅ Pulse saved to Supabase: ${insideGeofence ? "INSIDE" : "OUTSIDE"} geofence ($distanceText)');
+        print('✅ Pulse saved via sync-pulses: ${insideGeofence ? "INSIDE" : "OUTSIDE"} geofence ($distanceText)');
       } catch (supabaseError) {
         print('⚠️ Could not save to Supabase (offline?): $supabaseError');
         // Continue to save locally for later sync
       }
       
-      // 2️⃣ Save to Hive (local backup)
-      final box = await Hive.openBox(_pulsesBox);
-      
-      final pulseData = {
-        'employee_id': employeeId,
-        'attendance_id': attendanceId,
-        'timestamp': timestamp.toIso8601String(),
-        'latitude': latitude,
-        'longitude': longitude,
-        'inside_geofence': insideGeofence,
-        'distance_from_center': distanceFromCenter,
-        'wifi_bssid': wifiBssid,
-        'validated_by_wifi': validatedByWifi,
-        'validated_by_location': validatedByLocation,
-        'synced': false,
-      };
+      // 2️⃣ Save to Hive (for Web) or SQLite (for Mobile)
+      if (kIsWeb) {
+        // Web: Save to Hive
+        final box = await Hive.openBox(_pulsesBox);
+        
+        final pulseData = {
+          'employee_id': employeeId,
+          'attendance_id': attendanceId,
+          'branch_id': branchId,
+          'timestamp': timestamp.toIso8601String(),
+          'latitude': latitude,
+          'longitude': longitude,
+          'inside_geofence': insideGeofence,
+          'is_within_geofence': insideGeofence,
+          'distance_from_center': distanceFromCenter,
+          'wifi_bssid': wifiBssid,
+          'validated_by_wifi': validatedByWifi,
+          'validated_by_location': validatedByLocation,
+          'synced': savedToSupabase, // Mark as synced if saved to Supabase
+        };
 
-      final key = 'pulse_${timestamp.millisecondsSinceEpoch}';
-      await box.put(key, pulseData);
-      await box.close();
+        final key = 'pulse_${timestamp.millisecondsSinceEpoch}';
+        await box.put(key, pulseData);
+        await box.close();
+      } else {
+        // Mobile: Save to SQLite
+        final db = OfflineDatabase.instance;
+        await db.insertPendingPulse(
+          employeeId: employeeId,
+          timestamp: timestamp,
+          attendanceId: attendanceId,
+          latitude: latitude,
+          longitude: longitude,
+          insideGeofence: insideGeofence,
+          distanceFromCenter: distanceFromCenter,
+          wifiBssid: wifiBssid,
+          validatedByWifi: validatedByWifi,
+          validatedByLocation: validatedByLocation,
+        );
+      }
 
-    final distanceText = distanceFromCenter != null
-      ? '${distanceFromCenter.toStringAsFixed(1)}m'
-      : 'n/a';
-    print('📍 Pulse saved locally: ${insideGeofence ? "INSIDE" : "OUTSIDE"} geofence ($distanceText)');
+      final distanceText = distanceFromCenter != null
+        ? '${distanceFromCenter.toStringAsFixed(1)}m'
+        : 'n/a';
+      print('📍 Pulse saved locally: ${insideGeofence ? "INSIDE" : "OUTSIDE"} geofence ($distanceText)');
       return true;
     } catch (e) {
       print('❌ Error saving local pulse: $e');
@@ -443,19 +492,33 @@ class OfflineDataService {
       for (var key in box.keys) {
         final record = box.get(key);
         if (record is Map && record['employee_id'] == employeeId) {
-          final timestamp = DateTime.parse(record['timestamp']);
-          if (timestamp.isAfter(startOfDay) && timestamp.isBefore(endOfDay)) {
-            pulses.add(Map<String, dynamic>.from(record));
+          // ✅ FIX: Safe timestamp parsing
+          final rawTimestamp = record['timestamp'];
+          if (rawTimestamp == null || rawTimestamp.toString().isEmpty) continue;
+          try {
+            final timestamp = DateTime.parse(rawTimestamp.toString());
+            if (timestamp.isAfter(startOfDay) && timestamp.isBefore(endOfDay)) {
+              pulses.add(Map<String, dynamic>.from(record));
+            }
+          } catch (e) {
+            print('⚠️ Invalid timestamp in pulse record: $rawTimestamp');
+            continue;
           }
         }
       }
       
       await box.close();
       
-      // Sort by timestamp
-      pulses.sort((a, b) => 
-        DateTime.parse(a['timestamp']).compareTo(DateTime.parse(b['timestamp']))
-      );
+      // Sort by timestamp - ✅ FIX: Safe parsing in sort
+      pulses.sort((a, b) {
+        try {
+          final aTime = DateTime.parse(a['timestamp']?.toString() ?? '');
+          final bTime = DateTime.parse(b['timestamp']?.toString() ?? '');
+          return aTime.compareTo(bTime);
+        } catch (e) {
+          return 0; // Keep original order if parsing fails
+        }
+      });
       
       return pulses;
     } catch (e) {
@@ -511,7 +574,13 @@ class OfflineDataService {
     for (final pulse in pulses) {
       summary['totalPulses'] = (summary['totalPulses'] as int) + 1;
 
-      final timestamp = DateTime.parse(pulse['timestamp'] as String);
+      // ✅ FIX: Safe timestamp parsing
+      DateTime timestamp;
+      try {
+        timestamp = DateTime.parse(pulse['timestamp']?.toString() ?? '');
+      } catch (e) {
+        continue; // Skip this pulse if timestamp is invalid
+      }
       final hour = timestamp.hour;
 
       final isInside = pulse['inside_geofence'] == true;
@@ -605,7 +674,8 @@ class OfflineDataService {
               'check_in_time': record['timestamp'],
               'check_in_latitude': record['latitude'],
               'check_in_longitude': record['longitude'],
-              'check_in_bssid': record['bssid'],
+              // Correct column name per schema
+              'check_in_wifi_bssid': record['bssid'],
             });
           } else if (record['type'] == 'check_out') {
             // Find matching check-in and update
@@ -615,7 +685,9 @@ class OfflineDataService {
               'check_out_time': record['timestamp'],
               'check_out_latitude': record['latitude'],
               'check_out_longitude': record['longitude'],
-              'check_out_bssid': record['bssid'],
+              // Correct column name per schema
+              'check_out_wifi_bssid': record['bssid'],
+              'notes': record['notes'],
             });
           }
           
@@ -630,13 +702,23 @@ class OfflineDataService {
       final unsyncedPulses = await getUnsyncedPulses();
       for (var record in unsyncedPulses) {
         try {
-          await _supabase.from('location_pulses').insert({
+          final pulsePayload = <String, dynamic>{
             'employee_id': record['employee_id'],
+            'attendance_id': record['attendance_id'],
+            'branch_id': record['branch_id'],
             'timestamp': record['timestamp'],
             'latitude': record['latitude'],
             'longitude': record['longitude'],
             'inside_geofence': record['inside_geofence'],
+            'is_within_geofence': record['inside_geofence'],
             'distance_from_center': record['distance_from_center'],
+            'wifi_bssid': record['wifi_bssid'],
+            'validated_by_wifi': record['validated_by_wifi'],
+            'validated_by_location': record['validated_by_location'],
+          }..removeWhere((key, value) => value == null);
+
+          await SupabaseFunctionClient.post('sync-pulses', {
+            'pulses': [pulsePayload],
           });
           
           await markPulseSynced(record['key']);
@@ -675,7 +757,19 @@ class OfflineDataService {
         return true;
       }
       
-      final downloadedAt = DateTime.parse(cachedData['downloaded_at']);
+      // ✅ FIX: Safe downloaded_at parsing
+      DateTime downloadedAt;
+      try {
+        final rawDownloadedAt = cachedData['downloaded_at'];
+        if (rawDownloadedAt == null || rawDownloadedAt.toString().isEmpty) {
+          print('📥 No download timestamp - needs refresh');
+          return true;
+        }
+        downloadedAt = DateTime.parse(rawDownloadedAt.toString());
+      } catch (e) {
+        print('⚠️ Invalid downloaded_at format - needs refresh');
+        return true;
+      }
       final now = DateTime.now();
       final difference = now.difference(downloadedAt);
       

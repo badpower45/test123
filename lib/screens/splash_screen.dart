@@ -6,7 +6,6 @@ import '../services/auth_service.dart';
 import '../models/employee.dart';
 import 'login_screen.dart';
 import 'owner/owner_main_screen_new.dart';
-import 'manager/manager_main_screen.dart';
 import 'employee/employee_main_screen.dart';
 import 'branch_manager_screen.dart';
 
@@ -151,7 +150,8 @@ class _SplashScreenState extends State<SplashScreen>
       } else if (role.toLowerCase() == 'admin' || role.toLowerCase() == 'hr') {
         targetScreen = BranchManagerScreen(managerId: employeeId, branchName: branch);
       } else if (role.toLowerCase() == 'manager') {
-        targetScreen = ManagerMainScreen(managerId: employeeId, branch: branch, role: role);
+        // Manager goes to EMPLOYEE screen (same as staff) + admin button
+        targetScreen = EmployeeMainScreen(employeeId: employeeId, role: role, branch: branch);
       } else {
         targetScreen = EmployeeMainScreen(employeeId: employeeId, role: role, branch: branch);
       }

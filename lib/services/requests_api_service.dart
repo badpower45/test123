@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:http/http.dart' as http;
 
@@ -8,20 +9,21 @@ import '../models/attendance_request.dart';
 import '../models/break.dart';
 import '../models/leave_request.dart';
 import '../models/shift_status.dart';
+import 'notification_service.dart';
+import 'supabase_attendance_service.dart';
+import 'supabase_function_client.dart';
+import 'supabase_requests_service.dart';
 
 class RequestsApiService {
   static Future<void> deleteRejectedBreaks(String employeeId) async {
-    final uri = Uri.parse('$breaksEndpoint/delete-rejected');
-    final response = await http.post(
-      uri,
-      headers: _jsonHeaders,
-      body: jsonEncode({'employee_id': employeeId}),
-    );
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      return;
+    try {
+      await SupabaseFunctionClient.post('employee-break', {
+        'action': 'delete_rejected',
+        'employee_id': employeeId,
+      });
+    } on Exception catch (error) {
+      throw Exception('تعذر حذف الطلبات المرفوضة: $error');
     }
-    final body = _decodeBody(response.body);
-    throw Exception(body['error'] ?? 'تعذر حذف الطلبات المرفوضة (${response.statusCode})');
   }
 
   static Future<void> deleteRejectedLeaves(String employeeId) async {
@@ -71,14 +73,39 @@ class RequestsApiService {
     throw Exception(body['error'] ?? 'تعذر تحميل حالة المناوبة (${response.statusCode})');
   }
 
+  /// ✅ Check if employee has active attendance (from Database)
   static Future<bool> checkActiveShift(String employeeId) async {
     try {
-      final status = await fetchShiftStatus(employeeId);
-      return status.hasActiveShift;
-    } catch (_) {
+      // ✅ Primary check: Supabase Database (source of truth)
+      final activeAttendance = await SupabaseAttendanceService.getActiveAttendance(employeeId);
+      if (activeAttendance != null) {
+        print('✅ Active attendance found in database: ${activeAttendance['id']}');
+        return true;
+      }
+      
+      // ✅ Fallback: Check local cache
+      final prefs = await SharedPreferences.getInstance();
+      final cachedId = prefs.getString('active_attendance_id');
+      if (cachedId != null && cachedId.isNotEmpty) {
+        // Validate cache against database
+        print('⚠️ Cache has attendance but database does not. Clearing cache.');
+        await prefs.remove('active_attendance_id');
+      }
+      
+      print('❌ No active attendance found for employee: $employeeId');
       return false;
+    } catch (e) {
+      print('⚠️ Error checking active shift: $e');
+      // Fallback to old method
+      try {
+        final status = await fetchShiftStatus(employeeId);
+        return status.hasActiveShift;
+      } catch (_) {
+        return false;
+      }
     }
   }
+
   RequestsApiService._();
 
   static const Map<String, String> _jsonHeaders = {
@@ -179,65 +206,86 @@ class RequestsApiService {
     required String employeeId,
     required int durationMinutes,
   }) async {
-    final response = await http.post(
-      Uri.parse(breaksRequestEndpoint),
-      headers: _jsonHeaders,
-      body: jsonEncode({
+    try {
+      print('📤 Calling employee-break function: action=request, employee_id=$employeeId, duration=$durationMinutes');
+      final result = await SupabaseFunctionClient.post('employee-break', {
+        'action': 'request',
         'employee_id': employeeId,
         'duration_minutes': durationMinutes,
-      }),
-    );
-
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      return;
+      });
+      print('✅ Break request response: $result');
+    } on Exception catch (error) {
+      print('❌ Break request exception: $error');
+      throw Exception('Failed to submit break request: $error');
+    } catch (error) {
+      print('❌ Break request unknown error: $error');
+      throw Exception('Failed to submit break request: $error');
     }
-
-    final body = _decodeBody(response.body);
-    throw Exception(body['error'] ?? 'Failed to submit break request');
   }
 
   static Future<void> startBreak({required String breakId}) async {
-    final uri = Uri.parse('$breaksEndpoint/$breakId/start');
-    final response = await http.post(uri, headers: _jsonHeaders);
-
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      return;
+    try {
+      await SupabaseFunctionClient.post('employee-break', {
+        'action': 'start',
+        'break_id': breakId,
+      });
+      
+      // ✅ Save local break state for background services
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('is_break_active', true);
+        await prefs.setString('active_break_id', breakId);
+        print('✅ Local break state saved: active');
+        await NotificationService.instance
+            .showBreakStatusNotification(started: true);
+      } catch (e) {
+        print('⚠️ Failed to save local break state: $e');
+      }
+    } on Exception catch (error) {
+      throw Exception('Failed to start break: $error');
     }
-
-    final body = _decodeBody(response.body);
-    throw Exception(body['error'] ?? 'Failed to start break');
   }
 
   static Future<void> endBreak({required String breakId}) async {
-    final uri = Uri.parse('$breaksEndpoint/$breakId/end');
-    final response = await http.post(uri, headers: _jsonHeaders);
+    try {
+      await SupabaseFunctionClient.post('employee-break', {
+        'action': 'end',
+        'break_id': breakId,
+      });
 
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      return;
+      // ✅ Clear local break state
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('is_break_active', false);
+        await prefs.remove('active_break_id');
+        print('✅ Local break state cleared');
+        await NotificationService.instance
+            .showBreakStatusNotification(started: false);
+      } catch (e) {
+        print('⚠️ Failed to clear local break state: $e');
+      }
+    } on Exception catch (error) {
+      throw Exception('Failed to end break: $error');
     }
-
-    final body = _decodeBody(response.body);
-    throw Exception(body['error'] ?? 'Failed to end break');
   }
 
   static Future<List<Break>> fetchBreaks({required String employeeId}) async {
-    final uri = Uri.parse(breaksEndpoint).replace(
-      queryParameters: {'employee_id': employeeId},
-    );
-    final response = await http.get(uri);
-    final body = _decodeBody(response.body);
+    try {
+      final response = await SupabaseFunctionClient.post('employee-break', {
+        'action': 'list',
+        'employee_id': employeeId,
+      });
 
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      final rawList = body['breaks'] ?? body['data'] ?? body['items'] ?? body;
+      final rawList = (response ?? {})['breaks'];
       if (rawList is List) {
         return rawList
             .map((item) => Break.fromJson(Map<String, dynamic>.from(item as Map)))
             .toList();
       }
       return const <Break>[];
+    } on Exception catch (error) {
+      throw Exception('Failed to fetch breaks: $error');
     }
-
-    throw Exception(body['error'] ?? 'Failed to fetch breaks');
   }
 
   static Future<AttendanceRequest> submitAttendanceRequest({
@@ -246,40 +294,23 @@ class RequestsApiService {
     required String reason,
     AttendanceRequestType requestType = AttendanceRequestType.checkIn,
   }) async {
-    final endpoint = requestType == AttendanceRequestType.checkIn
-        ? attendanceRequestCheckinEndpoint
-        : attendanceRequestCheckoutEndpoint;
-
-    print('🔍 ATTENDANCE REQUEST DEBUG:');
-    print('  - Endpoint: $endpoint');
-    print('  - Employee ID: $employeeId');
-    print('  - Requested Time: ${requestedTime.toIso8601String()}');
-    print('  - Reason: $reason');
-
-    final response = await http.post(
-      Uri.parse(endpoint),
-      headers: _jsonHeaders,
-      body: jsonEncode({
-        'employee_id': employeeId,
-        'requested_time': requestedTime.toIso8601String(),
-        'reason': reason,
-      }),
-    );
-
-    print('🔍 ATTENDANCE REQUEST RESPONSE:');
-    print('  - Status Code: ${response.statusCode}');
-    print('  - Response Body: ${response.body}');
-
-    final body = _decodeBody(response.body);
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      final payload = body['request'] ?? body;
-      return AttendanceRequest.fromJson(Map<String, dynamic>.from(payload as Map));
+    try {
+      // ✅ Use Supabase instead of old API
+      final result = await SupabaseRequestsService.createAttendanceRequest(
+        employeeId: employeeId,
+        requestType: requestType == AttendanceRequestType.checkIn ? 'check-in' : 'check-out',
+        reason: reason,
+        requestedTime: requestedTime,
+      );
+      
+      if (result == null) {
+        throw Exception('تعذر إرسال طلب الحضور');
+      }
+      
+      return AttendanceRequest.fromJson(result);
+    } catch (e) {
+      throw Exception('فشل إرسال طلب الحضور: $e');
     }
-
-    // Enhanced error message
-    final errorMsg = body['error'] ?? body['message'] ?? 'تعذر إرسال طلب الحضور';
-    print('🔍 ATTENDANCE REQUEST ERROR: $errorMsg (Status: ${response.statusCode})');
-    throw Exception('$errorMsg (${response.statusCode})');
   }
 
   static Future<List<AttendanceRequest>> fetchAttendanceRequests(

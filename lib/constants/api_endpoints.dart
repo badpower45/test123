@@ -1,6 +1,6 @@
-// Deployed server
-const String apiBaseUrl = 'http://16.171.208.249:5000/api';
-const String rootBaseUrl = 'http://16.171.208.249:5000';
+// OLD API - DISABLED (using Supabase now)
+const String apiBaseUrl = ''; // 'http://16.171.208.249:5000/api';
+const String rootBaseUrl = ''; // 'http://16.171.208.249:5000';
 
 // General
 const String healthCheckEndpoint = '$rootBaseUrl/health';

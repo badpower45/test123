@@ -1,6 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
 import '../theme/app_colors.dart';
 import '../services/branch_manager_api_service.dart';
+import '../services/manager_pending_requests_service.dart';
+import '../services/offline_data_service.dart';
+import '../services/sync_service.dart';
+import '../database/offline_database.dart';
+import '../config/supabase_config.dart';
 import 'manager/manager_absences_page.dart';
 
 
@@ -18,34 +26,149 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
   String? _error;
   Map<String, dynamic>? _requests;
   Map<String, dynamic>? _attendanceReport;
+  Map<String, dynamic>? _pulseSummary;
   late TabController _tabController;
   String _filterStatus = 'all'; // all, pending, approved, rejected
+  String? _branchId;
+  int _pendingCount = 0;
+  final OfflineDataService _offlineService = OfflineDataService();
+  final SyncService _syncService = SyncService.instance;
+  final _supabase = SupabaseConfig.client;
+  RealtimeChannel? _requestsChannel;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 5, vsync: this);
+    _downloadBranchData();
+    _loadPendingCount();
+    _syncService.startPeriodicSync();
     _fetchData();
+    _setupRealtimeSubscription();
   }
 
   @override
   void dispose() {
+    _requestsChannel?.unsubscribe();
     _tabController.dispose();
+    _syncService.stopPeriodicSync();
     super.dispose();
+  }
+
+  void _setupRealtimeSubscription() {
+    print('🔔 Setting up realtime subscription for manager: ${widget.managerId}');
+    
+    // Subscribe to all request tables for this manager's branch employees
+    _requestsChannel = _supabase
+        .channel('manager_requests_${widget.managerId}')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'leave_requests',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'assigned_manager_id',
+            value: widget.managerId,
+          ),
+          callback: (payload) {
+            print('🔔 Leave request changed: ${payload.eventType}');
+            _fetchData();
+          },
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'salary_advances',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'assigned_manager_id',
+            value: widget.managerId,
+          ),
+          callback: (payload) {
+            print('🔔 Salary advance changed: ${payload.eventType}');
+            _fetchData();
+          },
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'attendance_requests',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'assigned_manager_id',
+            value: widget.managerId,
+          ),
+          callback: (payload) {
+            print('🔔 Attendance request changed: ${payload.eventType}');
+            _fetchData();
+          },
+        )
+        .subscribe((status, error) {
+          if (status == RealtimeSubscribeStatus.subscribed) {
+            print('✅ Realtime subscription active for manager requests');
+          } else if (error != null) {
+            print('❌ Realtime subscription error: $error');
+          }
+        });
+  }
+
+  Future<void> _downloadBranchData() async {
+    try {
+      await _offlineService.downloadBranchData(
+        widget.branchName,
+        employeeId: widget.managerId,
+      );
+      print('✅ تم تنزيل بيانات الفرع للمدير');
+    } catch (e) {
+      print('❌ فشل تنزيل بيانات الفرع: $e');
+    }
+  }
+
+  Future<void> _loadPendingCount() async {
+    try {
+      final db = OfflineDatabase.instance;
+      final count = await db.getPendingCount();
+      if (mounted) {
+        setState(() {
+          _pendingCount = count;
+        });
+      }
+    } catch (e) {
+      print('❌ Error loading pending count: $e');
+    }
   }
 
   Future<void> _fetchData() async {
     setState(() { _loading = true; _error = null; });
     try {
-      final reqs = await BranchManagerApiService.getBranchRequests(widget.branchName);
+      // Use the new Edge Function for pending requests aggregation
+      final pendingReqs = await ManagerPendingRequestsService.getAllPendingRequests(widget.managerId);
       final report = await BranchManagerApiService.getAttendanceReport(widget.branchName);
+      final pulses = await BranchManagerApiService.getBranchPulseSummary(widget.branchName);
+
+      print('🔍 [DEBUG] Manager Pending Requests API response:');
+      print(pendingReqs);
+      print('🔍 [DEBUG] Attendance Report API response:');
+      print(report);
+      print('🔍 [DEBUG] Pulse Summary API response:');
+      print(pulses);
+
       setState(() {
-        _requests = reqs;
+        _requests = pendingReqs;
         _attendanceReport = report;
+        _pulseSummary = pulses;
+        _branchId = (pulses['branch'] is Map<String, dynamic>)
+            ? (pulses['branch']['id'] as String?)
+            : _branchId;
         _loading = false;
       });
+      await _loadPendingCount();
     } catch (e) {
-      setState(() { _error = e.toString(); _loading = false; });
+      setState(() {
+        _error = e.toString();
+        _pulseSummary = null;
+        _loading = false;
+      });
     }
   }
 
@@ -64,6 +187,48 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
     }
   }
 
+  Future<void> _actOnAbsence(Map<String, dynamic> alert, {required bool applyDeduction}) async {
+    try {
+      if (applyDeduction) {
+        // Apply deduction - use the branch-request-action endpoint
+        await BranchManagerApiService.actOnRequest(
+          type: 'absence',
+          id: alert['id'],
+          action: 'approve', // This will trigger deduction
+          managerId: widget.managerId,
+        );
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✓ تم تطبيق خصم الغياب'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+      } else {
+        // No deduction - excuse the absence
+        await BranchManagerApiService.actOnRequest(
+          type: 'absence',
+          id: alert['id'],
+          action: 'reject', // This will excuse without deduction
+          managerId: widget.managerId,
+        );
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✓ تم قبول عذر الغياب بدون خصم'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+      }
+      await _fetchData();
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('خطأ: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -74,6 +239,28 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
         foregroundColor: Colors.white,
         elevation: 0,
         actions: [
+          if (_pendingCount > 0)
+            IconButton(
+              icon: Badge(
+                label: Text('$_pendingCount'),
+                child: const Icon(Icons.cloud_upload),
+              ),
+              onPressed: () async {
+                final result = await _syncService.syncPendingData();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(result['message'] ?? 'تم'),
+                      backgroundColor: result['success']
+                          ? AppColors.success
+                          : AppColors.error,
+                    ),
+                  );
+                  await _loadPendingCount();
+                }
+              },
+              tooltip: 'رفع البيانات المعلقة',
+            ),
           IconButton(
             icon: const Icon(Icons.filter_list),
             onPressed: _showFilterDialog,
@@ -107,6 +294,7 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
                 )
               : Column(
                   children: [
+                    if (_pulseSummary != null) _buildPulseHighlights(),
                     _buildStatisticsCards(),
                     _buildTabBar(),
                     Expanded(
@@ -114,6 +302,7 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
                         controller: _tabController,
                         children: [
                           _buildRequestsTab(),
+                          _buildPulseTab(),
                           _buildAttendanceTab(),
                           _buildAbsenceTab(),
                           _buildBreaksTab(),
@@ -243,7 +432,7 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
             MaterialPageRoute(
               builder: (context) => ManagerAbsencesPage(
                 managerId: widget.managerId,
-                branchId: '', // TODO: Get actual branch ID
+                branchId: _branchId ?? '',
               ),
             ),
           ).then((_) => _fetchData()); // Refresh when coming back
@@ -292,12 +481,296 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
         indicatorColor: AppColors.primaryOrange,
         tabs: const [
           Tab(icon: Icon(Icons.assignment), text: 'الطلبات'),
+          Tab(icon: Icon(Icons.favorite), text: 'النبضات'),
           Tab(icon: Icon(Icons.people), text: 'الحضور'),
           Tab(icon: Icon(Icons.warning), text: 'الغياب'),
           Tab(icon: Icon(Icons.free_breakfast), text: 'الاستراحات'),
         ],
       ),
     );
+  }
+
+  Widget _buildPulseHighlights() {
+    final summary = _pulseSummary?['summary'] as Map<String, dynamic>?;
+    if (summary == null) {
+      return const SizedBox.shrink();
+    }
+
+    final numberFormat = NumberFormat('#,##0', 'ar');
+    final currencyFormat = NumberFormat.currency(locale: 'ar', symbol: 'ج.م', decimalDigits: 2);
+
+    final totalValid = numberFormat.format(_asNum(summary['totalValidPulses']));
+    final totalEarnings = currencyFormat.format(_asDouble(summary['totalEarnings']));
+    final activeCount = _asNum(summary['activeEmployeeCount']).toInt();
+    final employeeCount = _asNum(summary['employeeCount']).toInt();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      child: Card(
+        elevation: 2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Wrap(
+            spacing: 24,
+            runSpacing: 12,
+            children: [
+              _buildSummaryMetric(
+                icon: Icons.favorite,
+                title: 'النبضات الصحيحة',
+                value: totalValid,
+                color: Colors.pink,
+                width: 160,
+              ),
+              _buildSummaryMetric(
+                icon: Icons.payments,
+                title: 'إجمالي الأرباح',
+                value: totalEarnings,
+                color: Colors.green,
+                width: 160,
+              ),
+              _buildSummaryMetric(
+                icon: Icons.person_pin_circle,
+                title: 'المتواجدون الآن',
+                value: '$activeCount / $employeeCount',
+                color: Colors.indigo,
+                width: 160,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPulseTab() {
+    if (_pulseSummary == null) {
+      return const Center(child: Text('لا توجد بيانات نبضات', style: TextStyle(color: Colors.grey)));
+    }
+
+    final summary = _pulseSummary!['summary'] as Map<String, dynamic>? ?? {};
+    final employees = (_pulseSummary!['employees'] as List?)
+            ?.whereType<Map<String, dynamic>>()
+            .toList() ??
+        [];
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        _buildSectionTitle('ملخص النبضات'),
+        _buildPulseSummaryCard(summary),
+        const SizedBox(height: 24),
+        _buildSectionTitle('أداء الموظفين'),
+        if (employees.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 24),
+            child: Text('لا يوجد نبضات في الفترة المحددة', style: TextStyle(color: Colors.grey)),
+          )
+        else
+          ...employees.map((employee) => _buildPulseEmployeeCard(employee)),
+      ],
+    );
+  }
+
+  Widget _buildPulseSummaryCard(Map<String, dynamic> summary) {
+    final numberFormat = NumberFormat('#,##0', 'ar');
+    final currencyFormat = NumberFormat.currency(locale: 'ar', symbol: 'ج.م', decimalDigits: 2);
+
+    final totalPulses = numberFormat.format(_asNum(summary['totalPulses']));
+    final validPulses = numberFormat.format(_asNum(summary['totalValidPulses']));
+    final invalidPulses = numberFormat.format(_asNum(summary['totalInvalidPulses']));
+    final averageEarnings = currencyFormat.format(_asDouble(summary['averageEarningsPerEmployee']));
+
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Wrap(
+          spacing: 24,
+          runSpacing: 12,
+          children: [
+            _buildSummaryMetric(
+              icon: Icons.timelapse,
+              title: 'إجمالي النبضات',
+              value: totalPulses,
+              color: Colors.blueGrey,
+              width: 160,
+            ),
+            _buildSummaryMetric(
+              icon: Icons.favorite,
+              title: 'نبضات مقبولة',
+              value: validPulses,
+              color: Colors.pink,
+              width: 160,
+            ),
+            _buildSummaryMetric(
+              icon: Icons.favorite_border,
+              title: 'نبضات مرفوضة',
+              value: invalidPulses,
+              color: Colors.orange,
+              width: 160,
+            ),
+            _buildSummaryMetric(
+              icon: Icons.trending_up,
+              title: 'متوسط الأرباح للفرد',
+              value: averageEarnings,
+              color: Colors.green,
+              width: 160,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPulseEmployeeCard(Map<String, dynamic> employee) {
+    final numberFormat = NumberFormat('#,##0', 'ar');
+    final currencyFormat = NumberFormat.currency(locale: 'ar', symbol: 'ج.م', decimalDigits: 2);
+
+    final fullName = employee['fullName'] as String? ?? 'غير معروف';
+    final validPulses = numberFormat.format(_asNum(employee['validPulses']));
+    final invalidPulses = numberFormat.format(_asNum(employee['invalidPulses']));
+    final totalPulses = numberFormat.format(_asNum(employee['totalPulses']));
+    final earnings = currencyFormat.format(_asDouble(employee['earnings']));
+    final isCheckedIn = employee['isCheckedIn'] == true;
+    final checkIn = _formatPulseDate(employee['checkInTime']);
+
+    final firstPulse = _formatPulseDate(employee['firstPulseAt']);
+    final lastPulse = _formatPulseDate(employee['lastPulseAt']);
+
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    fullName,
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Chip(
+                  avatar: Icon(
+                    isCheckedIn ? Icons.check_circle : Icons.remove_circle_outline,
+                    size: 18,
+                    color: isCheckedIn ? Colors.green : Colors.grey,
+                  ),
+                  label: Text(isCheckedIn ? 'متواجد (${checkIn ?? '-'})' : 'غير متواجد'),
+                  backgroundColor: isCheckedIn ? Colors.green.withOpacity(0.12) : Colors.grey.withOpacity(0.12),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 16,
+              runSpacing: 12,
+              children: [
+                _buildSummaryMetric(
+                  icon: Icons.favorite,
+                  title: 'نبضات صحيحة',
+                  value: validPulses,
+                  color: Colors.pink,
+                  width: 140,
+                ),
+                _buildSummaryMetric(
+                  icon: Icons.favorite_border,
+                  title: 'نبضات مرفوضة',
+                  value: invalidPulses,
+                  color: Colors.orange,
+                  width: 140,
+                ),
+                _buildSummaryMetric(
+                  icon: Icons.timelapse,
+                  title: 'إجمالي النبضات',
+                  value: totalPulses,
+                  color: Colors.blueGrey,
+                  width: 140,
+                ),
+                _buildSummaryMetric(
+                  icon: Icons.payments,
+                  title: 'الأرباح',
+                  value: earnings,
+                  color: Colors.green,
+                  width: 140,
+                ),
+              ],
+            ),
+            if (firstPulse != null || lastPulse != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                'الفترة: ${firstPulse ?? '—'} → ${lastPulse ?? '—'}',
+                style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSummaryMetric({
+    required IconData icon,
+    required String title,
+    required String value,
+    required Color color,
+    double width = 150,
+  }) {
+    return SizedBox(
+      width: width,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: color, size: 20),
+          const SizedBox(height: 6),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            title,
+            style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+
+  num _asNum(dynamic value) {
+    if (value is num) return value;
+    if (value is String) {
+      return num.tryParse(value) ?? 0;
+    }
+    return 0;
+  }
+
+  double _asDouble(dynamic value) => _asNum(value).toDouble();
+
+  String? _formatPulseDate(dynamic value) {
+    if (value == null) return null;
+    DateTime? parsed;
+    if (value is DateTime) {
+      parsed = value;
+    } else if (value is String) {
+      parsed = DateTime.tryParse(value);
+    }
+    if (parsed == null) {
+      return null;
+    }
+    return DateFormat('dd/MM HH:mm', 'ar').format(parsed.toLocal());
   }
 
   Widget _buildRequestsTab() {
@@ -335,7 +808,8 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
 
   Widget _buildBreaksTab() {
     if (_requests == null) return const Center(child: Text('لا توجد بيانات'));
-    final breaks = _requests!['breakRequests'] as List? ?? [];
+    // Try both keys: break_requests (from API) and breakRequests (legacy)
+    final breaks = (_requests!['break_requests'] ?? _requests!['breakRequests']) as List? ?? [];
     if (breaks.isEmpty) {
       return const Center(child: Text('لا توجد طلبات استراحة', style: TextStyle(color: Colors.grey)));
     }
@@ -350,6 +824,10 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
   }
 
   Widget _buildBreakCard(Map breakReq) {
+    // Check status - can be PENDING, pending, or null/empty
+    final breakStatus = (breakReq['status'] ?? '').toString();
+    final showActions = breakStatus.isEmpty || breakStatus.toLowerCase() == 'pending' || breakStatus.toUpperCase() == 'PENDING';
+    
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 8),
       elevation: 2,
@@ -362,20 +840,22 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  'الموظف: ${breakReq['employeeName'] ?? breakReq['employeeId'] ?? ''}',
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                Expanded(
+                  child: Text(
+                    'الموظف: ${breakReq['employee']?['full_name'] ?? breakReq['employeeName'] ?? breakReq['employeeId'] ?? ''}',
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
                 ),
                 Chip(
-                  label: Text(breakReq['status'] ?? 'PENDING'),
+                  label: Text(_getStatusText(breakReq['status'] ?? 'PENDING')),
                   backgroundColor: _getStatusColor(breakReq['status']),
                 ),
               ],
             ),
             const SizedBox(height: 8),
-            Text('مدة الاستراحة: ${breakReq['requestedDurationMinutes'] ?? breakReq['durationMinutes'] ?? ''} دقيقة'),
-            Text('تاريخ الطلب: ${breakReq['createdAt'] ?? ''}'),
-            if (breakReq['status'] == 'PENDING' || breakReq['status'] == 'pending') ...[
+            Text('مدة الاستراحة: ${breakReq['requestedDurationMinutes'] ?? breakReq['durationMinutes'] ?? breakReq['requested_duration_minutes'] ?? ''} دقيقة'),
+            Text('تاريخ الطلب: ${breakReq['createdAt'] ?? breakReq['created_at'] ?? ''}'),
+            if (showActions) ...[
               const SizedBox(height: 12),
               Row(
                 children: [
@@ -423,16 +903,39 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
     );
   }
 
+  Color _getStatusColor(String? status) {
+    final statusUpper = status?.toString().toUpperCase() ?? 'PENDING';
+    switch (statusUpper) {
+      case 'APPROVED':
+        return AppColors.success.withOpacity(0.2);
+      case 'REJECTED':
+        return AppColors.error.withOpacity(0.2);
+      case 'ACTIVE':
+        return Colors.blue.withOpacity(0.2);
+      case 'POSTPONED':
+        return Colors.orange.withOpacity(0.2);
+      case 'PENDING':
+      default:
+        return Colors.orange.withOpacity(0.2);
+    }
+  }
+
   Future<void> _reviewBreakRequest(String breakId, String action) async {
     try {
-      await BranchManagerApiService.reviewBreakRequest(
-        breakId: breakId,
+      await BranchManagerApiService.actOnRequest(
+        type: 'break',
+        id: breakId,
         action: action,
         managerId: widget.managerId,
       );
       await _fetchData();
+      
+      String actionText = action == 'approve' ? 'الموافقة على' : action == 'reject' ? 'رفض' : 'تأجيل';
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('تم ${action == 'approve' ? 'الموافقة على' : action == 'reject' ? 'رفض' : 'تأجيل'} طلب الاستراحة')),
+        SnackBar(
+          content: Text('تم $actionText طلب الاستراحة'),
+          backgroundColor: action == 'approve' ? AppColors.success : action == 'reject' ? AppColors.error : Colors.orange,
+        ),
       );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -441,15 +944,20 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
     }
   }
 
-  Color _getStatusColor(String? status) {
-    switch (status) {
-      case 'approved':
-        return AppColors.success.withOpacity(0.2);
-      case 'rejected':
-        return AppColors.error.withOpacity(0.2);
-      case 'pending':
+  String _getStatusText(String? status) {
+    final statusUpper = status?.toString().toUpperCase() ?? 'PENDING';
+    switch (statusUpper) {
+      case 'APPROVED':
+        return 'مقبول';
+      case 'REJECTED':
+        return 'مرفوض';
+      case 'ACTIVE':
+        return 'نشط';
+      case 'POSTPONED':
+        return 'مؤجل';
+      case 'PENDING':
       default:
-        return Colors.orange.withOpacity(0.2);
+        return 'قيد الانتظار';
     }
   }
 
@@ -813,22 +1321,27 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
                   ],
                 ),
                 const Divider(),
-                Text('الموظف: ${alert['employeeId'] ?? ''}', style: const TextStyle(fontSize: 14)),
+                Text(
+                  'الموظف: ${alert['employee']?['full_name'] ?? alert['employeeId'] ?? ''}',
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                ),
                 const SizedBox(height: 4),
                 Text('تاريخ الغياب: ${alert['absenceDate'] ?? ''}', style: const TextStyle(fontSize: 14)),
-                const SizedBox(height: 4),
-                const Text(
-                  'سيتم خصم يومين من المرتب في حالة الموافقة',
-                  style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: AppColors.textSecondary),
-                ),
+                if (alert['deductionAmount'] != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'مبلغ الخصم: ${alert['deductionAmount']} جنيه',
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppColors.error),
+                  ),
+                ],
                 const SizedBox(height: 12),
                 Row(
                   children: [
                     Expanded(
                       child: ElevatedButton.icon(
-                        onPressed: () => _actOnRequest('absence', alert['id'], 'approve'),
+                        onPressed: () => _actOnAbsence(alert, applyDeduction: true),
                         icon: const Icon(Icons.check, size: 18),
-                        label: const Text('موافقة على الخصم'),
+                        label: const Text('موافق - خصم'),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppColors.error,
                           foregroundColor: Colors.white,
@@ -840,11 +1353,11 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
                     const SizedBox(width: 12),
                     Expanded(
                       child: ElevatedButton.icon(
-                        onPressed: () => _actOnRequest('absence', alert['id'], 'reject'),
+                        onPressed: () => _actOnAbsence(alert, applyDeduction: false),
                         icon: const Icon(Icons.close, size: 18),
-                        label: const Text('إلغاء التنبيه'),
+                        label: const Text('موافق - بدون خصم'),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.grey,
+                          backgroundColor: AppColors.success,
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(vertical: 12),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),

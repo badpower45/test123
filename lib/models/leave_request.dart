@@ -53,18 +53,65 @@ class LeaveRequest extends HiveObject {
   factory LeaveRequest.fromJson(Map<String, dynamic> json) {
     final leaveType = (json['leaveType'] ?? json['leave_type']) as String?;
     final statusValue = (json['status'] ?? '') as String;
+    
+    // ✅ FIX: Safe date parsing with null checks
+    DateTime startDate;
+    DateTime endDate;
+    DateTime createdAt;
+    
+    try {
+      final startDateStr = (json['startDate'] ?? json['start_date'])?.toString();
+      if (startDateStr == null || startDateStr.isEmpty) {
+        startDate = DateTime.now();
+      } else {
+        startDate = DateTime.parse(startDateStr);
+      }
+    } catch (e) {
+      startDate = DateTime.now();
+    }
+    
+    try {
+      final endDateStr = (json['endDate'] ?? json['end_date'])?.toString();
+      if (endDateStr == null || endDateStr.isEmpty) {
+        endDate = startDate;
+      } else {
+        endDate = DateTime.parse(endDateStr);
+      }
+    } catch (e) {
+      endDate = startDate;
+    }
+    
+    try {
+      final createdAtStr = (json['createdAt'] ?? json['created_at'])?.toString();
+      if (createdAtStr == null || createdAtStr.isEmpty) {
+        createdAt = DateTime.now();
+      } else {
+        createdAt = DateTime.parse(createdAtStr);
+      }
+    } catch (e) {
+      createdAt = DateTime.now();
+    }
+    
+    DateTime? reviewedAt;
+    try {
+      final reviewedAtStr = (json['reviewedAt'] ?? json['reviewed_at'])?.toString();
+      if (reviewedAtStr != null && reviewedAtStr.isNotEmpty) {
+        reviewedAt = DateTime.parse(reviewedAtStr);
+      }
+    } catch (e) {
+      reviewedAt = null;
+    }
+    
     return LeaveRequest(
       id: (json['id'] ?? '') as String,
       employeeId: (json['employeeId'] ?? json['employee_id'] ?? '') as String,
-      startDate: DateTime.parse((json['startDate'] ?? json['start_date']) as String),
-      endDate: DateTime.parse((json['endDate'] ?? json['end_date']) as String),
+      startDate: startDate,
+      endDate: endDate,
       type: _mapLeaveType(leaveType),
       reason: (json['reason'] ?? '') as String,
       status: _mapStatus(statusValue),
-      createdAt: DateTime.parse((json['createdAt'] ?? json['created_at']) as String),
-      reviewedAt: (json['reviewedAt'] ?? json['reviewed_at']) != null
-          ? DateTime.parse((json['reviewedAt'] ?? json['reviewed_at']) as String)
-          : null,
+      createdAt: createdAt,
+      reviewedAt: reviewedAt,
       reviewedBy: (json['reviewedBy'] ?? json['reviewed_by']) as String?,
       rejectionReason: (json['reviewNotes'] ?? json['rejection_reason']) as String?,
       daysCount: ((json['daysCount'] ?? json['days_count']) as num?)?.toInt() ?? 0,

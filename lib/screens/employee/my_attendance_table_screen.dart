@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
-import '../../constants/api_endpoints.dart';
 import 'package:intl/intl.dart';
 import '../../services/auth_service.dart';
+import '../../services/supabase_owner_service.dart';
+import '../../theme/app_colors.dart';
+import '../../utils/time_utils.dart';
 
 class MyAttendanceTableScreen extends StatefulWidget {
   const MyAttendanceTableScreen({Key? key}) : super(key: key);
@@ -13,97 +13,92 @@ class MyAttendanceTableScreen extends StatefulWidget {
 }
 
 class _MyAttendanceTableScreenState extends State<MyAttendanceTableScreen> {
-  bool _isLoading = false;
-  List<dynamic> _tableRows = [];
-  Map<String, dynamic>? _summary;
-  Map<String, dynamic>? _employeeInfo;
-  
+  List<Map<String, dynamic>> _attendanceRecords = [];
+  bool _loading = true;
+  String? _error;
+  String? _employeeId;
+
+  // Filters
   DateTime? _startDate;
   DateTime? _endDate;
 
   @override
   void initState() {
     super.initState();
-    _setDefaultDates();
-    _loadData();
+    _initializeFilters();
+    _loadEmployeeId();
   }
 
-  void _setDefaultDates() {
+  void _initializeFilters() {
     final now = DateTime.now();
-    if (now.day <= 15) {
-      _startDate = DateTime(now.year, now.month, 1);
-      _endDate = DateTime(now.year, now.month, 15);
-    } else {
-      _startDate = DateTime(now.year, now.month, 16);
-      _endDate = DateTime(now.year, now.month + 1, 0);
-    }
+    _startDate = DateTime(now.year, now.month, 1); // First day of month
+    _endDate = now; // Today
   }
 
-  Future<void> _loadData() async {
-    if (_startDate == null || _endDate == null) return;
-
-    setState(() {
-      _isLoading = true;
-    });
-
+  Future<void> _loadEmployeeId() async {
     try {
       final loginData = await AuthService.getLoginData();
-      final employeeId = loginData['employeeId'];
-      
-      if (employeeId == null) {
-        throw Exception('لم يتم العثور على معرف الموظف');
-      }
-
-      final startDateStr = DateFormat('yyyy-MM-dd').format(_startDate!);
-      final endDateStr = DateFormat('yyyy-MM-dd').format(_endDate!);
-
-      final response = await http.get(
-        Uri.parse(
-          '$apiBaseUrl/owner/employee-attendance/$employeeId?startDate=$startDateStr&endDate=$endDateStr'
-        ),
-      );
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        setState(() {
-          _tableRows = data['tableRows'] ?? [];
-          _summary = data['summary'];
-          _employeeInfo = data['employee'];
-          _isLoading = false;
-        });
+      _employeeId = loginData['employeeId'];
+      if (_employeeId != null) {
+        _loadAttendance();
       } else {
         setState(() {
-          _isLoading = false;
+          _error = 'لم يتم العثور على معرف الموظف';
+          _loading = false;
         });
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('فشل تحميل البيانات')),
-          );
-        }
       }
     } catch (e) {
       setState(() {
-        _isLoading = false;
+        _error = 'خطأ في تحميل بيانات الموظف';
+        _loading = false;
       });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('خطأ: $e')),
-        );
-      }
     }
   }
 
-  Future<void> _selectDateRange() async {
+  Future<void> _loadAttendance() async {
+    if (_employeeId == null) return;
+
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      // ✅ Use SAME service as Owner - fixes timezone issue
+      final records = await SupabaseOwnerService.getAttendanceTable(
+        startDate: _startDate,
+        endDate: _endDate,
+        employeeId: _employeeId,
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _attendanceRecords = records;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _pickDateRange() async {
     final picked = await showDateRangePicker(
       context: context,
       firstDate: DateTime(2020),
-      lastDate: DateTime.now().add(const Duration(days: 365)),
-      initialDateRange: DateTimeRange(start: _startDate!, end: _endDate!),
+      lastDate: DateTime.now(),
+      initialDateRange: DateTimeRange(
+        start: _startDate ?? DateTime.now().subtract(const Duration(days: 30)),
+        end: _endDate ?? DateTime.now(),
+      ),
       builder: (context, child) {
         return Theme(
           data: Theme.of(context).copyWith(
             colorScheme: const ColorScheme.light(
-              primary: Color(0xFF1976D2),
+              primary: AppColors.primaryOrange,
             ),
           ),
           child: child!,
@@ -116,7 +111,7 @@ class _MyAttendanceTableScreenState extends State<MyAttendanceTableScreen> {
         _startDate = picked.start;
         _endDate = picked.end;
       });
-      _loadData();
+      _loadAttendance();
     }
   }
 
@@ -125,218 +120,247 @@ class _MyAttendanceTableScreenState extends State<MyAttendanceTableScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('جدول حضوري'),
-        backgroundColor: const Color(0xFF1976D2),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.date_range),
-            onPressed: _selectDateRange,
-            tooltip: 'اختر الفترة',
-          ),
-        ],
+        backgroundColor: AppColors.primaryOrange,
+        foregroundColor: Colors.white,
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _loadData,
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                child: Column(
-                  children: [
-                    // Employee Info Card
-                    if (_employeeInfo != null)
-                      Container(
-                        width: double.infinity,
-                        margin: const EdgeInsets.all(16),
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.blue.shade50,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.blue.shade200),
+      body: Column(
+        children: [
+          // Filter Section
+          Container(
+            padding: const EdgeInsets.all(16),
+            color: Colors.white,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Date Range Picker
+                InkWell(
+                  onTap: _pickDateRange,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.grey.shade300),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.date_range, color: AppColors.primaryOrange),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            _startDate != null && _endDate != null
+                                ? '${DateFormat('dd/MM/yyyy').format(_startDate!)} - ${DateFormat('dd/MM/yyyy').format(_endDate!)}'
+                                : 'اختر الفترة',
+                            style: const TextStyle(fontSize: 14),
+                          ),
                         ),
+                        const Icon(Icons.arrow_drop_down),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+
+          // Table Section
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _error != null
+                    ? Center(
                         child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Text(
-                              _employeeInfo!['fullName'] ?? '',
-                              style: const TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                              ),
+                            const Icon(Icons.error_outline, size: 56, color: AppColors.error),
+                            const SizedBox(height: 16),
+                            Text('خطأ: $_error'),
+                            const SizedBox(height: 16),
+                            ElevatedButton(
+                              onPressed: _loadAttendance,
+                              child: const Text('إعادة المحاولة'),
                             ),
-                            const SizedBox(height: 8),
-                            Text('الوظيفة: ${_employeeInfo!['role'] ?? ''}'),
-                            Text('الراتب: ${_employeeInfo!['monthlySalary'] ?? '0'} جنيه'),
                           ],
                         ),
-                      ),
+                      )
+                    : _attendanceRecords.isEmpty
+                        ? const Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.inbox, size: 56, color: AppColors.textTertiary),
+                                SizedBox(height: 16),
+                                Text(
+                                  'لا توجد سجلات حضور',
+                                  style: TextStyle(fontSize: 16, color: AppColors.textSecondary),
+                                ),
+                              ],
+                            ),
+                          )
+                        : RefreshIndicator(
+                            onRefresh: _loadAttendance,
+                            child: SingleChildScrollView(
+                              scrollDirection: Axis.vertical,
+                              child: SingleChildScrollView(
+                                scrollDirection: Axis.horizontal,
+                                child: DataTable(
+                                  headingRowColor: WidgetStateProperty.all(
+                                    AppColors.primaryOrange.withOpacity(0.1),
+                                  ),
+                                  columns: const [
+                                    DataColumn(label: Text('التاريخ', style: TextStyle(fontWeight: FontWeight.bold))),
+                                    DataColumn(label: Text('وقت الحضور', style: TextStyle(fontWeight: FontWeight.bold))),
+                                    DataColumn(label: Text('وقت الانصراف', style: TextStyle(fontWeight: FontWeight.bold))),
+                                    DataColumn(label: Text('ساعات العمل', style: TextStyle(fontWeight: FontWeight.bold))),
+                                    DataColumn(label: Text('الأجر اليومي', style: TextStyle(fontWeight: FontWeight.bold))),
+                                    DataColumn(label: Text('الحالة', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  ],
+                                  rows: _attendanceRecords.map((record) {
+                                    // ✅ FIX: Safe date parsing
+                                    final rawDate = record['attendance_date'] ?? record['date'];
+                                    String dateFormatted = '-';
+                                    if (rawDate != null && rawDate.toString().isNotEmpty) {
+                                      try {
+                                        dateFormatted = DateFormat('dd/MM/yyyy').format(DateTime.parse(rawDate.toString()));
+                                      } catch (e) {
+                                        dateFormatted = rawDate.toString();
+                                      }
+                                    }
+                                    
+                                    final checkInTime = record['check_in_time'] as String?;
+                                    final checkOutTime = record['check_out_time'] as String?;
+                                    final totalHours = (record['total_hours'] as num?)?.toDouble() ?? 0.0;
+                                    final dailySalary = (record['daily_salary'] as num?)?.toDouble() ?? 0.0;
 
-                    // Date Range Display
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(
-                            'من ${DateFormat('yyyy-MM-dd').format(_startDate!)} إلى ${DateFormat('yyyy-MM-dd').format(_endDate!)}',
-                            style: const TextStyle(fontWeight: FontWeight.bold),
+                                    // ✅ Use TimeUtils - fixes timezone (converts to Cairo time)
+                                    final checkInFormatted = TimeUtils.formatTimeShort(checkInTime);
+                                    final checkOutFormatted = TimeUtils.formatTimeShort(checkOutTime);
+
+                                    final isActive = checkOutTime == null || checkOutTime.toString().isEmpty;
+
+                                    return DataRow(
+                                      cells: [
+                                        DataCell(Text(dateFormatted)),
+                                        DataCell(Text(checkInFormatted)),
+                                        DataCell(Text(checkOutFormatted)),
+                                        DataCell(Text(totalHours.toStringAsFixed(2))),
+                                        DataCell(Text('${dailySalary.toStringAsFixed(2)} ج.م')),
+                                        DataCell(
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                            decoration: BoxDecoration(
+                                              color: isActive ? AppColors.success.withOpacity(0.1) : Colors.grey.withOpacity(0.1),
+                                              borderRadius: BorderRadius.circular(4),
+                                            ),
+                                            child: Text(
+                                              isActive ? 'حاضر' : 'انصرف',
+                                              style: TextStyle(
+                                                color: isActive ? AppColors.success : Colors.grey,
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    );
+                                  }).toList(),
+                                ),
+                              ),
+                            ),
                           ),
-                        ],
-                      ),
-                    ),
+          ),
 
-                    const SizedBox(height: 16),
-
-                    // Table (Horizontal Scrollable)
-                    SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: _buildTable(),
-                    ),
-
-                    const SizedBox(height: 16),
-
-                    // Summary Card
-                    if (_summary != null) _buildSummaryCard(),
-
-                    const SizedBox(height: 16),
-                  ],
-                ),
-              ),
-            ),
-    );
-  }
-
-  Widget _buildTable() {
-    return DataTable(
-      columnSpacing: 20,
-      headingRowColor: MaterialStateProperty.all(Colors.blue.shade100),
-      columns: const [
-        DataColumn(label: Text('التاريخ', style: TextStyle(fontWeight: FontWeight.bold))),
-        DataColumn(label: Text('حضور', style: TextStyle(fontWeight: FontWeight.bold))),
-        DataColumn(label: Text('انصراف', style: TextStyle(fontWeight: FontWeight.bold))),
-        DataColumn(label: Text('الساعات', style: TextStyle(fontWeight: FontWeight.bold))),
-        DataColumn(label: Text('السلف', style: TextStyle(fontWeight: FontWeight.bold))),
-        DataColumn(label: Text('بدل إجازة', style: TextStyle(fontWeight: FontWeight.bold))),
-        DataColumn(label: Text('الخصومات', style: TextStyle(fontWeight: FontWeight.bold))),
-      ],
-      rows: _tableRows.map((row) {
-        return DataRow(
-          cells: [
-            DataCell(Text(row['date'] ?? '')),
-            DataCell(Text(row['checkIn'] ?? '--')),
-            DataCell(Text(row['checkOut'] ?? '--')),
-            DataCell(Text(row['workHours'] ?? '0.00')),
-            DataCell(
-              Text(
-                row['advances'] ?? '0.00',
-                style: TextStyle(
-                  color: double.parse(row['advances'] ?? '0') > 0 ? Colors.red : Colors.black,
-                  fontWeight: double.parse(row['advances'] ?? '0') > 0 ? FontWeight.bold : FontWeight.normal,
-                ),
-              ),
-            ),
-            DataCell(
-              Row(
+          // Summary Section
+          if (!_loading && _attendanceRecords.isNotEmpty)
+            Container(
+              padding: const EdgeInsets.all(16),
+              color: Colors.white,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
                 children: [
-                  Text(row['leaveAllowance'] ?? '0.00'),
-                  if (row['hasLeave'] == true)
-                    const Padding(
-                      padding: EdgeInsets.only(right: 4),
-                      child: Icon(Icons.check_circle, color: Colors.green, size: 16),
-                    ),
+                  _SummaryItem(
+                    label: 'إجمالي الأيام',
+                    value: '${_attendanceRecords.length}',
+                    icon: Icons.calendar_today,
+                  ),
+                  _SummaryItem(
+                    label: 'متوسط الساعات',
+                    value: _calculateAverageHours(),
+                    icon: Icons.access_time,
+                    color: AppColors.primaryOrange,
+                  ),
+                  _SummaryItem(
+                    label: 'إجمالي الأجور',
+                    value: _calculateTotalSalary(),
+                    icon: Icons.attach_money,
+                    color: Colors.blueAccent,
+                  ),
                 ],
               ),
             ),
-            DataCell(
-              Text(
-                row['deductions'] ?? '0.00',
-                style: TextStyle(
-                  color: double.parse(row['deductions'] ?? '0') > 0 ? Colors.red : Colors.black,
-                  fontWeight: double.parse(row['deductions'] ?? '0') > 0 ? FontWeight.bold : FontWeight.normal,
-                ),
-              ),
-            ),
-          ],
-        );
-      }).toList(),
+        ],
+      ),
     );
   }
 
-  Widget _buildSummaryCard() {
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.all(16),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Colors.green.shade50, Colors.green.shade100],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+  String _calculateAverageHours() {
+    final completedRecords = _attendanceRecords.where((r) => r['total_hours'] != null).toList();
+    if (completedRecords.isEmpty) return '0';
+
+    final totalHours = completedRecords.fold<double>(
+      0,
+      (sum, r) => sum + ((r['total_hours'] as num?)?.toDouble() ?? 0),
+    );
+
+    return (totalHours / completedRecords.length).toStringAsFixed(1);
+  }
+
+  String _calculateTotalSalary() {
+    final totalSalary = _attendanceRecords.fold<double>(
+      0,
+      (sum, r) => sum + ((r['daily_salary'] as num?)?.toDouble() ?? 0),
+    );
+
+    return totalSalary > 0 ? '${totalSalary.toStringAsFixed(2)} ج.م' : '0';
+  }
+}
+
+class _SummaryItem extends StatelessWidget {
+  final String label;
+  final String value;
+  final IconData icon;
+  final Color? color;
+
+  const _SummaryItem({
+    required this.label,
+    required this.value,
+    required this.icon,
+    this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Icon(icon, color: color ?? AppColors.textSecondary, size: 24),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: color ?? AppColors.textPrimary,
+          ),
         ),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.green.shade300, width: 2),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Row(
-            children: [
-              Icon(Icons.summarize, color: Colors.green),
-              SizedBox(width: 8),
-              Text(
-                'الملخص',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-            ],
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 12,
+            color: AppColors.textSecondary,
           ),
-          const Divider(thickness: 2),
-          _summaryRow('إجمالي أيام العمل', _summary!['totalWorkDays'].toString()),
-          _summaryRow('إجمالي ساعات العمل', _summary!['totalWorkHours'].toString()),
-          _summaryRow('إجمالي السلف', '${_summary!['totalAdvances']} جنيه', color: Colors.red.shade700),
-          _summaryRow('إجمالي بدل الإجازات', '${_summary!['totalLeaveAllowances']} جنيه', color: Colors.blue.shade700),
-          _summaryRow('حافز الغياب', '${_summary!['attendanceAllowance'] ?? '0.00'} جنيه', color: Colors.green.shade700),
-          _summaryRow('إجمالي الخصومات', '${_summary!['totalDeductions']} جنيه', color: Colors.red.shade700),
-          const Divider(thickness: 2),
-          _summaryRow(
-            'الراتب الإجمالي',
-            '${_summary!['grossSalary']} جنيه',
-            isBold: true,
-            fontSize: 16,
-          ),
-          _summaryRow(
-            'الصافي بعد خصم السلف',
-            '${_summary!['netAfterAdvances']} جنيه',
-            isBold: true,
-            color: Colors.green.shade900,
-            fontSize: 18,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _summaryRow(String label, String value, {Color? color, bool isBold = false, double fontSize = 14}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
-              fontSize: fontSize,
-            ),
-          ),
-          Text(
-            value,
-            style: TextStyle(
-              fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
-              color: color,
-              fontSize: fontSize,
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }

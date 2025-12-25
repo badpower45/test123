@@ -4,7 +4,7 @@ import '../../theme/app_colors.dart';
 import '../../services/auth_service.dart';
 import '../../services/attendance_api_service.dart';
 import '../../services/blv/blv_manager.dart';
-import '../branch_manager_screen.dart';
+import 'manager_dashboard_simple.dart';
 import '../employee/refreshable_tab.dart';
 import '../login_screen.dart';
 import 'manager_home_page.dart';
@@ -37,22 +37,95 @@ class _ManagerMainScreenState extends State<ManagerMainScreen> {
   @override
   void initState() {
     super.initState();
-    _tabKeys = List.generate(3, (_) => GlobalKey<RefreshableTabState>());
-    _pages = [
-      RefreshableTab(
-        key: _tabKeys[0],
-        builder: (context) => ManagerHomePage(managerId: widget.managerId),
+    try {
+      _tabKeys = List.generate(3, (_) => GlobalKey<RefreshableTabState>());
+      _pages = [
+        RefreshableTab(
+          key: _tabKeys[0],
+          builder: (context) => _safeBuildPage(() => ManagerHomePage(managerId: widget.managerId), 'الرئيسية'),
+        ),
+        RefreshableTab(
+          key: _tabKeys[1],
+          builder: (context) => _safeBuildPage(() => ManagerReportPage(managerId: widget.managerId, branch: widget.branch), 'التقارير'),
+        ),
+        RefreshableTab(
+          key: _tabKeys[2],
+          builder: (context) => _safeBuildPage(() => ManagerProfilePage(managerId: widget.managerId), 'الملف الشخصي'),
+        ),
+      ];
+      _loadUnresolvedFlagsCount();
+    } catch (e, stackTrace) {
+      print('❌ Error initializing ManagerMainScreen: $e');
+      print('Stack trace: $stackTrace');
+      // Initialize with error pages
+      _tabKeys = List.generate(3, (_) => GlobalKey<RefreshableTabState>());
+      _pages = List.generate(3, (index) => RefreshableTab(
+        key: _tabKeys[index],
+        builder: (context) => _buildErrorPage('حدث خطأ في تحميل الصفحة'),
+      ));
+    }
+  }
+
+  Widget _safeBuildPage(Widget Function() builder, String pageName) {
+    try {
+      return builder();
+    } catch (e, stackTrace) {
+      print('❌ Error building $pageName page: $e');
+      print('Stack trace: $stackTrace');
+      return _buildErrorPage('حدث خطأ في تحميل $pageName');
+    }
+  }
+
+  Widget _buildErrorPage(String message) {
+    return Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, size: 64, color: AppColors.error),
+              const SizedBox(height: 16),
+              Text(
+                message,
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.error),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton.icon(
+                onPressed: () {
+                  // Try to rebuild pages
+                  setState(() {
+                    _tabKeys = List.generate(3, (_) => GlobalKey<RefreshableTabState>());
+                    _pages = [
+                      RefreshableTab(
+                        key: _tabKeys[0],
+                        builder: (context) => _safeBuildPage(() => ManagerHomePage(managerId: widget.managerId), 'الرئيسية'),
+                      ),
+                      RefreshableTab(
+                        key: _tabKeys[1],
+                        builder: (context) => _safeBuildPage(() => ManagerReportPage(managerId: widget.managerId, branch: widget.branch), 'التقارير'),
+                      ),
+                      RefreshableTab(
+                        key: _tabKeys[2],
+                        builder: (context) => _safeBuildPage(() => ManagerProfilePage(managerId: widget.managerId), 'الملف الشخصي'),
+                      ),
+                    ];
+                  });
+                },
+                icon: const Icon(Icons.refresh),
+                label: const Text('إعادة المحاولة'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primaryOrange,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
-      RefreshableTab(
-        key: _tabKeys[1],
-        builder: (context) => ManagerReportPage(managerId: widget.managerId, branch: widget.branch),
-      ),
-      RefreshableTab(
-        key: _tabKeys[2],
-        builder: (context) => ManagerProfilePage(managerId: widget.managerId),
-      ),
-    ];
-    _loadUnresolvedFlagsCount();
+    );
   }
 
   Future<void> _loadUnresolvedFlagsCount() async {
@@ -101,11 +174,11 @@ class _ManagerMainScreenState extends State<ManagerMainScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.dashboard_customize),
-            tooltip: 'لوحة تحكم المدير',
+            tooltip: 'لوحة المدير (جديدة)',
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (_) => BranchManagerScreen(
+                  builder: (_) => ManagerDashboardSimple(
                     managerId: widget.managerId,
                     branchName: widget.branch,
                   ),
@@ -183,10 +256,12 @@ class _ManagerMainScreenState extends State<ManagerMainScreen> {
           ),
         ],
       ),
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _pages,
-      ),
+      body: _pages.isEmpty 
+          ? const Center(child: CircularProgressIndicator())
+          : IndexedStack(
+              index: _currentIndex,
+              children: _pages,
+            ),
       floatingActionButton: FloatingActionButton(
         onPressed: () {
           _tabKeys[_currentIndex].currentState?.refresh();

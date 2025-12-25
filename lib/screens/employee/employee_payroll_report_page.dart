@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import '../../utils/time_utils.dart';
 import '../../services/payroll_service.dart';
+import '../../services/supabase_function_client.dart';
 
 class EmployeePayrollReportPage extends StatefulWidget {
   final String employeeId;
@@ -32,12 +35,45 @@ class _EmployeePayrollReportPageState extends State<EmployeePayrollReportPage> {
   double _totalLeaveAllowance = 0;
   double _totalDeductions = 0;
   int _absenceDays = 0;
+  // Approved advances list for display
+  List<Map<String, dynamic>> _salaryAdvances = [];
+  
+  // Period-to-date earnings (current period)
+  double _periodEarnings = 0.0;
+  Timer? _earningsTimer;
+  bool _advanceAppliedChecked = false;
 
   @override
   void initState() {
     super.initState();
     _calculateCurrentPeriod();
     _loadAttendanceReport();
+    _applyAdvancePolicyOnce();
+    _loadPeriodEarnings();
+    
+    // Update earnings every 30 seconds
+    _earningsTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+      _loadPeriodEarnings();
+    });
+  }
+
+  Future<void> _applyAdvancePolicyOnce() async {
+    if (_advanceAppliedChecked) return;
+    _advanceAppliedChecked = true;
+    try {
+      final result = await SupabaseFunctionClient.post('apply-advance-policy', {
+        'employee_id': widget.employeeId,
+      });
+      print('💰 Advance policy result: $result');
+    } catch (e) {
+      print('⚠️ Advance policy error: $e');
+    }
+  }
+  
+  @override
+  void dispose() {
+    _earningsTimer?.cancel();
+    super.dispose();
   }
 
   void _calculateCurrentPeriod() {
@@ -54,6 +90,30 @@ class _EmployeePayrollReportPageState extends State<EmployeePayrollReportPage> {
     }
   }
 
+  // ✅ Load current period-to-date earnings from Edge Function
+  Future<void> _loadPeriodEarnings() async {
+    try {
+      final result = await SupabaseFunctionClient.post('employee-period-earnings', {
+        'employee_id': widget.employeeId,
+      });
+      
+      if ((result ?? {})['success'] == true && mounted) {
+        final totals = (result ?? {})['totals'] as Map<String, dynamic>?;
+        final periodNet = (totals?['net'] as num?)?.toDouble() ?? 0.0;
+        final periodGross = (totals?['gross'] as num?)?.toDouble() ?? 0.0;
+        
+        print('📊 Period earnings loaded: gross=${periodGross.toStringAsFixed(2)}, net=${periodNet.toStringAsFixed(2)}');
+        
+        setState(() {
+          _periodEarnings = periodNet;
+        });
+      }
+    } catch (e) {
+      // Silently fail, keep previous value
+      print('❌ Failed to load period earnings: $e');
+    }
+  }
+
   Future<void> _loadAttendanceReport() async {
     setState(() => _isLoading = true);
 
@@ -67,7 +127,7 @@ class _EmployeePayrollReportPageState extends State<EmployeePayrollReportPage> {
     double hours = 0;
     double salary = 0;
     double advances = 0;
-    double leaveAllowance = 0;
+    // leave allowance will be computed by rule below
     double deductions = 0;
     int absences = 0;
 
@@ -75,17 +135,34 @@ class _EmployeePayrollReportPageState extends State<EmployeePayrollReportPage> {
       hours += (day['total_hours'] as num?)?.toDouble() ?? 0;
       salary += (day['daily_salary'] as num?)?.toDouble() ?? 0;
       advances += (day['advance_amount'] as num?)?.toDouble() ?? 0;
-      leaveAllowance += (day['leave_allowance'] as num?)?.toDouble() ?? 0;
+      // ignore per-day leave_allowance; applied by rule globally
       deductions += (day['deduction_amount'] as num?)?.toDouble() ?? 0;
       if (day['is_absent'] == true) absences++;
     }
+
+    // Fetch approved salary advances for this period
+    final advancesList = await _payrollService.getEmployeeApprovedAdvances(
+      employeeId: widget.employeeId,
+      startDate: _startDate,
+      endDate: _endDate,
+    );
+    double advancesSum = 0.0;
+    for (final adv in advancesList) {
+      advancesSum += (adv['amount'] as num?)?.toDouble() ?? 0.0;
+    }
+    
+    print('📋 Loaded ${advancesList.length} approved advances totaling ${advancesSum.toStringAsFixed(2)} EGP');
+
+    // Apply fixed 100 EGP allowance; remove if absenceDays > 2
+    final fixedAllowance = (absences > 2) ? 0.0 : 100.0;
 
     setState(() {
       _attendanceData = data;
       _totalHours = hours;
       _totalSalary = salary;
-      _totalAdvances = advances;
-      _totalLeaveAllowance = leaveAllowance;
+      _salaryAdvances = advancesList;
+      _totalAdvances = advances + advancesSum;
+      _totalLeaveAllowance = fixedAllowance; // override by rule
       _totalDeductions = deductions;
       _absenceDays = absences;
       _isLoading = false;
@@ -256,6 +333,69 @@ class _EmployeePayrollReportPageState extends State<EmployeePayrollReportPage> {
                   ),
                 ),
 
+                // Period-to-date Earnings Card - Shows current period net
+                Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 16),
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(colors: [Colors.blue.shade700, Colors.blue.shade500]),
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.blue.withOpacity(0.3),
+                        blurRadius: 8,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Icon(Icons.summarize, color: Colors.white, size: 24),
+                          ),
+                          const SizedBox(width: 12),
+                          const Text(
+                            'إجمالي المكتسب حتى الآن',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            '${_periodEarnings.toStringAsFixed(2)} ج.م',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Builder(builder: (_) {
+                            return const Text(
+                              'صافي بعد خصم النبضات',
+                              style: TextStyle(color: Colors.white70, fontSize: 11),
+                            );
+                          }),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+
                 // Attendance Table Header
                 Container(
                   color: Colors.grey.shade200,
@@ -285,18 +425,22 @@ class _EmployeePayrollReportPageState extends State<EmployeePayrollReportPage> {
                           ),
                         )
                       : ListView.builder(
-                          itemCount: _attendanceData.length,
+                          itemCount: _attendanceData.length + (_salaryAdvances.isEmpty ? 0 : (_salaryAdvances.length + 1)),
                           itemBuilder: (context, index) {
-                            final day = _attendanceData[index];
+                            // If within attendance rows
+                            if (index < _attendanceData.length) {
+                              final day = _attendanceData[index];
                             final date = DateTime.parse(day['attendance_date'] as String);
-                            final checkIn = day['check_in_time'] as String?;
-                            final checkOut = day['check_out_time'] as String?;
+                            final rawCheckIn = day['check_in_time'] as String?;
+                            final rawCheckOut = day['check_out_time'] as String?;
+                            final checkIn = TimeUtils.formatTimeShort(rawCheckIn);
+                            final checkOut = TimeUtils.formatTimeShort(rawCheckOut);
                             final hours = (day['total_hours'] as num?)?.toDouble() ?? 0;
                             final dailySalary = (day['daily_salary'] as num?)?.toDouble() ?? 0;
                             final isAbsent = day['is_absent'] == true;
                             final isOnLeave = day['is_on_leave'] == true;
 
-                            return Container(
+                              return Container(
                               decoration: BoxDecoration(
                                 color: isAbsent || isOnLeave
                                     ? Colors.red.shade50
@@ -329,7 +473,7 @@ class _EmployeePayrollReportPageState extends State<EmployeePayrollReportPage> {
                                   Expanded(
                                     flex: 2,
                                     child: Text(
-                                      isAbsent ? 'غياب' : (isOnLeave ? 'إجازة' : (checkIn ?? '-')),
+                                      isAbsent ? 'غياب' : (isOnLeave ? 'إجازة' : checkIn),
                                       style: TextStyle(
                                         fontSize: 11,
                                         color: isAbsent ? Colors.red : Colors.black87,
@@ -339,7 +483,7 @@ class _EmployeePayrollReportPageState extends State<EmployeePayrollReportPage> {
                                   Expanded(
                                     flex: 2,
                                     child: Text(
-                                      checkOut ?? '-',
+                                      checkOut,
                                       style: const TextStyle(fontSize: 11),
                                     ),
                                   ),
@@ -355,6 +499,57 @@ class _EmployeePayrollReportPageState extends State<EmployeePayrollReportPage> {
                                     child: Text(
                                       dailySalary > 0 ? '${dailySalary.toStringAsFixed(0)}' : '-',
                                       style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.green),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                            }
+
+                            // Past attendance rows: first show a header row for deductions/advances
+                            final advIndex = index - _attendanceData.length;
+                            if (advIndex == 0) {
+                              return Container(
+                                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                                color: Colors.orange.shade50,
+                                child: const Row(
+                                  children: [
+                                    Icon(Icons.money_off, size: 18, color: Colors.orange),
+                                    SizedBox(width: 8),
+                                    Text('السلف المعتمدة خلال الفترة', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                                  ],
+                                ),
+                              );
+                            }
+
+                            final adv = _salaryAdvances[advIndex - 1];
+                            final dateStr = (adv['approved_at'] ?? adv['created_at']) as String?;
+                            final date = dateStr != null ? DateTime.tryParse(dateStr) : null;
+                            final amount = (adv['amount'] as num?)?.toDouble() ?? 0.0;
+                            return Container(
+                              decoration: BoxDecoration(
+                                color: Colors.orange.shade50,
+                                border: Border(bottom: BorderSide(color: Colors.orange.shade100, width: 0.5)),
+                              ),
+                              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                              child: Row(
+                                children: [
+                                  const Expanded(flex: 2, child: Text('—', style: TextStyle(fontSize: 11, color: Colors.orange))),
+                                  Expanded(
+                                    flex: 2,
+                                    child: Text(
+                                      'سلفة (${date != null ? DateFormat('dd/MM').format(date) : '-'})',
+                                      style: const TextStyle(fontSize: 11, color: Colors.orange),
+                                    ),
+                                  ),
+                                  const Expanded(flex: 2, child: Text('-', style: TextStyle(fontSize: 11, color: Colors.orange))),
+                                  const Expanded(flex: 1, child: Text('-', style: TextStyle(fontSize: 11, color: Colors.orange))),
+                                  Expanded(
+                                    flex: 2,
+                                    child: Text(
+                                      '-${amount.toStringAsFixed(0)}',
+                                      textAlign: TextAlign.right,
+                                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.orange),
                                     ),
                                   ),
                                 ],

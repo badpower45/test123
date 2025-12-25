@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>Check Requests Schema</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body style="font-family: monospace; padding: 20px;">
+    <h1>📊 Checking Requests Schema</h1>
+    <div id="output"></div>
+
+    <script>
+        const SUPABASE_URL = 'https://oecrjncxusupqocqwogk.supabase.co';
+        const SERVICE_ROLE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9lY3JqbmN4dXN1cHFvY3F3b2drIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTcyNzk3Mzc2OSwiZXhwIjoyMDQzNTQ5NzY5fQ.CBjR5p7fSgPzohXxhE5sQFP2hBo6lY7TgABQLqK5_Ro';
+        const supabase = window.supabase.createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+
+        async function checkSchema() {
+            const output = document.getElementById('output');
+            
+            // Check leave_requests
+            output.innerHTML += '<h2>📋 leave_requests:</h2>';
+            const { data: leaveData, error: leaveErr } = await supabase
+                .from('leave_requests')
+                .select('*')
+                .limit(1);
+            
+            if (leaveData && leaveData.length > 0) {
+                output.innerHTML += '<pre>' + JSON.stringify(leaveData[0], null, 2) + '</pre>';
+            } else {
+                output.innerHTML += '<p>No data or error: ' + (leaveErr?.message || 'empty') + '</p>';
+            }
+
+            // Check salary_advances
+            output.innerHTML += '<h2>💰 salary_advances:</h2>';
+            const { data: advData, error: advErr } = await supabase
+                .from('salary_advances')
+                .select('*')
+                .limit(1);
+            
+            if (advData && advData.length > 0) {
+                output.innerHTML += '<pre>' + JSON.stringify(advData[0], null, 2) + '</pre>';
+            } else {
+                output.innerHTML += '<p>No data or error: ' + (advErr?.message || 'empty') + '</p>';
+            }
+
+            // Check attendance_requests
+            output.innerHTML += '<h2>⏰ attendance_requests:</h2>';
+            const { data: attData, error: attErr } = await supabase
+                .from('attendance_requests')
+                .select('*')
+                .limit(1);
+            
+            if (attData && attData.length > 0) {
+                output.innerHTML += '<pre>' + JSON.stringify(attData[0], null, 2) + '</pre>';
+            } else {
+                output.innerHTML += '<p>No data or error: ' + (attErr?.message || 'empty') + '</p>';
+            }
+
+            // Check employees to see branch structure
+            output.innerHTML += '<h2>👥 employees (empp):</h2>';
+            const { data: empData, error: empErr } = await supabase
+                .from('employees')
+                .select('*')
+                .eq('id', 'empp')
+                .single();
+            
+            if (empData) {
+                output.innerHTML += '<pre>' + JSON.stringify(empData, null, 2) + '</pre>';
+            } else {
+                output.innerHTML += '<p>Error: ' + (empErr?.message || 'not found') + '</p>';
+            }
+
+            // Check for manager in branch
+            output.innerHTML += '<h2>👔 Manager in last2 branch:</h2>';
+            const { data: mgrData, error: mgrErr } = await supabase
+                .from('employees')
+                .select('*')
+                .eq('branch', 'last2')
+                .eq('role', 'manager')
+                .limit(5);
+            
+            if (mgrData) {
+                output.innerHTML += '<pre>' + JSON.stringify(mgrData, null, 2) + '</pre>';
+            } else {
+                output.innerHTML += '<p>Error: ' + (mgrErr?.message || 'none') + '</p>';
+            }
+        }
+
+        checkSchema();
+    </script>
+</body>
+</html>

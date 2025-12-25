@@ -328,13 +328,19 @@ class _OwnerBranchPayrollDetailsPageState extends State<OwnerBranchPayrollDetail
                                           children: [
                                             const Icon(Icons.check_circle, color: Colors.green, size: 14),
                                             const SizedBox(width: 6),
-                                            Text(
-                                              'تم الدفع في ${DateFormat('dd/MM/yyyy HH:mm').format(DateTime.parse(employee['paid_at'] as String))}',
-                                              style: const TextStyle(
-                                                fontSize: 11,
-                                                color: Colors.green,
-                                              ),
-                                            ),
+                                            Builder(builder: (context) {
+                                              try {
+                                                return Text(
+                                                  'تم الدفع في ${DateFormat('dd/MM/yyyy HH:mm').format(DateTime.parse(employee['paid_at'] as String))}',
+                                                  style: const TextStyle(
+                                                    fontSize: 11,
+                                                    color: Colors.green,
+                                                  ),
+                                                );
+                                              } catch (e) {
+                                                return const Text('تم الدفع', style: TextStyle(fontSize: 11, color: Colors.green));
+                                              }
+                                            }),
                                           ],
                                         ),
                                       ],

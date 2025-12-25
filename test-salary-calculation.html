@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Calculate Daily Salary - Test</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+    <h1>Calculate Daily Salary</h1>
+    <button onclick="calculateForEmployee()">Calculate for empp (Current Period)</button>
+    <button onclick="calculateToday()">Calculate Today Only</button>
+    <button onclick="viewResults()">View Results</button>
+    <pre id="result"></pre>
+
+    <script>
+        const supabase = window.supabase.createClient(
+            'https://bbxuyuaemigrqsvsnxkj.supabase.co',
+            'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJieHV5dWFlbWlncnFzdnNueGtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzE0OTQ4MzcsImV4cCI6MjA0NzA3MDgzN30.VT_rCteni0Nn77RjKQEBa0i-Kk8I3pWEGBMkEAm82KU'
+        );
+
+        async function calculateForEmployee() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.textContent = 'Calculating entire period for empp...';
+            
+            try {
+                const { data, error } = await supabase.functions.invoke('calculate-daily-salary', {
+                    body: { 
+                        employee_id: 'empp',
+                        recalculate_period: true
+                    }
+                });
+
+                if (error) throw error;
+                resultDiv.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                resultDiv.textContent = 'Error: ' + error.message;
+            }
+        }
+
+        async function calculateToday() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.textContent = 'Calculating today for empp...';
+            
+            try {
+                const { data, error } = await supabase.functions.invoke('calculate-daily-salary', {
+                    body: { 
+                        employee_id: 'empp'
+                    }
+                });
+
+                if (error) throw error;
+                resultDiv.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                resultDiv.textContent = 'Error: ' + error.message;
+            }
+        }
+
+        async function viewResults() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.textContent = 'Loading results...';
+            
+            try {
+                const { data, error } = await supabase
+                    .from('daily_salary_calculations')
+                    .select('*')
+                    .eq('employee_id', 'empp')
+                    .order('calculation_date', { ascending: false });
+
+                if (error) throw error;
+                resultDiv.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                resultDiv.textContent = 'Error: ' + error.message;
+            }
+        }
+    </script>
+</body>
+</html>

@@ -16,7 +16,6 @@
     "db:studio": "node node_modules/drizzle-kit/bin.cjs studio"
   },
   "dependencies": {
-    "@neondatabase/serverless": "^1.0.2",
     "axios": "^1.13.2",
     "bcrypt": "^5.1.1",
     "cors": "^2.8.5",
@@ -24,6 +23,7 @@
     "drizzle-orm": "^0.44.6",
     "express": "^4.18.2",
     "node-cron": "^4.2.1",
+    "pg": "^8.13.0",
     "ws": "^8.16.0",
     "xlsx": "^0.18.5"
   },

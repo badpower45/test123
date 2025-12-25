@@ -104,22 +104,15 @@ class _OwnerBranchesScreenState extends State<OwnerBranchesScreen> {
     final branchName = branch['name'] as String;
     final employeeCount = branch['employee_count'] as int? ?? 0;
 
-    if (employeeCount > 0) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('لا يمكن حذف الفرع لأنه يحتوي على $employeeCount موظف'),
-          backgroundColor: AppColors.error,
-        ),
-      );
-      return;
-    }
-
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('تأكيد الحذف'),
-        content: Text('هل أنت متأكد من حذف فرع "$branchName"؟'),
+        content: Text(
+          employeeCount > 0
+              ? 'هل أنت متأكد من حذف فرع "$branchName"؟\n\nسيتم فك ارتباط $employeeCount موظف من هذا الفرع تلقائياً.'
+              : 'هل أنت متأكد من حذف فرع "$branchName"؟',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -138,16 +131,16 @@ class _OwnerBranchesScreenState extends State<OwnerBranchesScreen> {
 
     try {
       final branchId = branch['id'] as String;
-      final success = await SupabaseBranchService.deleteBranch(branchId);
-      
-      if (!success) {
-        throw Exception('فشل في حذف الفرع');
-      }
+      await SupabaseBranchService.deleteBranch(branchId);
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('✓ تم حذف الفرع بنجاح'),
+        SnackBar(
+          content: Text(
+            employeeCount > 0
+                ? '✓ تم حذف الفرع بنجاح وتم فك ارتباط $employeeCount موظف'
+                : '✓ تم حذف الفرع بنجاح',
+          ),
           backgroundColor: AppColors.success,
         ),
       );
@@ -481,6 +474,7 @@ class _BranchFormDialogState extends State<_BranchFormDialog> {
   late TextEditingController _latitudeController;
   late TextEditingController _longitudeController;
   late TextEditingController _radiusController;
+  late TextEditingController _distanceFromRadiusController;
   bool _submitting = false;
   bool _isGettingLocation = false;
   bool _isGettingBssid = false;
@@ -512,6 +506,9 @@ class _BranchFormDialogState extends State<_BranchFormDialog> {
     _radiusController = TextEditingController(
       text: widget.branch?['geofence_radius']?.toString() ?? '100',
     );
+    _distanceFromRadiusController = TextEditingController(
+      text: widget.branch?['distance_from_radius']?.toString() ?? '100',
+    );
   }
 
   @override
@@ -523,6 +520,7 @@ class _BranchFormDialogState extends State<_BranchFormDialog> {
     _latitudeController.dispose();
     _longitudeController.dispose();
     _radiusController.dispose();
+    _distanceFromRadiusController.dispose();
     super.dispose();
   }
 
@@ -714,6 +712,9 @@ class _BranchFormDialogState extends State<_BranchFormDialog> {
       final radius = _radiusController.text.trim().isNotEmpty
           ? double.tryParse(_radiusController.text.trim())
           : 100.0;
+      final distanceFromRadius = _distanceFromRadiusController.text.trim().isNotEmpty
+          ? double.tryParse(_distanceFromRadiusController.text.trim())
+          : 100.0;
 
       // Combine all BSSIDs (comma-separated)
       String? combinedBssids;
@@ -735,6 +736,7 @@ class _BranchFormDialogState extends State<_BranchFormDialog> {
           latitude: latitude,
           longitude: longitude,
           geofenceRadius: radius,
+          distanceFromRadius: distanceFromRadius,
         );
         if (branch == null) {
           throw Exception('فشل في إضافة الفرع');
@@ -750,6 +752,7 @@ class _BranchFormDialogState extends State<_BranchFormDialog> {
           latitude: latitude,
           longitude: longitude,
           geofenceRadius: radius,
+          distanceFromRadius: distanceFromRadius,
         );
         if (!success) {
           throw Exception('فشل في تحديث الفرع');
@@ -1079,15 +1082,39 @@ class _BranchFormDialogState extends State<_BranchFormDialog> {
                           helperText: 'المسافة المسموح بها للحضور (افتراضي: 100 متر)',
                         ),
                         keyboardType: TextInputType.number,
-                        onChanged: (value) {
-                          // يمكن إضافة معاينة للدائرة هنا
-                          if (value.isNotEmpty) {
-                            final radius = double.tryParse(value);
-                            if (radius != null) {
-                              // التحديث التلقائي للـ UI
-                              setState(() {});
+                        validator: (value) {
+                          if (value != null && value.trim().isNotEmpty) {
+                            final radius = double.tryParse(value.trim());
+                            if (radius == null || radius <= 0) {
+                              return 'يرجى إدخال قيمة صحيحة';
                             }
                           }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _distanceFromRadiusController,
+                        decoration: const InputDecoration(
+                          labelText: 'المسافة الإضافية للنبضات (متر)',
+                          hintText: '100',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.radar),
+                          helperText: 'المسافة الإضافية المسموح بها للنبضات خارج نصف القطر',
+                        ),
+                        keyboardType: TextInputType.number,
+                        validator: (value) {
+                          if (value != null && value.trim().isNotEmpty) {
+                            final distance = double.tryParse(value.trim());
+                            if (distance == null || distance < 0) {
+                              return 'يرجى إدخال قيمة صحيحة';
+                            }
+                          }
+                          return null;
+                        },
+                        onChanged: (value) {
+                          // Update UI on change
+                          setState(() {});
                         },
                       ),
                       const SizedBox(height: 8),

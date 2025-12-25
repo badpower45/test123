@@ -4,6 +4,7 @@ import '../models/employee.dart';
 import '../models/shift_status.dart';
 import 'attendance_api_service.dart';
 import 'offline_data_service.dart';
+import 'supabase_attendance_service.dart';
 
 class AuthService with ChangeNotifier {
   static late SharedPreferences _prefs;
@@ -84,14 +85,28 @@ class AuthService with ChangeNotifier {
     final loginData = await getLoginData();
     final employeeId = loginData['employeeId'];
     
-    // 1. التحقق إذا كان المستخدم "حاضر" حالياً
-    if (_shiftStatus.isCheckedIn) {
-      // 2. إذا كان كذلك، قم بتشغيل الانصراف الإجباري على الخادم
+    // 1. التحقق إذا كان المستخدم "حاضر" حالياً (من Supabase مباشرة)
+    if (employeeId != null) {
       try {
-        await AttendanceApiService.forceCheckOut();
+        // Check active attendance from Supabase
+        final hasActiveAttendance = await _checkActiveAttendance(employeeId);
+        
+        if (hasActiveAttendance) {
+          // 2. إذا كان كذلك، قم بتشغيل الانصراف الإجباري
+          print('⚠️ [Logout] Active attendance found, forcing checkout...');
+          try {
+            await AttendanceApiService.forceCheckOut();
+            print('✅ [Logout] Force checkout successful');
+          } catch (e) {
+            print('❌ [Logout] Error during force checkout: $e');
+            // لا نرسل throw error، يجب أن تتم عملية تسجيل الخروج محلياً
+          }
+        } else {
+          print('ℹ️ [Logout] No active attendance found, proceeding with logout');
+        }
       } catch (e) {
-        print('Error during force checkout: $e');
-        // لا نرسل throw error، يجب أن تتم عملية تسجيل الخروج محلياً
+        print('⚠️ [Logout] Error checking active attendance: $e');
+        // Continue with logout even if check fails
       }
     }
 
@@ -115,5 +130,26 @@ class AuthService with ChangeNotifier {
     await prefs.clear();
 
     notifyListeners();
+  }
+
+  /// Check if employee has active attendance from Supabase
+  Future<bool> _checkActiveAttendance(String employeeId) async {
+    try {
+      final status = await SupabaseAttendanceService.getEmployeeStatus(employeeId);
+      final attendance = status['attendance'] as Map<String, dynamic>?;
+      
+      if (attendance != null) {
+        final attendanceStatus = attendance['status'] as String?;
+        final isActive = attendanceStatus == 'active';
+        print('🔍 [Logout] Attendance status: $attendanceStatus, isActive: $isActive');
+        return isActive;
+      }
+      
+      return false;
+    } catch (e) {
+      print('⚠️ [Logout] Error checking attendance status: $e');
+      // Fallback to local status if Supabase check fails
+      return _shiftStatus.isCheckedIn;
+    }
   }
 }

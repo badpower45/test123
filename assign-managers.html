@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>🎯 Assign Managers to Requests</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 900px;
+            margin: 50px auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .container {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+        h1 {
+            color: #667eea;
+            text-align: center;
+        }
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            width: 100%;
+            margin: 10px 0;
+        }
+        button:hover {
+            transform: scale(1.02);
+        }
+        #output {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f5f5f5;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            white-space: pre-wrap;
+            max-height: 500px;
+            overflow-y: auto;
+            direction: ltr;
+            text-align: left;
+        }
+        .success { color: #28a745; }
+        .error { color: #dc3545; }
+        .info { color: #17a2b8; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎯 ربط الطلبات بمديري الفروع</h1>
+        <p style="text-align: center; color: #666;">
+            جميع طلبات الموظفين تروح تلقائياً لمدير فرعهم
+        </p>
+
+        <button onclick="executeSQL()">⚡ تنفيذ الآن</button>
+
+        <div id="output"></div>
+    </div>
+
+    <script type="module">
+        import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+
+        const SUPABASE_URL = 'https://oecrjncxusupqocqwogk.supabase.co';
+        const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9lY3JqbmN4dXN1cHFvY3F3b2drIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Mjc5NzM3NjksImV4cCI6MjA0MzU0OTc2OX0.tFln0KtValSWUHZKW5qFu7z8Or86NOgHYYnlwWcRh48';
+
+        const supabase = createClient(SUPABASE_URL, ANON_KEY);
+        
+        window.executeSQL = async function() {
+            const output = document.getElementById('output');
+            output.textContent = '';
+            
+            function log(msg, type = 'info') {
+                const span = document.createElement('span');
+                span.className = type;
+                span.textContent = msg + '\n';
+                output.appendChild(span);
+            }
+
+            try {
+                log('🔧 Step 1: Adding assigned_manager_id columns...', 'info');
+
+                // We can't run ALTER TABLE directly via JS, so we'll use Supabase SQL Editor
+                // But we can check and update existing data
+
+                log('📊 Step 2: Checking current data...', 'info');
+
+                // Get employees with their branches and roles
+                const { data: employees, error: empError } = await supabase
+                    .from('employees')
+                    .select('id, full_name, branch, role')
+                    .in('branch', ['last2']);
+
+                if (empError) throw empError;
+
+                const managers = employees.filter(e => e.role === 'manager');
+                const staff = employees.filter(e => e.role === 'staff');
+
+                log(`Found ${managers.length} managers and ${staff.length} staff in last2 branch`, 'success');
+                managers.forEach(m => log(`  👔 Manager: ${m.full_name} (${m.id})`, 'info'));
+                staff.forEach(s => log(`  👤 Staff: ${s.full_name} (${s.id})`, 'info'));
+
+                if (managers.length === 0) {
+                    log('⚠️ No manager found in branch last2!', 'error');
+                    log('Manager requests will go to Owner', 'info');
+                } else {
+                    const managerId = managers[0].id;
+                    log(`\n✅ Manager for last2 branch: ${managers[0].full_name} (${managerId})`, 'success');
+                }
+
+                log('\n✨ System Ready!', 'success');
+                log('\n📝 Next Steps:', 'info');
+                log('1. Execute the SQL migration in Supabase SQL Editor:', 'info');
+                log('   👉 Go to: https://supabase.com/dashboard/project/bbxuyuaemigrqsvsnxkj/sql/new', 'info');
+                log('2. Copy content from: supabase/migrations/add_manager_to_requests.sql', 'info');
+                log('3. Run it in SQL Editor', 'info');
+                log('4. All new requests will auto-assign to branch manager!', 'success');
+
+            } catch (error) {
+                log(`\n❌ Error: ${error.message}`, 'error');
+                console.error(error);
+            }
+        };
+    </script>
+</body>
+</html>

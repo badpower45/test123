@@ -312,19 +312,17 @@ class _AttendanceRequestCard extends StatelessWidget {
 
   Color _statusColor() {
     switch (request.status) {
-      case 'pending': return AppColors.warning;
-      case 'approved': return AppColors.success;
-      case 'rejected': return AppColors.error;
-      default: return AppColors.textSecondary;
+      case RequestStatus.pending: return AppColors.warning;
+      case RequestStatus.approved: return AppColors.success;
+      case RequestStatus.rejected: return AppColors.error;
     }
   }
 
   String _statusText() {
     switch (request.status) {
-      case 'pending': return 'معلق';
-      case 'approved': return 'مُعتمد';
-      case 'rejected': return 'مرفوض';
-      default: return 'غير محدد';
+      case RequestStatus.pending: return 'معلق';
+      case RequestStatus.approved: return 'مُعتمد';
+      case RequestStatus.rejected: return 'مرفوض';
     }
   }
 
@@ -384,11 +382,10 @@ class _AttendanceRequestCard extends StatelessWidget {
               'السبب: ${request.reason}',
               style: const TextStyle(color: AppColors.textSecondary),
             ),
-            if (request.createdAt != null)
-              Text(
-                'تاريخ الطلب: ${_formatDate(request.createdAt!)}',
-                style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
-              ),
+            Text(
+              'تاريخ الطلب: ${_formatDate(request.createdAt)}',
+              style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+            ),
           ],
         ),
       ),

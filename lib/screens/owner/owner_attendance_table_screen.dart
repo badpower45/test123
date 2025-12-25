@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import '../../utils/time_utils.dart';
 import '../../services/supabase_owner_service.dart';
 import '../../services/supabase_branch_service.dart';
 import '../../theme/app_colors.dart';
 
 class OwnerAttendanceTableScreen extends StatefulWidget {
-  const OwnerAttendanceTableScreen({super.key});
+  final String? initialEmployeeId;
+  const OwnerAttendanceTableScreen({super.key, this.initialEmployeeId});
 
   @override
   State<OwnerAttendanceTableScreen> createState() => _OwnerAttendanceTableScreenState();
@@ -29,6 +31,9 @@ class _OwnerAttendanceTableScreenState extends State<OwnerAttendanceTableScreen>
     _initializeFilters();
     _loadBranches();
     _loadAttendance();
+    if (widget.initialEmployeeId != null) {
+      _selectedEmployee = widget.initialEmployeeId;
+    }
   }
 
   void _initializeFilters() {
@@ -242,37 +247,28 @@ class _OwnerAttendanceTableScreenState extends State<OwnerAttendanceTableScreen>
                                     DataColumn(label: Text('الفرع', style: TextStyle(fontWeight: FontWeight.bold))),
                                     DataColumn(label: Text('وقت الحضور', style: TextStyle(fontWeight: FontWeight.bold))),
                                     DataColumn(label: Text('وقت الانصراف', style: TextStyle(fontWeight: FontWeight.bold))),
-                                    DataColumn(label: Text('إجمالي الساعات', style: TextStyle(fontWeight: FontWeight.bold))),
                                     DataColumn(label: Text('الحالة', style: TextStyle(fontWeight: FontWeight.bold))),
                                   ],
                                   rows: _attendanceRecords.map((record) {
                                     final employeeData = record['employees'] as Map<String, dynamic>?;
                                     final employeeName = employeeData?['full_name'] ?? 'غير معروف';
                                     final branch = employeeData?['branch'] ?? '';
-                                    final date = record['date'] as String;
+                                    final date = (record['attendance_date'] ?? record['date']) as String;
                                     final checkInTime = record['check_in_time'] as String?;
                                     final checkOutTime = record['check_out_time'] as String?;
-                                    final totalHours = (record['total_hours'] as num?)?.toDouble() ?? 0;
 
-                                    final checkInFormatted = checkInTime != null
-                                        ? DateFormat('HH:mm').format(DateTime.parse(checkInTime).toLocal())
-                                        : '-';
-                                    final checkOutFormatted = checkOutTime != null
-                                        ? DateFormat('HH:mm').format(DateTime.parse(checkOutTime).toLocal())
-                                        : '-';
+                                    final checkInFormatted = _formatTime(checkInTime);
+                                    final checkOutFormatted = _formatTime(checkOutTime);
 
-                                    final isActive = checkOutTime == null;
+                                    final isActive = checkOutTime == null || checkOutTime.toString().isEmpty;
 
                                     return DataRow(
                                       cells: [
-                                        DataCell(Text(DateFormat('dd/MM/yyyy').format(DateTime.parse(date)))),
+                                        DataCell(Text(_formatDate(date))),
                                         DataCell(Text(employeeName)),
                                         DataCell(Text(branch)),
                                         DataCell(Text(checkInFormatted)),
                                         DataCell(Text(checkOutFormatted)),
-                                        DataCell(Text(
-                                          totalHours > 0 ? '${totalHours.toStringAsFixed(1)} ساعة' : '-',
-                                        )),
                                         DataCell(
                                           Container(
                                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -314,7 +310,10 @@ class _OwnerAttendanceTableScreenState extends State<OwnerAttendanceTableScreen>
                   ),
                   _SummaryItem(
                     label: 'الحاضرون الآن',
-                    value: '${_attendanceRecords.where((r) => r['check_out_time'] == null).length}',
+                    value: '${_attendanceRecords.where((r) {
+                      final value = r['check_out_time'];
+                      return value == null || (value is String && value.isEmpty);
+                    }).length}',
                     icon: Icons.person_pin_circle,
                     color: AppColors.success,
                   ),
@@ -323,6 +322,12 @@ class _OwnerAttendanceTableScreenState extends State<OwnerAttendanceTableScreen>
                     value: _calculateAverageHours(),
                     icon: Icons.access_time,
                     color: AppColors.primaryOrange,
+                  ),
+                  _SummaryItem(
+                    label: 'إجمالي الأجور',
+                    value: _calculateTotalSalary(),
+                    icon: Icons.attach_money,
+                    color: Colors.blueAccent,
                   ),
                 ],
               ),
@@ -342,6 +347,29 @@ class _OwnerAttendanceTableScreenState extends State<OwnerAttendanceTableScreen>
     );
 
     return (totalHours / completedRecords.length).toStringAsFixed(1);
+  }
+
+  String _calculateTotalSalary() {
+    final totalSalary = _attendanceRecords.fold<double>(
+      0,
+      (sum, r) => sum + ((r['daily_salary'] as num?)?.toDouble() ?? 0),
+    );
+
+    return totalSalary > 0 ? '${totalSalary.toStringAsFixed(2)} ج.م' : '0';
+  }
+
+  String _formatTime(String? value) {
+    // Delegate to centralized utility for consistent Cairo conversion
+    return TimeUtils.formatTimeShort(value);
+  }
+
+  String _formatDate(String? value) {
+    if (value == null || value.isEmpty) return '-';
+    try {
+      return DateFormat('dd/MM/yyyy').format(DateTime.parse(value));
+    } catch (e) {
+      return value;
+    }
   }
 }
 

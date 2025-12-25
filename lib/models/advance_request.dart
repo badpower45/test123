@@ -44,6 +44,41 @@ class AdvanceRequest extends HiveObject {
 
   factory AdvanceRequest.fromJson(Map<String, dynamic> json) {
     final statusValue = (json['status'] ?? '') as String;
+    
+    // ✅ FIX: Safe date parsing with null checks
+    DateTime? requestDate;
+    DateTime createdAt;
+    DateTime? reviewedAt;
+    
+    try {
+      final requestDateStr = (json['requestDate'] ?? json['request_date'])?.toString();
+      if (requestDateStr != null && requestDateStr.isNotEmpty) {
+        requestDate = DateTime.parse(requestDateStr);
+      }
+    } catch (e) {
+      requestDate = null;
+    }
+    
+    try {
+      final createdAtStr = (json['createdAt'] ?? json['created_at'])?.toString();
+      if (createdAtStr == null || createdAtStr.isEmpty) {
+        createdAt = DateTime.now();
+      } else {
+        createdAt = DateTime.parse(createdAtStr);
+      }
+    } catch (e) {
+      createdAt = DateTime.now();
+    }
+    
+    try {
+      final reviewedAtStr = (json['reviewedAt'] ?? json['reviewed_at'])?.toString();
+      if (reviewedAtStr != null && reviewedAtStr.isNotEmpty) {
+        reviewedAt = DateTime.parse(reviewedAtStr);
+      }
+    } catch (e) {
+      reviewedAt = null;
+    }
+    
     return AdvanceRequest(
       id: (json['id'] ?? '') as String,
       employeeId: (json['employeeId'] ?? json['employee_id'] ?? '') as String,
@@ -54,13 +89,9 @@ class AdvanceRequest extends HiveObject {
           ? (json['eligibleAmount'] as num).toDouble()
           : ((json['eligible_amount']) as num?)?.toDouble(),
       status: _mapStatus(statusValue),
-      requestDate: (json['requestDate'] ?? json['request_date']) != null
-          ? DateTime.parse((json['requestDate'] ?? json['request_date']) as String)
-          : null,
-      createdAt: DateTime.parse((json['createdAt'] ?? json['created_at']) as String),
-      reviewedAt: (json['reviewedAt'] ?? json['reviewed_at']) != null
-          ? DateTime.parse((json['reviewedAt'] ?? json['reviewed_at']) as String)
-          : null,
+      requestDate: requestDate,
+      createdAt: createdAt,
+      reviewedAt: reviewedAt,
       reviewedBy: (json['reviewedBy'] ?? json['reviewed_by']) as String?,
       rejectionReason: (json['reviewNotes'] ?? json['rejection_reason']) as String?,
     );

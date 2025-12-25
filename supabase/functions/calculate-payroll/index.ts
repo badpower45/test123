@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Supabase Edge Function: Calculate Payroll
  *
@@ -100,6 +101,26 @@ function calculateHours(checkIn: string, checkOut: string): number {
 }
 
 /**
+ * Get expected work days in a period (excluding Fridays)
+ */
+function getExpectedWorkDays(startDate: string, endDate: string): number {
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  let workDays = 0;
+  
+  const current = new Date(start);
+  while (current <= end) {
+    // Exclude Fridays (day 5)
+    if (current.getDay() !== 5) {
+      workDays++;
+    }
+    current.setDate(current.getDate() + 1);
+  }
+  
+  return workDays;
+}
+
+/**
  * Get employee hourly rate (from hourly_rate field or calculated from monthly salary)
  */
 function getEmployeeHourlyRate(employee: Employee): number {
@@ -152,7 +173,11 @@ serve(async (req) => {
 
     // Initialize Supabase client
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const supabaseKey =
+      Deno.env.get('SERVICE_ROLE_KEY') ?? Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    if (!supabaseKey) {
+      throw new Error('Missing service role key in function environment');
+    }
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     // Parse request body
@@ -279,6 +304,9 @@ serve(async (req) => {
         const grossPay = Math.round(blvVerifiedHours * hourlyRate * 100) / 100;
 
         // Fetch salary advances to deduct
+        // Only fetch advances that are APPROVED and NOT YET DEDUCTED (or deducted in this specific payroll run if re-running)
+        // We need to be careful not to double-deduct if we re-run calculation.
+        // For now, we fetch all approved advances requested up to periodEnd that are not deducted.
         const { data: advances } = await supabase
           .from('advances')
           .select('id, amount, request_date')
@@ -289,7 +317,8 @@ serve(async (req) => {
 
         const advancesTotal = advances?.reduce((sum, adv) => sum + Number(adv.amount), 0) || 0;
 
-        // Fetch other deductions
+        // Fetch other deductions (penalties, damages, etc.)
+        // These are stored in 'deductions' table.
         const { data: deductions } = await supabase
           .from('deductions')
           .select('id, amount, reason, deduction_date')
@@ -299,13 +328,25 @@ serve(async (req) => {
 
         const deductionsTotal = deductions?.reduce((sum, ded) => sum + Number(ded.amount), 0) || 0;
 
-        // Calculate absence deductions (TODO: implement absence logic)
-        const absenceDeductions = 0;
+        // Calculate absence deductions
+        // Count expected work days vs actual work days
+        const expectedWorkDays = getExpectedWorkDays(periodStart, periodEnd);
+        const absenceDays = Math.max(0, expectedWorkDays - workDays);
+        const dailyRate = hourlyRate * 8; // Assuming 8-hour work day
+        const absenceDeductions = Math.round(absenceDays * dailyRate * 100) / 100;
 
-        // Calculate late deductions (TODO: implement late arrival logic)
-        const lateDeductions = 0;
+        // Calculate late deductions from attendance records
+        let totalLateMinutes = 0;
+        for (const record of records) {
+          const lateMinutes = record.late_minutes || 0;
+          totalLateMinutes += lateMinutes;
+        }
+        // Deduct 1/60 of hourly rate per late minute (after 15 min grace period per day)
+        const chargeableLateMinutes = Math.max(0, totalLateMinutes - (workDays * 15));
+        const lateDeductions = Math.round((chargeableLateMinutes / 60) * hourlyRate * 100) / 100;
 
         // Calculate net pay
+        // Total Deductions = Advances + Other Deductions + Absences + Lates
         const totalDeductions = advancesTotal + deductionsTotal + absenceDeductions + lateDeductions;
         const netPay = Math.max(0, grossPay - totalDeductions);
 
@@ -338,8 +379,19 @@ serve(async (req) => {
                 date: d.deduction_date,
               })) || [],
             },
-            absences: absenceDeductions,
-            late_arrivals: lateDeductions,
+            absences: {
+              expected_days: expectedWorkDays,
+              actual_days: workDays,
+              absent_days: absenceDays,
+              daily_rate: dailyRate,
+              total: absenceDeductions,
+            },
+            late_arrivals: {
+              total_late_minutes: totalLateMinutes,
+              grace_period_minutes: workDays * 15,
+              chargeable_minutes: chargeableLateMinutes,
+              total: lateDeductions,
+            },
           },
           total_deductions: totalDeductions,
           net_pay: netPay,

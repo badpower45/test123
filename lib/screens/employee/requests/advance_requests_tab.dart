@@ -22,6 +22,12 @@ class _AdvanceRequestsTabState extends State<AdvanceRequestsTab> {
   String? _error;
   double? _currentEarnings;
   double? _maxAdvance;
+  double? _remainingBalance;
+  double? _totalAdvancesTaken;
+  DateTime? _lastAdvanceDate;
+  int? _daysSinceLastAdvance;
+  bool _canRequestAdvance = false;
+  bool _loadingAdvanceInfo = false;
 
   @override
   void initState() {
@@ -63,24 +69,81 @@ class _AdvanceRequestsTabState extends State<AdvanceRequestsTab> {
   }
 
   Future<void> _loadCurrentEarnings() async {
+    setState(() => _loadingAdvanceInfo = true);
+    
     try {
+      print('📞 Calling getEmployeeSalaryInfo for employee: ${widget.employeeId}');
       final response = await SupabaseRequestsService.getEmployeeSalaryInfo(widget.employeeId);
-      if (!mounted) {
-        return;
-      }
+      print('📥 getEmployeeSalaryInfo response: $response');
+      
+      if (!mounted) return;
 
       final earnings = (response['currentEarnings'] ?? response['current_earnings'] ?? 0) as num?;
       final maxAdvance = (response['maxAdvance'] ?? response['max_advance']) as num?;
+      final remaining = (response['remaining_balance'] ?? 0) as num?;
+      final advancesTaken = (response['total_advances_taken'] ?? 0) as num?;
+      final lastAdvDate = response['last_advance_date'] as String?;
+      final daysSince = response['days_since_last_advance'] as int?;
+      final canRequest = response['can_request_advance'] as bool? ?? false;
+      
+      print('💵 Parsed - earnings: $earnings, maxAdvance: $maxAdvance, remaining: $remaining, taken: $advancesTaken, canRequest: $canRequest, daysSince: $daysSince');
+      
       setState(() {
         _currentEarnings = earnings?.toDouble();
         _maxAdvance = maxAdvance?.toDouble() ?? (_currentEarnings != null ? _currentEarnings! * 0.3 : null);
+        _remainingBalance = remaining?.toDouble();
+        _totalAdvancesTaken = advancesTaken?.toDouble();
+        _lastAdvanceDate = lastAdvDate != null ? DateTime.parse(lastAdvDate) : null;
+        _daysSinceLastAdvance = daysSince;
+        _canRequestAdvance = canRequest;
+        _loadingAdvanceInfo = false;
       });
-    } catch (_) {
-      // Earnings information is optional; ignore failures silently.
+      
+      print('✅ State updated: earnings=$_currentEarnings, maxAdvance=$_maxAdvance, remaining=$_remainingBalance, canRequest=$_canRequestAdvance');
+    } catch (e) {
+      print('❌ Error in _loadCurrentEarnings: $e');
+      if (mounted) {
+        setState(() => _loadingAdvanceInfo = false);
+      }
     }
   }
 
   Future<void> _openAdvanceRequestSheet() async {
+    // Check if advance info is loaded
+    if (_loadingAdvanceInfo) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('⏳ جاري تحميل بيانات السلفة...'),
+          backgroundColor: AppColors.statusPending,
+        ),
+      );
+      return;
+    }
+
+    // Check if user has earnings
+    if (_currentEarnings == null || _currentEarnings! <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('❌ لا يوجد رصيد متاح حتى الآن. يرجى العمل أولاً!'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
+    // Check if eligible (5 days passed)
+    if (!_canRequestAdvance && _daysSinceLastAdvance != null) {
+      final remainingDays = 5 - _daysSinceLastAdvance!;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('⏰ يمكنك طلب سلفة جديدة بعد $remainingDays أيام'),
+          backgroundColor: AppColors.error,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+      return;
+    }
+
     final request = await showModalBottomSheet<AdvanceRequest>(
       context: context,
       isScrollControlled: true,
@@ -102,6 +165,8 @@ class _AdvanceRequestsTabState extends State<AdvanceRequestsTab> {
           backgroundColor: AppColors.success,
         ),
       );
+      // Reload advance info after creating request
+      _loadCurrentEarnings();
     }
   }
 
@@ -117,9 +182,15 @@ class _AdvanceRequestsTabState extends State<AdvanceRequestsTab> {
         physics: const AlwaysScrollableScrollPhysics(),
         children: [
           ElevatedButton.icon(
-            onPressed: _openAdvanceRequestSheet,
-            icon: const Icon(Icons.add),
-            label: const Text('طلب سلفة جديد'),
+            onPressed: _loadingAdvanceInfo ? null : _openAdvanceRequestSheet,
+            icon: _loadingAdvanceInfo 
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                  )
+                : const Icon(Icons.add),
+            label: Text(_loadingAdvanceInfo ? 'جاري التحميل...' : 'طلب سلفة جديد'),
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primaryOrange,
               foregroundColor: Colors.white,
@@ -128,16 +199,62 @@ class _AdvanceRequestsTabState extends State<AdvanceRequestsTab> {
             ),
           ),
           const SizedBox(height: 24),
-          if (_maxAdvance != null)
+          if (_loadingAdvanceInfo)
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
                 color: AppColors.surfaceVariant,
                 borderRadius: BorderRadius.circular(16),
               ),
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  SizedBox(width: 12),
+                  Text('جاري تحميل معلومات السلفة...'),
+                ],
+              ),
+            )
+          else if (_maxAdvance != null && _maxAdvance! > 0)
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: _canRequestAdvance 
+                    ? AppColors.surfaceVariant 
+                    : AppColors.error.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: _canRequestAdvance 
+                      ? Colors.transparent 
+                      : AppColors.error.withOpacity(0.3),
+                  width: 1,
+                ),
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  Row(
+                    children: [
+                      Icon(
+                        _canRequestAdvance ? Icons.check_circle : Icons.schedule,
+                        color: _canRequestAdvance ? AppColors.success : AppColors.error,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        _canRequestAdvance ? 'يمكنك طلب سلفة' : 'لا يمكنك طلب سلفة الآن',
+                        style: TextStyle(
+                          color: _canRequestAdvance ? AppColors.success : AppColors.error,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
                   const Text(
                     'الحد الأقصى للسلفة المتاحة',
                     style: TextStyle(
@@ -154,13 +271,117 @@ class _AdvanceRequestsTabState extends State<AdvanceRequestsTab> {
                       color: AppColors.primaryOrange,
                     ),
                   ),
-                  if (_currentEarnings != null) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      'دخل الشهر الحالي: ${_currentEarnings!.toStringAsFixed(0)} جنيه',
-                      style: const TextStyle(color: AppColors.textSecondary),
+                  if (_totalAdvancesTaken != null && _totalAdvancesTaken! > 0) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text(
+                                'إجمالي الراتب:',
+                                style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                              ),
+                              Text(
+                                '${_currentEarnings!.toStringAsFixed(0)} ج.م',
+                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text(
+                                'سلف مسحوبة:',
+                                style: TextStyle(fontSize: 13, color: AppColors.error),
+                              ),
+                              Text(
+                                '- ${_totalAdvancesTaken!.toStringAsFixed(0)} ج.م',
+                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.error),
+                              ),
+                            ],
+                          ),
+                          const Divider(height: 16),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text(
+                                'الرصيد المتبقي:',
+                                style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                              ),
+                              Text(
+                                '${_remainingBalance!.toStringAsFixed(0)} ج.م',
+                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppColors.success),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
                   ],
+                  if (!_canRequestAdvance && _daysSinceLastAdvance != null) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppColors.error.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.info_outline, size: 18, color: AppColors.error),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'يمكنك طلب سلفة جديدة بعد ${5 - _daysSinceLastAdvance!} أيام',
+                              style: const TextStyle(
+                                color: AppColors.error,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            )
+          else if (!_loadingAdvanceInfo)
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: AppColors.error.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: const Column(
+                children: [
+                  Icon(Icons.warning_amber, color: AppColors.error, size: 32),
+                  SizedBox(height: 8),
+                  Text(
+                    'لا يوجد رصيد متاح',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.error,
+                    ),
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                    'يرجى العمل أولاً لتتمكن من طلب سلفة',
+                    style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 13,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
                 ],
               ),
             ),
@@ -600,11 +821,6 @@ class _AdvanceRequestSheetState extends State<_AdvanceRequestSheet> {
               ),
             ),
             const SizedBox(height: 16),
-            if (widget.currentEarnings != null)
-              _InfoRow(
-                label: 'دخل الشهر الحالي',
-                value: '${widget.currentEarnings!.toStringAsFixed(0)} جنيه',
-              ),
             if (maxAllowed != null) ...[
               const SizedBox(height: 12),
               _InfoRow(

@@ -41,11 +41,17 @@ class _EmployeeOnboardingStep1State extends State<EmployeeOnboardingStep1> {
     return Scaffold(
       backgroundColor: Colors.white,
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
+        child: SingleChildScrollView(
+          padding: EdgeInsets.only(
+            left: 24,
+            right: 24,
+            top: 24,
+            bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+          ),
           child: Form(
             key: _formKey,
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const SizedBox(height: 40),
@@ -176,7 +182,7 @@ class _EmployeeOnboardingStep1State extends State<EmployeeOnboardingStep1> {
                     return null;
                   },
                 ),
-                const Spacer(),
+                const SizedBox(height: 40),
                 // Next Button
                 ElevatedButton(
                   onPressed: _next,

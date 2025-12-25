@@ -1,6 +1,16 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/supabase_config.dart';
 
+/// Helper function for safe date parsing
+DateTime? _safeParseDate(dynamic value) {
+  if (value == null) return null;
+  try {
+    return DateTime.parse(value.toString());
+  } catch (e) {
+    return null;
+  }
+}
+
 /// Fraud Alert Model
 class FraudAlert {
   FraudAlert({
@@ -62,9 +72,9 @@ class FraudAlert {
       severity: (json['severity'] as num).toDouble(),
       totalScore: json['total_score'] as int?,
       details: json['details'] as Map<String, dynamic>? ?? {},
-      createdAt: DateTime.parse(json['created_at'] as String),
+      createdAt: _safeParseDate(json['created_at']) ?? DateTime.now(),
       resolvedAt: json['resolved_at'] != null
-          ? DateTime.parse(json['resolved_at'] as String)
+          ? _safeParseDate(json['resolved_at'])
           : null,
       resolvedBy: json['resolved_by'] as String?,
       resolutionNotes: json['resolution_notes'] as String?,

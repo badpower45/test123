@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
 import 'package:intl/intl.dart';
-import '../../constants/api_endpoints.dart';
 import '../../theme/app_colors.dart';
+import '../../services/payroll_service.dart';
 
 class ManagerReportPage extends StatefulWidget {
   final String managerId;
@@ -99,33 +97,18 @@ class _ManagerReportPageState extends State<ManagerReportPage> {
     });
 
     try {
-      final startDateStr = DateFormat('yyyy-MM-dd').format(_startDate!);
-      final endDateStr = DateFormat('yyyy-MM-dd').format(_endDate!);
-
-      final response = await http.get(
-        Uri.parse(
-          '$apiBaseUrl/owner/employee-attendance/${widget.managerId}?startDate=$startDateStr&endDate=$endDateStr'
-        ),
+      final payrollService = PayrollService();
+      final data = await payrollService.getEmployeeAttendanceReportLegacyFormat(
+        employeeId: widget.managerId,
+        startDate: _startDate!,
+        endDate: _endDate!,
       );
 
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        setState(() {
-          _tableRows = data['tableRows'] ?? [];
-          _summary = data['summary'];
-          // _employeeInfo = data['employee']; // Removed unused field
-          _isLoading = false;
-        });
-      } else {
-        setState(() {
-          _isLoading = false;
-        });
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('فشل تحميل البيانات')),
-          );
-        }
-      }
+      setState(() {
+        _tableRows = data['tableRows'] ?? [];
+        _summary = data['summary'];
+        _isLoading = false;
+      });
     } catch (e) {
       setState(() {
         _isLoading = false;

@@ -95,8 +95,13 @@ class EnvironmentalDataCollector {
       // Start motion tracking
       _startMotionTracking();
       
-      // Start sound monitoring (if permission granted)
-      await _startSoundMonitoring();
+      // Start sound monitoring (mobile/desktop only; not supported on Web)
+      if (!kIsWeb) {
+        await _startSoundMonitoring();
+      } else {
+        debugPrint('[BLV] Sound monitoring disabled on Web');
+        _currentSoundLevel = 0.5; // neutral default
+      }
       
       debugPrint('[BLV] Environmental data collector initialized');
     } catch (e) {

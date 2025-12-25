@@ -164,3 +164,6 @@ After integration:
 - No manual refresh needed - updates happen via Supabase real-time
 - Widget cleans up subscriptions when disposed
 - Supports both Arabic and English text (based on app locale)
+
+
+

@@ -54,9 +54,10 @@ class _EmployeeOnboardingStep3State extends State<EmployeeOnboardingStep3>
     return Scaffold(
       backgroundColor: Colors.white,
       body: SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const SizedBox(height: 40),
@@ -94,7 +95,7 @@ class _EmployeeOnboardingStep3State extends State<EmployeeOnboardingStep3>
                   ),
                 ],
               ),
-              const Spacer(),
+              const SizedBox(height: 40),
               // Success Icon/Animation
               FadeTransition(
                 opacity: _fadeAnimation,
@@ -163,7 +164,7 @@ class _EmployeeOnboardingStep3State extends State<EmployeeOnboardingStep3>
                   ),
                 ),
               ),
-              const Spacer(),
+              const SizedBox(height: 40),
               // Features List
               FadeTransition(
                 opacity: _fadeAnimation,

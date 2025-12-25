@@ -12,6 +12,7 @@ class Pulse extends HiveObject {
     this.wifiBssid,
     this.status = 'IN',
     this.isWithinGeofence,
+    this.distanceFromCenter, // ✅ ADDED: Distance from branch center
     this.isFake = false,
     this.isSynced = true,
     // BLV Environmental Data
@@ -34,9 +35,10 @@ class Pulse extends HiveObject {
   final String? wifiBssid;
   final String status;
   final bool? isWithinGeofence;
+  final double? distanceFromCenter; // ✅ ADDED: Distance in meters
   final bool isFake;
   final bool isSynced;
-  
+
   // BLV Environmental Data
   final int? wifiCount;
   final double? wifiSignalStrength;
@@ -67,6 +69,8 @@ class Pulse extends HiveObject {
         'longitude': longitude,
         'wifi_bssid': wifiBssid,
         'is_within_geofence': isWithinGeofence,
+      'inside_geofence': isWithinGeofence,
+        'distance_from_center': distanceFromCenter, // ✅ ADDED: Distance field
         'is_fake': isFake,
         'timestamp': timestamp.toIso8601String(),
         // BLV Environmental Data
@@ -93,6 +97,12 @@ class Pulse extends HiveObject {
         status: (json['status'] ?? 'IN') as String,
         isWithinGeofence:
             (json['is_within_geofence'] ?? json['isWithinGeofence']) as bool?,
+        distanceFromCenter: (json['distance_from_center'] ??
+            json['distanceFromCenter']) ==
+          null
+        ? null
+        : ((json['distance_from_center'] ?? json['distanceFromCenter']) as num)
+          .toDouble(),
         isFake: (json['is_fake'] ?? json['isFake'] ?? false) as bool,
         isSynced: (json['is_synced'] ?? json['isSynced'] ?? true) as bool,
       );

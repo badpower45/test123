@@ -8,7 +8,12 @@ class SupabaseConfig {
     await Supabase.initialize(
       url: supabaseUrl,
       anonKey: supabaseAnonKey,
+      realtimeClientOptions: const RealtimeClientOptions(
+        timeout: Duration(seconds: 30),
+      ),
     );
+    
+    print('✅ Supabase initialized successfully');
   }
 
   static SupabaseClient get client => Supabase.instance.client;

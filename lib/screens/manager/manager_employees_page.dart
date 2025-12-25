@@ -5,6 +5,16 @@ import '../../services/branch_api_service.dart';
 import 'manager_employee_detail_page.dart';
 import 'manager_add_employee_page.dart';
 
+/// Helper function for safe date parsing
+DateTime? _safeParseDate(dynamic value) {
+  if (value == null) return null;
+  try {
+    return DateTime.parse(value.toString());
+  } catch (e) {
+    return null;
+  }
+}
+
 class ManagerEmployeesPage extends StatefulWidget {
   final String managerId;
   final String branchId;
@@ -52,17 +62,11 @@ class _ManagerEmployeesPageState extends State<ManagerEmployeesPage> {
           shiftStartTime: empData['shift_start_time'] as String?,
           shiftEndTime: empData['shift_end_time'] as String?,
           address: empData['address'] as String?,
-          birthDate: empData['birth_date'] != null 
-              ? DateTime.parse(empData['birth_date']) 
-              : null,
+          birthDate: _safeParseDate(empData['birth_date']),
           email: empData['email'] as String?,
           phone: empData['phone'] as String?,
-          createdAt: empData['created_at'] != null 
-              ? DateTime.parse(empData['created_at']) 
-              : DateTime.now(),
-          updatedAt: empData['updated_at'] != null 
-              ? DateTime.parse(empData['updated_at']) 
-              : DateTime.now(),
+          createdAt: _safeParseDate(empData['created_at']) ?? DateTime.now(),
+          updatedAt: _safeParseDate(empData['updated_at']) ?? DateTime.now(),
         );
       }).toList();
       

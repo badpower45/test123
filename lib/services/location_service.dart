@@ -50,25 +50,43 @@ class LocationService {
     }
 
     try {
-      // محاولة الحصول على آخر موقع معروف أولاً (فوري)
+      // محاولة الحصول على آخر موقع معروف أولاً (فوري) - أولوية للأجهزة القديمة
+      print('[LocationService] 🔍 Trying last known position first...');
       final lastKnown = await Geolocator.getLastKnownPosition();
       if (lastKnown != null) {
-        print('[LocationService] 📍 Using last known position (accuracy: ${lastKnown.accuracy.toStringAsFixed(1)}m)');
-        _lastKnownPosition = lastKnown;
-        _lastPositionTime = DateTime.now();
-        return lastKnown;
+        final age = DateTime.now().difference(lastKnown.timestamp);
+        // Accept last known position if less than 5 minutes old
+        if (age.inMinutes < 5) {
+          print('[LocationService] ✅ Using last known position (${age.inMinutes}m old, accuracy: ${lastKnown.accuracy.toStringAsFixed(1)}m)');
+          _lastKnownPosition = lastKnown;
+          _lastPositionTime = DateTime.now();
+          return lastKnown;
+        } else {
+          print('[LocationService] ⚠️ Last known position too old (${age.inMinutes}m), getting fresh...');
+        }
       }
       
-      // إذا مفيش last known، جيب موقع جديد
+      // إذا مفيش last known حديث، جيب موقع جديد بأقصى توافق
       print('[LocationService] 🔍 Getting fresh location...');
       
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.low, // low = أسرع وأوفر بطارية
-        forceAndroidLocationManager: false,
-        timeLimit: const Duration(seconds: 5),
-      ).timeout(const Duration(seconds: 8));
+        desiredAccuracy: LocationAccuracy.medium, // Changed from low to medium for better reliability
+        forceAndroidLocationManager: true, // Force Android Location Manager for old devices
+        timeLimit: const Duration(seconds: 10), // Increased timeout
+      ).timeout(
+        const Duration(seconds: 15),
+        onTimeout: () async {
+          print('[LocationService] ⏰ Timeout getting position, trying last known...');
+          final fallback = await Geolocator.getLastKnownPosition();
+          if (fallback != null) {
+            print('[LocationService] ✅ Using fallback last known position');
+            return fallback;
+          }
+          throw Exception('Location timeout and no fallback available');
+        },
+      );
 
-      print('[LocationService] ✅ Got position: accuracy=${position.accuracy.toStringAsFixed(1)}m');
+      print('[LocationService] ✅ Got fresh position: accuracy=${position.accuracy.toStringAsFixed(1)}m');
       
       // حفظ في الـ cache
       _lastKnownPosition = position;
@@ -77,12 +95,26 @@ class LocationService {
       return position;
       
     } catch (e) {
-      print('[LocationService] ⚠️ Failed to get location: $e');
+      print('[LocationService] ⚠️ Error getting location: $e');
       
       // Fallback نهائي: استخدم الـ cache حتى لو قديم
       if (_lastKnownPosition != null) {
-        print('[LocationService] ⚠️ Using old cached position as last resort');
+        final age = DateTime.now().difference(_lastPositionTime!);
+        print('[LocationService] ⚠️ Using old cached position as last resort (${age.inMinutes}m old)');
         return _lastKnownPosition;
+      }
+      
+      // محاولة أخيرة: getLastKnownPosition
+      try {
+        final lastKnown = await Geolocator.getLastKnownPosition();
+        if (lastKnown != null) {
+          print('[LocationService] ✅ Retrieved last known position from system');
+          _lastKnownPosition = lastKnown;
+          _lastPositionTime = DateTime.now();
+          return lastKnown;
+        }
+      } catch (e2) {
+        print('[LocationService] ❌ All fallbacks failed: $e2');
       }
       
       return null;

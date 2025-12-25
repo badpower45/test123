@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../constants/api_endpoints.dart';
+import '../config/app_config.dart';
 import '../models/attendance_summary.dart';
 import '../models/detailed_attendance_request.dart';
 import '../models/detailed_leave_request.dart';
@@ -186,9 +187,19 @@ class OwnerApiService {
   static Future<Map<String, dynamic>> deleteEmployee({
     required String employeeId,
   }) async {
-    final endpoint = employeesEndpoint.endsWith('/')
-        ? '${employeesEndpoint}$employeeId'
-        : '$employeesEndpoint/$employeeId';
+    // Use AppConfig API base URL if employeesEndpoint is empty
+    String baseEndpoint = employeesEndpoint;
+    if (baseEndpoint.isEmpty && AppConfig.apiBaseUrl.isNotEmpty) {
+      baseEndpoint = '${AppConfig.apiBaseUrl}/api/employees';
+    }
+    
+    if (baseEndpoint.isEmpty) {
+      throw Exception('API endpoint غير متاح. يرجى تفعيل API endpoint.');
+    }
+
+    final endpoint = baseEndpoint.endsWith('/')
+        ? '${baseEndpoint}$employeeId'
+        : '$baseEndpoint/$employeeId';
     final uri = Uri.parse(endpoint);
 
     final response = await http.delete(uri, headers: _jsonHeaders);

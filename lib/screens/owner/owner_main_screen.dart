@@ -12,6 +12,7 @@ import '../../models/employee_attendance_status.dart';
 import '../../services/branch_manager_api_service.dart';
 import '../../services/owner_api_service.dart';
 import '../../services/branch_api_service.dart';
+import '../../services/supabase_owner_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/wifi_service.dart';
 import '../../theme/app_colors.dart';
@@ -202,11 +203,11 @@ class _OwnerDashboardTabState extends State<_OwnerDashboardTab> {
   @override
   void initState() {
     super.initState();
-    _dashboardFuture = OwnerApiService.getDashboard(ownerId: widget.ownerId);
+    _dashboardFuture = SupabaseOwnerService.getOwnerDashboard(ownerId: widget.ownerId);
   }
 
   Future<void> _refresh() async {
-    final future = OwnerApiService.getDashboard(ownerId: widget.ownerId);
+    final future = SupabaseOwnerService.getOwnerDashboard(ownerId: widget.ownerId);
     setState(() {
       _dashboardFuture = future;
     });
@@ -382,11 +383,11 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
   @override
   void initState() {
     super.initState();
-    _employeesFuture = OwnerApiService.getEmployees(ownerId: widget.ownerId);
+    _employeesFuture = SupabaseOwnerService.getOwnerEmployees(ownerId: widget.ownerId);
   }
 
   Future<void> _refresh() async {
-    final future = OwnerApiService.getEmployees(ownerId: widget.ownerId);
+    final future = SupabaseOwnerService.getOwnerEmployees(ownerId: widget.ownerId);
     setState(() {
       _employeesFuture = future;
     });
@@ -430,7 +431,7 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
     if (result == null) return;
 
     try {
-      await OwnerApiService.updateEmployee(
+      await SupabaseOwnerService.updateEmployee(
         employeeId: '${employee['id']}',
         fullName: result['fullName'],
         hourlyRate: result['hourlyRate'],
@@ -478,7 +479,7 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
     if (confirmed != true) return;
 
     try {
-      await OwnerApiService.deleteEmployee(employeeId: employeeId);
+      await SupabaseOwnerService.deleteEmployee(employeeId: employeeId);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('تم حذف الموظف بنجاح')),
@@ -790,7 +791,7 @@ class _OwnerPresenceTab extends StatefulWidget {
 }
 
 class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
-  late Future<EmployeeStatusResult> _presenceFuture;
+  late Future<Map<String, dynamic>> _presenceFuture;
   String? _selectedBranchId;
   DateTime? _selectedDate;
 
@@ -800,9 +801,9 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
     _presenceFuture = _loadPresenceData();
   }
 
-  Future<EmployeeStatusResult> _loadPresenceData() async {
+  Future<Map<String, dynamic>> _loadPresenceData() async {
     try {
-      return await OwnerApiService.getEmployeeAttendanceStatus(
+      return await SupabaseOwnerService.getEmployeeAttendanceStatusResult(
         branchId: _selectedBranchId,
         date: _selectedDate,
       );
@@ -823,7 +824,7 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
     if (reason == null) return;
 
     try {
-      await OwnerApiService.manualCheckOut(employeeId, reason: reason);
+      await SupabaseOwnerService.simpleManualCheckOut(employeeId, reason: reason);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -848,7 +849,7 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
     if (reason == null) return;
 
     try {
-      await OwnerApiService.manualCheckIn(employeeId, reason: reason);
+      await SupabaseOwnerService.simpleManualCheckIn(employeeId, reason: reason);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -944,7 +945,7 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
   Widget build(BuildContext context) {
     return RefreshIndicator(
       onRefresh: _refresh,
-      child: FutureBuilder<EmployeeStatusResult>(
+      child: FutureBuilder<Map<String, dynamic>>(
         future: _presenceFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
@@ -966,9 +967,10 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
             return const Center(child: Text('لا توجد بيانات'));
           }
 
-          final employees = result.employees;
-          final presentCount = employees.where((e) => e.isPresent).length;
-          final absentCount = employees.where((e) => e.isAbsent).length;
+          final employeesList = (result['employees'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+          final summary = result['summary'] as Map<String, dynamic>? ?? {};
+          final presentCount = (summary['presentCount'] as num?)?.toInt() ?? 0;
+          final absentCount = (summary['absentCount'] as num?)?.toInt() ?? 0;
 
           return ListView(
             physics: const AlwaysScrollableScrollPhysics(),
@@ -998,7 +1000,7 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
                   Expanded(
                     child: _PresenceSummaryCard(
                       title: 'إجمالي',
-                      count: employees.length,
+                      count: employeesList.length,
                       color: Colors.blue,
                       icon: Icons.people,
                     ),
@@ -1011,7 +1013,20 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
               const Text('قائمة الموظفين', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               const SizedBox(height: 12),
 
-              ...employees.map((employee) {
+              ...employeesList.map((employee) {
+                final employeeId = employee['employeeId']?.toString() ?? '';
+                final employeeName = employee['employeeName']?.toString() ?? '';
+                final employeeRole = employee['employeeRole']?.toString() ?? '';
+                final branchName = employee['branchName']?.toString();
+                final status = employee['status']?.toString() ?? 'absent';
+                final checkInTimeStr = employee['checkInTime']?.toString();
+                final checkOutTimeStr = employee['checkOutTime']?.toString();
+                final checkInTime = checkInTimeStr != null ? DateTime.tryParse(checkInTimeStr) : null;
+                final checkOutTime = checkOutTimeStr != null ? DateTime.tryParse(checkOutTimeStr) : null;
+                final isPresent = status == 'present';
+                final isAbsent = status == 'absent';
+                final isCheckedOut = status == 'checked_out';
+
                 return Card(
                   margin: const EdgeInsets.only(bottom: 12),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -1027,7 +1042,7 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    employee.employeeName,
+                                    employeeName,
                                     style: const TextStyle(
                                       fontSize: 16,
                                       fontWeight: FontWeight.w600,
@@ -1035,7 +1050,7 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
-                                    '${employee.employeeRole}${employee.branchName != null ? ' • ${employee.branchName}' : ''}',
+                                    '$employeeRole${branchName != null ? ' • $branchName' : ''}',
                                     style: TextStyle(
                                       fontSize: 14,
                                       color: Colors.grey.shade600,
@@ -1047,13 +1062,13 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                               decoration: BoxDecoration(
-                                color: _getStatusColor(employee.status).withOpacity(0.1),
+                                color: _getStatusColor(status).withOpacity(0.1),
                                 borderRadius: BorderRadius.circular(16),
                               ),
                               child: Text(
-                                _getStatusText(employee.status),
+                                _getStatusText(status),
                                 style: TextStyle(
-                                  color: _getStatusColor(employee.status),
+                                  color: _getStatusColor(status),
                                   fontWeight: FontWeight.w600,
                                 ),
                               ),
@@ -1076,7 +1091,7 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
-                                    _formatTime(employee.checkInTime),
+                                    _formatTime(checkInTime),
                                     style: const TextStyle(
                                       fontWeight: FontWeight.w600,
                                       fontSize: 16,
@@ -1098,7 +1113,7 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
-                                    _formatTime(employee.checkOutTime),
+                                    _formatTime(checkOutTime),
                                     style: const TextStyle(
                                       fontWeight: FontWeight.w600,
                                       fontSize: 16,
@@ -1112,10 +1127,10 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
                         const SizedBox(height: 12),
                         Row(
                           children: [
-                            if (employee.isAbsent || employee.isCheckedOut)
+                            if (isAbsent || isCheckedOut)
                               Expanded(
                                 child: ElevatedButton.icon(
-                                  onPressed: () => _manualCheckIn(employee.employeeId, employee.employeeName),
+                                  onPressed: () => _manualCheckIn(employeeId, employeeName),
                                   icon: const Icon(Icons.login),
                                   label: const Text('تسجيل حضور'),
                                   style: ElevatedButton.styleFrom(
@@ -1124,10 +1139,10 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
                                   ),
                                 ),
                               ),
-                            if (employee.isPresent)
+                            if (isPresent)
                               Expanded(
                                 child: ElevatedButton.icon(
-                                  onPressed: () => _manualCheckOut(employee.employeeId, employee.employeeName),
+                                  onPressed: () => _manualCheckOut(employeeId, employeeName),
                                   icon: const Icon(Icons.logout),
                                   label: const Text('تسجيل انصراف'),
                                   style: ElevatedButton.styleFrom(
@@ -1190,7 +1205,7 @@ class _OwnerPayrollTabState extends State<_OwnerPayrollTab> {
 
   Future<List<Map<String, dynamic>>> _loadEmployees() async {
     try {
-      final payrollData = await OwnerApiService.getPayrollSummary(
+      final payrollData = await SupabaseOwnerService.getPayrollSummaryForPeriod(
         ownerId: widget.ownerId,
         startDate: _formatDate(_startDate),
         endDate: _formatDate(_endDate),
@@ -1591,18 +1606,18 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
         shiftEnd = '${_shiftEndTime!.hour.toString().padLeft(2, '0')}:${_shiftEndTime!.minute.toString().padLeft(2, '0')}';
       }
 
-      await OwnerApiService.createEmployee(
+      await SupabaseOwnerService.createEmployee(
         ownerId: widget.ownerId,
         employeeId: _idController.text.trim(),
         fullName: _nameController.text.trim(),
         pin: _pinController.text.trim(),
-        branchId: _selectedBranchId,  // Send branchId (UUID)
-        branch: _selectedBranchName,  // Optional: send branch name
+        branchId: _selectedBranchId,
+        branch: _selectedBranchName,
         hourlyRate: hourlyRate,
         shiftStartTime: shiftStart,
         shiftEndTime: shiftEnd,
         shiftType: _shiftType,
-        role: _isManager ? 'manager' : 'staff',  // Set role based on checkbox
+        role: _isManager ? 'manager' : 'staff',
       );
 
       // If marked as manager and branch selected, assign as branch manager
@@ -2644,7 +2659,7 @@ class _BranchCardState extends State<_BranchCard> {
       builder: (context) => AlertDialog(
         title: const Text('تعيين مدير للفرع'),
         content: FutureBuilder<Map<String, dynamic>>(
-          future: OwnerApiService.getEmployees(ownerId: widget.ownerId),
+          future: SupabaseOwnerService.getOwnerEmployees(ownerId: widget.ownerId),
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const CircularProgressIndicator();

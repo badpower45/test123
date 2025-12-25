@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
 import 'package:intl/intl.dart';
-import '../../constants/api_endpoints.dart';
 import '../../theme/app_colors.dart';
+import '../../services/supabase_auth_service.dart';
+import '../../services/payroll_service.dart';
+import 'employee_payroll_report_page.dart';
 
 class ReportsPage extends StatefulWidget {
   final String employeeId;
@@ -18,7 +18,7 @@ class _ReportsPageState extends State<ReportsPage> {
   bool _isLoading = false;
   List<dynamic> _tableRows = [];
   Map<String, dynamic>? _summary;
-  // Map<String, dynamic>? _employeeInfo; // Removed unused field
+  String? _employeeName;
 
   DateTime? _startDate;
   DateTime? _endDate;
@@ -27,8 +27,22 @@ class _ReportsPageState extends State<ReportsPage> {
   void initState() {
     super.initState();
     _setDefaultDates();
+    _loadEmployeeName();
     if (_isReportAvailable) {
       _loadData();
+    }
+  }
+
+  Future<void> _loadEmployeeName() async {
+    try {
+      final employee = await SupabaseAuthService.getEmployee(widget.employeeId);
+      if (employee != null && mounted) {
+        setState(() {
+          _employeeName = employee.fullName;
+        });
+      }
+    } catch (e) {
+      print('Error loading employee name: $e');
     }
   }
 
@@ -98,33 +112,18 @@ class _ReportsPageState extends State<ReportsPage> {
     });
 
     try {
-      final startDateStr = DateFormat('yyyy-MM-dd').format(_startDate!);
-      final endDateStr = DateFormat('yyyy-MM-dd').format(_endDate!);
-
-      final response = await http.get(
-        Uri.parse(
-          '$apiBaseUrl/owner/employee-attendance/${widget.employeeId}?startDate=$startDateStr&endDate=$endDateStr'
-        ),
+      final payrollService = PayrollService();
+      final data = await payrollService.getEmployeeAttendanceReportLegacyFormat(
+        employeeId: widget.employeeId,
+        startDate: _startDate!,
+        endDate: _endDate!,
       );
 
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        setState(() {
-          _tableRows = data['tableRows'] ?? [];
-          _summary = data['summary'];
-          // _employeeInfo = data['employee']; // Removed unused field
-          _isLoading = false;
-        });
-      } else {
-        setState(() {
-          _isLoading = false;
-        });
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('فشل تحميل البيانات')),
-          );
-        }
-      }
+      setState(() {
+        _tableRows = data['tableRows'] ?? [];
+        _summary = data['summary'];
+        _isLoading = false;
+      });
     } catch (e) {
       setState(() {
         _isLoading = false;
@@ -236,6 +235,88 @@ class _ReportsPageState extends State<ReportsPage> {
                           const SizedBox(height: 16),
                           // Summary Card
                           if (_summary != null) _buildSummaryCard(),
+                          const SizedBox(height: 24),
+                          // Payroll Report Button (only on day 1 and 16)
+                          Container(
+                            padding: const EdgeInsets.all(20),
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [
+                                  AppColors.primaryOrange,
+                                  AppColors.primaryLight,
+                                ],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              ),
+                              borderRadius: BorderRadius.circular(16),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: AppColors.primaryOrange.withOpacity(0.3),
+                                  blurRadius: 10,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ],
+                            ),
+                            child: Column(
+                              children: [
+                                const Icon(
+                                  Icons.receipt_long,
+                                  size: 48,
+                                  color: Colors.white,
+                                ),
+                                const SizedBox(height: 12),
+                                const Text(
+                                  'تقرير المرتب',
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                const Text(
+                                  'عرض تفاصيل الحضور والمرتب',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: Colors.white70,
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
+                                const SizedBox(height: 16),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: ElevatedButton(
+                                    onPressed: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (context) => EmployeePayrollReportPage(
+                                            employeeId: widget.employeeId,
+                                            employeeName: _employeeName ?? '',
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.white,
+                                      foregroundColor: AppColors.primaryOrange,
+                                      padding: const EdgeInsets.symmetric(vertical: 16),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                    ),
+                                    child: const Text(
+                                      'فتح تقرير المرتب',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         ]
                       ] else ...[
                         // Countdown Card
@@ -346,66 +427,6 @@ class _ReportsPageState extends State<ReportsPage> {
                             ],
                           ),
                         ),
-
-                        const SizedBox(height: 24),
-
-                        // Quick Stats While Waiting
-                        const Text(
-                          'إحصائيات سريعة',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.textPrimary,
-                          ),
-                        ),
-
-                        const SizedBox(height: 16),
-
-                        Row(
-                          children: [
-                            Expanded(
-                              child: _buildQuickStat(
-                                icon: Icons.event_available,
-                                label: 'أيام الحضور',
-                                value: '22',
-                                color: AppColors.success,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: _buildQuickStat(
-                                icon: Icons.schedule,
-                                label: 'إجمالي الساعات',
-                                value: '176',
-                                color: AppColors.info,
-                              ),
-                            ),
-                          ],
-                        ),
-
-                        const SizedBox(height: 12),
-
-                        Row(
-                          children: [
-                            Expanded(
-                              child: _buildQuickStat(
-                                icon: Icons.payments,
-                                label: 'السلف',
-                                value: '500',
-                                color: AppColors.warning,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: _buildQuickStat(
-                                icon: Icons.beach_access,
-                                label: 'الإجازات',
-                                value: '2',
-                                color: AppColors.primaryOrange,
-                              ),
-                            ),
-                          ],
-                        ),
                       ],
                     ],
                   ),
@@ -418,57 +439,6 @@ class _ReportsPageState extends State<ReportsPage> {
     );
   }
 
-  Widget _buildQuickStat({
-    required IconData icon,
-    required String label,
-    required String value,
-    required Color color,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(icon, color: color, size: 28),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: const TextStyle(
-              fontSize: 12,
-              color: AppColors.textSecondary,
-            ),
-            textAlign: TextAlign.center,
-          ),
-        ],
-      ),
-    );
-  }
 
   Widget _buildTable() {
     return DataTable(

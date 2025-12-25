@@ -1,10 +1,8 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-
-import '../../constants/api_endpoints.dart';
 import '../../models/advance_request.dart';
 import '../../services/manager_api_service.dart';
+import '../../services/supabase_attendance_service.dart';
+import '../../services/branch_manager_api_service.dart';
 import '../../theme/app_colors.dart';
 
 class ManagerAdvanceRequestsTab extends StatefulWidget {
@@ -37,30 +35,44 @@ class _ManagerAdvanceRequestsTabState extends State<ManagerAdvanceRequestsTab> {
     });
 
     try {
-      // Get manager dashboard with all pending requests
-      final url = '$apiBaseUrl/manager/dashboard?manager_id=${widget.managerId}';
-      final response = await http.get(Uri.parse(url));
+      // Get manager's branch name first
+      final employeeStatus = await SupabaseAttendanceService.getEmployeeStatus(widget.managerId);
+      final employeeData = employeeStatus['employee'];
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final dashboard = data['dashboard'];
-        if (dashboard != null && dashboard['advances'] is List) {
-          setState(() {
-            _requests = (dashboard['advances'] as List)
-                .map((json) => AdvanceRequest.fromJson(json))
-                .toList();
-            _isLoading = false;
-          });
-        } else {
-          setState(() {
-            _requests = [];
-            _isLoading = false;
-          });
+      String? branchName;
+      if (employeeData is Map<String, dynamic>) {
+        branchName = employeeData['branch'] as String?;
+        if (branchName == null || branchName.isEmpty) {
+          final branchInfo = employeeData['branches'];
+          if (branchInfo is Map<String, dynamic>) {
+            branchName = branchInfo['name'] as String?;
+          }
         }
+      }
+
+      if (branchName == null || branchName.toString().isEmpty) {
+        throw Exception('المدير غير مرتبط بفرع');
+      }
+      
+      // Use Supabase Edge Function to get branch requests
+      final requestsData = await BranchManagerApiService.getBranchRequests(branchName);
+      
+      if (requestsData['success'] == true) {
+        final advanceRequests = requestsData['advanceRequests'] as List? ?? [];
+        setState(() {
+          _requests = advanceRequests
+              .map((json) => AdvanceRequest.fromJson(json))
+              .toList();
+          _isLoading = false;
+        });
       } else {
-        throw Exception('Failed to load requests: ${response.statusCode}');
+        setState(() {
+          _requests = [];
+          _isLoading = false;
+        });
       }
     } catch (e) {
+      print('❌ Error loading advance requests: $e');
       setState(() {
         _error = e.toString();
         _isLoading = false;

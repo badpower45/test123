@@ -332,6 +332,228 @@ app.get('/api/branch/:branch/requests', async (req, res) => {
   }
 });
 
+// Get pulse & earnings summary for a branch
+app.get('/api/branch/:branch/pulses', async (req, res) => {
+  try {
+    const branchName = req.params.branch;
+    const { start: startQuery, end: endQuery } = req.query as { start?: string; end?: string };
+
+    const [branchRecord] = await db
+      .select()
+      .from(branches)
+      .where(eq(branches.name, branchName))
+      .limit(1);
+
+    const branchEmployees = await db
+      .select({
+        id: employees.id,
+        fullName: employees.fullName,
+        role: employees.role,
+        hourlyRate: employees.hourlyRate,
+        active: employees.active,
+        branchId: employees.branchId,
+      })
+      .from(employees)
+      .where(eq(employees.branch, branchName));
+
+    const employeeIds = branchEmployees.map(emp => emp.id);
+
+    const nowEgypt = getEgyptTime();
+    const defaultStart = new Date(nowEgypt);
+    defaultStart.setHours(0, 0, 0, 0);
+    const defaultEnd = nowEgypt;
+
+    let startDateTime = defaultStart;
+    let endDateTime = defaultEnd;
+
+    if (startQuery) {
+      const parsedStart = new Date(startQuery);
+      if (Number.isNaN(parsedStart.getTime())) {
+        return res.status(400).json({ error: 'Invalid start date' });
+      }
+      startDateTime = parsedStart;
+    }
+
+    if (endQuery) {
+      const parsedEnd = new Date(endQuery);
+      if (Number.isNaN(parsedEnd.getTime())) {
+        return res.status(400).json({ error: 'Invalid end date' });
+      }
+      endDateTime = parsedEnd;
+    }
+
+    if (startDateTime.getTime() > endDateTime.getTime()) {
+      return res.status(400).json({ error: 'Start date must be before end date' });
+    }
+
+    if (employeeIds.length === 0) {
+      return res.json({
+        success: true,
+        branch: {
+          id: branchRecord?.id ?? null,
+          name: branchName,
+        },
+        period: {
+          start: startDateTime.toISOString(),
+          end: endDateTime.toISOString(),
+          timezone: 'Africa/Cairo',
+        },
+        summary: {
+          employeeCount: 0,
+          activeEmployeeCount: 0,
+          totalPulses: 0,
+          totalValidPulses: 0,
+          totalInvalidPulses: 0,
+          totalEarnings: 0,
+          averageEarningsPerEmployee: 0,
+        },
+        employees: [],
+      });
+    }
+
+    let condition = inArray(pulses.employeeId, employeeIds);
+    condition = and(condition, gte(pulses.createdAt, startDateTime));
+    condition = and(condition, lte(pulses.createdAt, endDateTime));
+
+    const pulseRows = await db
+      .select({
+        employeeId: pulses.employeeId,
+        totalPulses: sql<number>`COUNT(*)`,
+        validPulses: sql<number>`SUM(CASE WHEN ${pulses.isWithinGeofence} = true THEN 1 ELSE 0 END)`,
+        invalidPulses: sql<number>`SUM(CASE WHEN ${pulses.isWithinGeofence} = false THEN 1 ELSE 0 END)`,
+        firstPulse: sql<Date | null>`MIN(${pulses.createdAt})`,
+        lastPulse: sql<Date | null>`MAX(${pulses.createdAt})`,
+      })
+      .from(pulses)
+      .where(condition)
+      .groupBy(pulses.employeeId);
+
+    const activeAttendanceRecords = await db
+      .select({
+        employeeId: attendance.employeeId,
+        checkInTime: attendance.checkInTime,
+      })
+      .from(attendance)
+      .where(and(inArray(attendance.employeeId, employeeIds), eq(attendance.status, 'active')));
+
+    const attendanceMap = new Map<string, Date | null>();
+    for (const record of activeAttendanceRecords) {
+      if (!attendanceMap.has(record.employeeId)) {
+        const value = record.checkInTime ? new Date(record.checkInTime) : null;
+        attendanceMap.set(record.employeeId, value);
+      }
+    }
+
+    const pulseMap = new Map<string, {
+      totalPulses: number;
+      validPulses: number;
+      invalidPulses: number;
+      firstPulse: Date | null;
+      lastPulse: Date | null;
+    }>();
+
+    for (const row of pulseRows) {
+      const firstPulse = row.firstPulse ? new Date(row.firstPulse) : null;
+      const lastPulse = row.lastPulse ? new Date(row.lastPulse) : null;
+
+      pulseMap.set(row.employeeId, {
+        totalPulses: Number(row.totalPulses ?? 0),
+        validPulses: Number(row.validPulses ?? 0),
+        invalidPulses: Number(row.invalidPulses ?? 0),
+        firstPulse,
+        lastPulse,
+      });
+    }
+
+    const employeesWithStats = branchEmployees.map(emp => {
+      const stats = pulseMap.get(emp.id) ?? {
+        totalPulses: 0,
+        validPulses: 0,
+        invalidPulses: 0,
+        firstPulse: null,
+        lastPulse: null,
+      };
+
+      const parsedHourlyRate = emp.hourlyRate !== null && emp.hourlyRate !== undefined
+        ? Number(emp.hourlyRate)
+        : 40;
+      const safeHourlyRate = Number.isFinite(parsedHourlyRate) && !Number.isNaN(parsedHourlyRate)
+        ? parsedHourlyRate
+        : 40;
+      const pulseValue = (safeHourlyRate / 3600) * 30;
+      const earnings = Number((stats.validPulses * pulseValue).toFixed(2));
+
+      const checkInTime = attendanceMap.get(emp.id);
+
+      return {
+        id: emp.id,
+        fullName: emp.fullName,
+        role: emp.role,
+        active: emp.active,
+        branchId: emp.branchId,
+        hourlyRate: Number(safeHourlyRate.toFixed(2)),
+        totalPulses: stats.totalPulses,
+        validPulses: stats.validPulses,
+        invalidPulses: stats.invalidPulses,
+        earnings,
+        firstPulseAt: stats.firstPulse ? stats.firstPulse.toISOString() : null,
+        lastPulseAt: stats.lastPulse ? stats.lastPulse.toISOString() : null,
+        isCheckedIn: attendanceMap.has(emp.id),
+        checkInTime: checkInTime ? checkInTime.toISOString() : null,
+      };
+    });
+
+    employeesWithStats.sort((a, b) => b.earnings - a.earnings);
+
+    const summaryTotals = employeesWithStats.reduce((acc, employee) => {
+      acc.totalPulses += employee.totalPulses;
+      acc.totalValidPulses += employee.validPulses;
+      acc.totalInvalidPulses += employee.invalidPulses;
+      acc.totalEarnings += employee.earnings;
+      if (employee.isCheckedIn) {
+        acc.activeEmployeeCount += 1;
+      }
+      return acc;
+    }, {
+      totalPulses: 0,
+      totalValidPulses: 0,
+      totalInvalidPulses: 0,
+      totalEarnings: 0,
+      activeEmployeeCount: 0,
+    });
+
+    const averageEarnings = employeesWithStats.length > 0
+      ? Number((summaryTotals.totalEarnings / employeesWithStats.length).toFixed(2))
+      : 0;
+
+    res.json({
+      success: true,
+      branch: {
+        id: branchRecord?.id ?? employeesWithStats.find(employee => employee.branchId)?.branchId ?? null,
+        name: branchName,
+      },
+      period: {
+        start: startDateTime.toISOString(),
+        end: endDateTime.toISOString(),
+        timezone: 'Africa/Cairo',
+      },
+      summary: {
+        employeeCount: employeesWithStats.length,
+        activeEmployeeCount: summaryTotals.activeEmployeeCount,
+        totalPulses: summaryTotals.totalPulses,
+        totalValidPulses: summaryTotals.totalValidPulses,
+        totalInvalidPulses: summaryTotals.totalInvalidPulses,
+        totalEarnings: Number(summaryTotals.totalEarnings.toFixed(2)),
+        averageEarningsPerEmployee: averageEarnings,
+      },
+      employees: employeesWithStats,
+    });
+  } catch (error) {
+    console.error('Branch pulse summary error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Approve/reject a request (leave, advance, attendance, absence)
 app.post('/api/branch/request/:type/:id/:action', async (req, res) => {
   try {
@@ -1235,13 +1457,17 @@ app.get('/api/pulses/active/:employeeId', async (req, res) => {
     const startTs = new Date(todayAttendance.checkInTime!);
     const now = cairoDate;
 
-    // Check if employee has an active break (break = full pay, no restrictions)
+    // Check if employee has an approved break (APPROVED with payoutEligible = false means count all pulses)
+    // Also check for ACTIVE breaks (break in progress)
     const [activeBreak] = await db
       .select()
       .from(breaks)
       .where(and(
         eq(breaks.employeeId, employeeId),
-        eq(breaks.status, 'ACTIVE')
+        or(
+          and(eq(breaks.status, 'APPROVED'), eq(breaks.payoutEligible, false)),
+          eq(breaks.status, 'ACTIVE')
+        )
       ))
       .limit(1);
 

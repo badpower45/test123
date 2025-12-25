@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../models/break.dart';
 import '../../../models/shift_status.dart';
@@ -180,6 +181,33 @@ class _BreakRequestsTabState extends State<BreakRequestsTab> {
   }
 
   Future<void> _handleStartBreak(String breakId) async {
+    // ✅ Check for active attendance first
+    bool hasActiveAttendance = false;
+    
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final activeAttendanceId = prefs.getString('active_attendance_id');
+      
+      if (activeAttendanceId != null && activeAttendanceId.isNotEmpty) {
+        hasActiveAttendance = true;
+      }
+    } catch (e) {
+      print('⚠️ Failed to check SharedPreferences: $e');
+    }
+    
+    // ✅ If no active attendance, block break start
+    if (!hasActiveAttendance) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('لا يمكن بدء الاستراحة بدون تسجيل حضور نشط'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
+      return;
+    }
+    
     setState(() => _actioningBreakId = breakId);
     try {
       await RequestsApiService.startBreak(breakId: breakId);

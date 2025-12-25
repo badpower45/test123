@@ -50,6 +50,8 @@ app.*.map.json
 .local/
 .env
 .env.*
+supabase.env
+supabase/.temp/
 .replit/
 
 # Logs

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../theme/app_colors.dart';
 import '../../models/employee.dart';
 import '../../services/employee_repository.dart';
+import '../../services/supabase_function_client.dart';
 
 class ManagerEmployeeDetailPage extends StatefulWidget {
   final String employeeId;
@@ -18,11 +19,17 @@ class ManagerEmployeeDetailPage extends StatefulWidget {
 class _ManagerEmployeeDetailPageState extends State<ManagerEmployeeDetailPage> {
   Employee? _employee;
   bool _loading = true;
+  bool _loadingToday = false;
+  double _todayNet = 0.0;
+  double _todayDeduction = 0.0;
+  int _todayPenaltyMinutes = 0;
+  int _todayFalseCount = 0;
 
   @override
   void initState() {
     super.initState();
     _loadEmployee();
+    _loadTodayTotal();
   }
 
   Future<void> _loadEmployee() async {
@@ -41,6 +48,27 @@ class _ManagerEmployeeDetailPageState extends State<ManagerEmployeeDetailPage> {
           const SnackBar(content: Text('فشل تحميل بيانات الموظف')),
         );
       }
+    }
+  }
+
+  Future<void> _loadTodayTotal() async {
+    setState(() => _loadingToday = true);
+    try {
+      final result = await SupabaseFunctionClient.post('employee-today-earnings', {
+        'employee_id': widget.employeeId,
+      });
+      if (!mounted) return;
+      setState(() {
+        _todayNet = ((result ?? {})['net'] as num?)?.toDouble() ?? 0.0;
+        _todayDeduction = ((result ?? {})['deduction'] as num?)?.toDouble() ?? 0.0;
+        _todayPenaltyMinutes = ((result ?? {})['penaltyMinutes'] as num?)?.toInt() ?? 0;
+        _todayFalseCount = ((result ?? {})['falseCount'] as num?)?.toInt() ?? 0;
+        _loadingToday = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loadingToday = false);
+      print('❌ Failed loading today earnings: $e');
     }
   }
 
@@ -171,6 +199,19 @@ class _ManagerEmployeeDetailPageState extends State<ManagerEmployeeDetailPage> {
                             
                             if (_employee!.hourlyRate > 0)
                               const SizedBox(height: 12),
+
+                            // Today's net with penalties
+                            _buildInfoCard(
+                              icon: Icons.payments,
+                              label: 'إجمالي اليوم',
+                              value: _loadingToday
+                                  ? '...'
+                                  : '${_todayNet.toStringAsFixed(2)} ج.م' +
+                                      (_todayDeduction > 0
+                                          ? '  (خصم ${_todayPenaltyMinutes} دقيقة / ${_todayFalseCount} نبضات)'
+                                          : ''),
+                              color: AppColors.success,
+                            ),
                             
                             if (_employee!.shiftStartTime != null && _employee!.shiftEndTime != null)
                               _buildInfoCard(

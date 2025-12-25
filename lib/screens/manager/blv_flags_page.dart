@@ -192,9 +192,16 @@ class _BLVFlagsPageState extends State<BLVFlagsPage> {
     final severity = flag['severity'] ?? 'medium';
     final employeeName = flag['employee_name'] ?? 'Unknown';
     final description = flag['description'] ?? '';
-    final createdAt = flag['created_at'] != null
-        ? DateTime.parse(flag['created_at'])
-        : DateTime.now();
+    DateTime createdAt;
+    if (flag['created_at'] != null) {
+      try {
+        createdAt = DateTime.parse(flag['created_at'].toString());
+      } catch (e) {
+        createdAt = DateTime.now();
+      }
+    } else {
+      createdAt = DateTime.now();
+    }
     
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),

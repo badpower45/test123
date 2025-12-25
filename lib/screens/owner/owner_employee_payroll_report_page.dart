@@ -217,9 +217,16 @@ class _OwnerEmployeePayrollReportPageState extends State<OwnerEmployeePayrollRep
                           itemCount: _attendanceData.length,
                           itemBuilder: (context, index) {
                             final day = _attendanceData[index];
-                            final date = DateTime.parse(day['attendance_date'] as String);
-                            final checkIn = day['check_in_time'] as String?;
-                            final checkOut = day['check_out_time'] as String?;
+                            DateTime date;
+                            try {
+                              date = DateTime.parse(day['attendance_date']?.toString() ?? '');
+                            } catch (e) {
+                              date = DateTime.now();
+                            }
+                            String checkIn = day['check_in_time'] as String? ?? '--';
+                            String checkOut = day['check_out_time'] as String? ?? '--';
+                            if (checkIn.isEmpty || checkIn == '-' || checkIn == 'null') checkIn = '--';
+                            if (checkOut.isEmpty || checkOut == '-' || checkOut == 'null') checkOut = '--';
                             final hours = (day['total_hours'] as num?)?.toDouble() ?? 0;
                             final dailySalary = (day['daily_salary'] as num?)?.toDouble() ?? 0;
                             final advance = (day['advance_amount'] as num?)?.toDouble() ?? 0;
@@ -261,7 +268,7 @@ class _OwnerEmployeePayrollReportPageState extends State<OwnerEmployeePayrollRep
                                   Expanded(
                                     flex: 2,
                                     child: Text(
-                                      isAbsent ? 'غياب' : (isOnLeave ? 'إجازة' : (checkIn ?? '-')),
+                                      isAbsent ? 'غياب' : (isOnLeave ? 'إجازة' : checkIn),
                                       style: TextStyle(
                                         fontSize: 11,
                                         color: isAbsent ? Colors.red : Colors.black87,
@@ -271,7 +278,7 @@ class _OwnerEmployeePayrollReportPageState extends State<OwnerEmployeePayrollRep
                                   Expanded(
                                     flex: 2,
                                     child: Text(
-                                      checkOut ?? '-',
+                                      checkOut,
                                       style: const TextStyle(fontSize: 11),
                                     ),
                                   ),

@@ -174,6 +174,7 @@ class BackgroundPulseService {
         timestamp: timestamp,
         wifiBssid: wifiBssid,
         isWithinGeofence: geofenceValid,
+        distanceFromCenter: distance,
         // BLV data (optional)
         wifiCount: blvData?['wifi_count'] as int?,
         wifiSignalStrength: blvData?['wifi_signal_strength'] as double?,

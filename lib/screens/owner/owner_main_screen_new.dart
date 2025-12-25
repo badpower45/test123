@@ -5,10 +5,9 @@ import '../login_screen.dart';
 import 'owner_dashboard_screen.dart';
 import 'owner_employees_screen.dart';
 import 'owner_branches_screen.dart';
-import 'owner_leave_requests_screen.dart';
-import 'owner_attendance_requests_screen.dart';
-import 'owner_salary_advance_screen.dart';
+import 'owner_manager_requests_screen.dart';
 import 'owner_attendance_table_screen.dart';
+import 'owner_salaries_screen.dart';
 
 /// New Owner Main Screen using Supabase exclusively
 /// Simplified navigation with all screens already created
@@ -32,13 +31,8 @@ class _OwnerMainScreenNewState extends State<OwnerMainScreenNew> {
   List<_NavItem> get _navItems => [
         _NavItem(
           icon: Icons.dashboard,
-          label: 'لوحة التحكم',
-          screen: OwnerDashboardScreen(ownerId: widget.ownerId),
-        ),
-        _NavItem(
-          icon: Icons.people,
-          label: 'الموظفون',
-          screen: const OwnerEmployeesScreen(),
+          label: 'طلبات المديرين',
+          screen: const OwnerManagerRequestsScreen(),
         ),
         _NavItem(
           icon: Icons.store,
@@ -46,19 +40,14 @@ class _OwnerMainScreenNewState extends State<OwnerMainScreenNew> {
           screen: const OwnerBranchesScreen(),
         ),
         _NavItem(
-          icon: Icons.calendar_today,
-          label: 'طلبات الإجازات',
-          screen: OwnerLeaveRequestsScreen(ownerId: widget.ownerId),
+          icon: Icons.people,
+          label: 'الموظفون',
+          screen: const OwnerEmployeesScreen(),
         ),
         _NavItem(
-          icon: Icons.access_time,
-          label: 'طلبات الحضور',
-          screen: OwnerAttendanceRequestsScreen(ownerId: widget.ownerId),
-        ),
-        _NavItem(
-          icon: Icons.payments,
-          label: 'طلبات السلف',
-          screen: OwnerSalaryAdvanceScreen(ownerId: widget.ownerId),
+          icon: Icons.attach_money,
+          label: 'الرواتب',
+          screen: const OwnerSalariesScreen(),
         ),
         _NavItem(
           icon: Icons.table_chart,

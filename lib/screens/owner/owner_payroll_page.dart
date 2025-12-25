@@ -135,12 +135,26 @@ class _OwnerPayrollPageState extends State<OwnerPayrollPage> {
                             Navigator.push(
                               context,
                               MaterialPageRoute(
-                                builder: (context) => OwnerBranchPayrollDetailsPage(
+                                builder: (context) {
+                                DateTime startDate;
+                                DateTime endDate;
+                                try {
+                                  startDate = DateTime.parse(branch['start_date']?.toString() ?? '');
+                                } catch (e) {
+                                  startDate = DateTime.now();
+                                }
+                                try {
+                                  endDate = DateTime.parse(branch['end_date']?.toString() ?? '');
+                                } catch (e) {
+                                  endDate = DateTime.now();
+                                }
+                                return OwnerBranchPayrollDetailsPage(
                                   cycleId: cycleId,
                                   branchName: branchName,
-                                  startDate: DateTime.parse(branch['start_date'] as String),
-                                  endDate: DateTime.parse(branch['end_date'] as String),
-                                ),
+                                  startDate: startDate,
+                                  endDate: endDate,
+                                );
+                              },
                               ),
                             ).then((_) => _loadBranchPayrolls());
                           },
@@ -209,13 +223,23 @@ class _OwnerPayrollPageState extends State<OwnerPayrollPage> {
                                           ),
                                         ),
                                         const SizedBox(height: 4),
-                                        Text(
-                                          '${DateFormat('dd/MM/yyyy').format(DateTime.parse(branch['start_date'] as String))} - ${DateFormat('dd/MM/yyyy').format(DateTime.parse(branch['end_date'] as String))}',
-                                          style: const TextStyle(
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
+                                        Builder(builder: (context) {
+                                          String startStr = '-';
+                                          String endStr = '-';
+                                          try {
+                                            startStr = DateFormat('dd/MM/yyyy').format(DateTime.parse(branch['start_date']?.toString() ?? ''));
+                                          } catch (e) { /* ignore */ }
+                                          try {
+                                            endStr = DateFormat('dd/MM/yyyy').format(DateTime.parse(branch['end_date']?.toString() ?? ''));
+                                          } catch (e) { /* ignore */ }
+                                          return Text(
+                                            '$startStr - $endStr',
+                                            style: const TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          );
+                                        }),
                                       ],
                                     ),
                                     Column(
@@ -266,14 +290,22 @@ class _OwnerPayrollPageState extends State<OwnerPayrollPage> {
                                     children: [
                                       const Icon(Icons.check_circle, color: Colors.green, size: 16),
                                       const SizedBox(width: 8),
-                                      Text(
-                                        'تم الدفع في ${DateFormat('dd/MM/yyyy HH:mm').format(DateTime.parse(branch['paid_at'] as String))}',
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.green,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
+                                      Builder(builder: (context) {
+                                        String paidAtStr = '';
+                                        try {
+                                          paidAtStr = DateFormat('dd/MM/yyyy HH:mm').format(DateTime.parse(branch['paid_at']?.toString() ?? ''));
+                                        } catch (e) {
+                                          paidAtStr = '-';
+                                        }
+                                        return Text(
+                                          'تم الدفع في $paidAtStr',
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.green,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        );
+                                      }),
                                     ],
                                   ),
                                 ],

@@ -247,7 +247,12 @@ class _ManagerAbsencesPageState extends State<ManagerAbsencesPage> {
                   itemBuilder: (context, index) {
                     final absence = _absences[index];
                     final employee = absence['employee'];
-                    final absenceDate = DateTime.parse(absence['absence_date']);
+                    DateTime absenceDate;
+                    try {
+                      absenceDate = DateTime.parse(absence['absence_date']?.toString() ?? '');
+                    } catch (e) {
+                      absenceDate = DateTime.now();
+                    }
                     
                     return Card(
                       margin: const EdgeInsets.only(bottom: 16),

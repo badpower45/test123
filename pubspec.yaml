@@ -1,5 +1,5 @@
-name: oldies_workers_app
-description: "تطبيق حضور أولديزز وركرز"
+name: at_app
+description: "تطبيق حضور AT"
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -56,6 +56,10 @@ dependencies:
   google_maps_flutter: ^2.9.0
   flutter_map: ^7.0.2
   latlong2: ^0.9.1
+  workmanager: ^0.9.0  # ✅ Updated - Background tasks for pulses
+  flutter_foreground_task: ^9.1.0  # ✅ Keep app alive in background with notification
+  android_alarm_manager_plus: ^5.0.0  # ✅ Guaranteed periodic tasks (backup for pulses)
+  wakelock_plus: ^1.2.8  # ✅ Prevent device sleep during tracking
   # BLV System Dependencies
   sensors_plus: ^6.0.1  # Accelerometer for motion detection
   battery_plus: ^6.0.2  # Battery level & charging status
@@ -91,20 +95,20 @@ flutter:
 flutter_launcher_icons:
   android: "ic_launcher"
   ios: true
-  image_path: "assets/images/app_icon.png"
+  image_path: "Gemini_Generated_Image_ox13ebox13ebox13.png"
   remove_alpha_ios: true
   web:
     generate: true
-    image_path: "assets/images/app_icon.png"
+    image_path: "Gemini_Generated_Image_ox13ebox13ebox13.png"
     background_color: "#F37021"
     theme_color: "#F37021"
   windows:
     generate: true
-    image_path: "assets/images/app_icon.png"
+    image_path: "Gemini_Generated_Image_ox13ebox13ebox13.png"
     icon_size: 256
   macos:
     generate: true
-    image_path: "assets/images/app_icon.png"
+    image_path: "Gemini_Generated_Image_ox13ebox13ebox13.png"
 
   # To add assets to your application, add an assets section, like this:
   # assets:

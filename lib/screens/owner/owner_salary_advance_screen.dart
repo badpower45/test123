@@ -230,7 +230,12 @@ class _OwnerSalaryAdvanceScreenState extends State<OwnerSalaryAdvanceScreen> {
                           final amount = (request['amount'] as num?)?.toDouble() ?? 0;
                           final reason = request['reason'] ?? '';
                           final status = request['status'] ?? 'pending';
-                          final createdAt = DateTime.parse(request['created_at'] as String);
+                          DateTime createdAt;
+                          try {
+                            createdAt = DateTime.parse(request['created_at']?.toString() ?? '');
+                          } catch (e) {
+                            createdAt = DateTime.now();
+                          }
                           final requestId = request['id'] as String;
 
                           final percentage = (monthlySalary > 0 ? (amount / monthlySalary * 100) : 0).toDouble();

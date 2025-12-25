@@ -1,14 +1,11 @@
-import { Pool, neonConfig } from '@neondatabase/serverless';
-import { drizzle } from 'drizzle-orm/neon-serverless';
+import { Pool } from 'pg';
+import { drizzle } from 'drizzle-orm/node-postgres';
 import { sql } from 'drizzle-orm';
 import { config as loadEnv } from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import ws from 'ws';
 import * as schema from '../shared/schema.js';
-
-neonConfig.webSocketConstructor = ws;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -46,7 +43,12 @@ if (!process.env.DATABASE_URL) {
   console.warn('[db] DATABASE_URL not set. Falling back to local development connection string.');
 }
 
-export const pool = new Pool({ connectionString });
+const usesLocalhost = connectionString.includes('localhost') || connectionString.includes('127.0.0.1');
+
+export const pool = new Pool({
+  connectionString,
+  ssl: usesLocalhost ? false : { rejectUnauthorized: false },
+});
 
 // Add connection logging
 pool.on('connect', (client) => {
@@ -57,7 +59,7 @@ pool.on('error', (err, client) => {
   console.error('[db] Database connection error:', err);
 });
 
-export const db = drizzle({ client: pool, schema });
+export const db = drizzle(pool, { schema });
 
 // Test connection
 db.execute(sql`SELECT 1`).then(() => {

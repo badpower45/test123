@@ -6,7 +6,6 @@ import '../../services/auth_service.dart';
 import '../../services/attendance_api_service.dart';
 import '../../models/employee.dart';
 import '../login_screen.dart';
-import 'employee_payroll_report_page.dart';
 
 class ProfilePage extends StatefulWidget {
   final String employeeId;
@@ -385,44 +384,6 @@ class _ProfilePageState extends State<ProfilePage> {
                 ),
                 const SizedBox(height: 16),
                 _buildSettingItem(
-                  icon: Icons.lock_outline,
-                  title: 'تغيير الرقم السري',
-                  subtitle: 'تحديث كلمة المرور الخاصة بك',
-                  onTap: () {},
-                ),
-                const SizedBox(height: 12),
-                _buildSettingItem(
-                  icon: Icons.notifications_outlined,
-                  title: 'الإشعارات',
-                  subtitle: 'إدارة إشعارات التطبيق',
-                  onTap: () {},
-                ),
-                const SizedBox(height: 12),
-                _buildSettingItem(
-                  icon: Icons.help_outline,
-                  title: 'المساعدة والدعم',
-                  subtitle: 'تواصل مع فريق الدعم',
-                  onTap: () {},
-                ),
-                const SizedBox(height: 12),
-                _buildSettingItem(
-                  icon: Icons.receipt_long,
-                  title: 'تقرير المرتب',
-                  subtitle: 'عرض تفاصيل الحضور والمرتب',
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => EmployeePayrollReportPage(
-                          employeeId: widget.employeeId,
-                          employeeName: employee.fullName,
-                        ),
-                      ),
-                    );
-                  },
-                ),
-                const SizedBox(height: 12),
-                _buildSettingItem(
                   icon: Icons.info_outline,
                   title: 'حول التطبيق',
                   subtitle: 'الإصدار 1.0.0',
@@ -433,40 +394,6 @@ class _ProfilePageState extends State<ProfilePage> {
                   width: double.infinity,
                   child: OutlinedButton.icon(
                     onPressed: () async {
-                      // التحقق من حالة الحضور أولاً
-                      try {
-                        final status = await AttendanceApiService.fetchEmployeeStatus(widget.employeeId);
-                        final isCheckedIn = status['attendance']?['status'] == 'active';
-
-                        if (isCheckedIn) {
-                          // منع تسجيل الخروج إذا كان مسجل حضور
-                          if (!mounted) return;
-                          showDialog(
-                            context: context,
-                            builder: (context) => AlertDialog(
-                              icon: const Icon(Icons.warning_amber, size: 48, color: AppColors.error),
-                              title: const Text('لا يمكن تسجيل الخروج'),
-                              content: const Text(
-                                'يجب عليك تسجيل الانصراف أولاً قبل تسجيل الخروج من الحساب.\n\n'
-                                'الرجاء الضغط على زر "تسجيل الانصراف" من الصفحة الرئيسية.',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(fontSize: 16),
-                              ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.pop(context),
-                                  child: const Text('حسناً', style: TextStyle(fontSize: 16)),
-                                ),
-                              ],
-                            ),
-                          );
-                          return; // إيقاف عملية تسجيل الخروج
-                        }
-                      } catch (e) {
-                        print('⚠️ Failed to check attendance status: $e');
-                        // في حالة الخطأ، نسمح بالمتابعة
-                      }
-
                       // --- إظهار مؤشر التحميل ---
                       showDialog(
                         context: context,
@@ -474,7 +401,7 @@ class _ProfilePageState extends State<ProfilePage> {
                         builder: (context) => const Center(child: CircularProgressIndicator()),
                       );
 
-                      // استدعاء دالة تسجيل الخروج الجديدة
+                      // استدعاء دالة تسجيل الخروج (ستتحقق من الحضور النشط تلقائياً وتعمل checkout إجباري)
                       await AuthService.logout();
 
                       // التأكد أن الـ widget لا يزال موجوداً

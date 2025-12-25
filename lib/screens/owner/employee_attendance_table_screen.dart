@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
-import '../../constants/api_endpoints.dart';
 import 'package:intl/intl.dart';
+import '../../services/payroll_service.dart';
+import '../../utils/time_utils.dart';
 
 class EmployeeAttendanceTableScreen extends StatefulWidget {
   final String employeeId;
@@ -58,33 +57,19 @@ class _EmployeeAttendanceTableScreenState extends State<EmployeeAttendanceTableS
     });
 
     try {
-      final startDateStr = DateFormat('yyyy-MM-dd').format(_startDate!);
-      final endDateStr = DateFormat('yyyy-MM-dd').format(_endDate!);
-
-      final response = await http.get(
-        Uri.parse(
-          '$apiBaseUrl/owner/employee-attendance/${widget.employeeId}?startDate=$startDateStr&endDate=$endDateStr'
-        ),
+      final payrollService = PayrollService();
+      final data = await payrollService.getEmployeeAttendanceReportLegacyFormat(
+        employeeId: widget.employeeId,
+        startDate: _startDate!,
+        endDate: _endDate!,
       );
 
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        setState(() {
-          _tableRows = data['tableRows'] ?? [];
-          _summary = data['summary'];
-          _employeeInfo = data['employee'];
-          _isLoading = false;
-        });
-      } else {
-        setState(() {
-          _isLoading = false;
-        });
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('فشل تحميل البيانات')),
-          );
-        }
-      }
+      setState(() {
+        _tableRows = data['tableRows'] ?? [];
+        _summary = data['summary'];
+        _employeeInfo = null; // No longer provided by new API
+        _isLoading = false;
+      });
     } catch (e) {
       setState(() {
         _isLoading = false;
@@ -276,12 +261,16 @@ class _EmployeeAttendanceTableScreenState extends State<EmployeeAttendanceTableS
         DataColumn(label: Text('الخصومات', style: TextStyle(fontWeight: FontWeight.bold))),
       ],
       rows: _tableRows.map((row) {
+        // ✅ Use TimeUtils to format times correctly (converts to Cairo timezone)
+        final checkInFormatted = TimeUtils.formatTimeShort(row['checkIn']);
+        final checkOutFormatted = TimeUtils.formatTimeShort(row['checkOut']);
+
         return DataRow(
           cells: [
             DataCell(Text(row['date'] ?? '')),
             DataCell(_buildStatusWidget(row)), // New status column
-            DataCell(Text(row['checkIn'] ?? '--')),
-            DataCell(Text(row['checkOut'] ?? '--')),
+            DataCell(Text(checkInFormatted)),
+            DataCell(Text(checkOutFormatted)),
             DataCell(Text(row['workHours'] ?? '0.00')),
             DataCell(
               Text(

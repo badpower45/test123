@@ -250,10 +250,16 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
               children: [
                 const Icon(Icons.check_circle, color: Colors.green, size: 20),
                 if (checkInTime != null)
-                  Text(
-                    DateTime.parse(checkInTime).toLocal().toString().substring(11, 16),
-                    style: const TextStyle(fontSize: 12),
-                  ),
+                  Builder(builder: (context) {
+                    try {
+                      return Text(
+                        DateTime.parse(checkInTime).toLocal().toString().substring(11, 16),
+                        style: const TextStyle(fontSize: 12),
+                      );
+                    } catch (e) {
+                      return const Text('-', style: TextStyle(fontSize: 12));
+                    }
+                  }),
               ],
             ),
           ),

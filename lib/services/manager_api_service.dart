@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../constants/api_endpoints.dart';
 import '../models/absence_notification_details.dart';
+import 'supabase_function_client.dart';
 
 class ManagerApiService {
   static Future<List<AbsenceNotificationDetails>> getAbsenceNotifications(String managerId) async {
@@ -84,35 +85,20 @@ class ManagerApiService {
     required String action, // 'approve' or 'reject'
     String? notes,
   }) async {
-    final url = '$apiBaseUrl/absence/$notificationId/review';
-    print('🔍 Reviewing absence notification: $notificationId, action: $action');
+    final result = await SupabaseFunctionClient.post('branch-request-action', {
+      'type': 'absence',
+      'id': notificationId,
+      'action': action,
+      'reviewerId': managerId,
+      if (notes != null) 'notes': notes,
+    });
 
-    final response = await http.post(
-      Uri.parse(url),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'action': action,
-        'reviewer_id': managerId,
-        if (notes != null) 'notes': notes,
-      }),
-    );
-
-    print('🔍 Response status: ${response.statusCode}');
-    print('🔍 Response body: ${response.body}');
-
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body);
-    } else if (response.statusCode == 403) {
-      final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
-      final message = errorBody['message'] ?? errorBody['error'] ?? 'ليس لديك صلاحية للموافقة على هذا الطلب';
-      throw Exception(message);
-    } else {
-      final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
-      throw Exception(errorBody['error'] ?? 'فشل مراجعة إشعار الغياب: ${response.statusCode}');
-    }
+    return (result ?? {})['data'] is Map<String, dynamic>
+        ? Map<String, dynamic>.from((result ?? {})['data'] as Map)
+        : result ?? {};
   }
 
-  // دالة لمراجعة (قبول/رفض) طلبات الإجازة
+  /// دالة لمراجعة (قبول/رفض) طلبات الاستراحة
   static Future<Map<String, dynamic>> reviewLeaveRequest({
     required String requestId,
     required String managerId,
@@ -123,33 +109,17 @@ class ManagerApiService {
       throw Exception('معرف طلب الإجازة أو معرف المدير مطلوب');
     }
 
-    final url = '$apiBaseUrl/leave/requests/$requestId/review';
-    print('📝 Reviewing leave request: $requestId, approve: $approve');
-    print('📝 Manager ID: $managerId');
+    final result = await SupabaseFunctionClient.post('branch-request-action', {
+      'type': 'leave',
+      'id': requestId,
+      'action': approve ? 'approve' : 'reject',
+      'reviewerId': managerId,
+      if (notes != null) 'notes': notes,
+    });
 
-    final response = await http.post(
-      Uri.parse(url),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'action': approve ? 'approve' : 'reject',
-        'reviewer_id': managerId,
-        if (notes != null) 'notes': notes,
-      }),
-    );
-
-    print('📝 Response status: ${response.statusCode}');
-    print('📝 Response body: ${response.body}');
-
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body);
-    } else if (response.statusCode == 403) {
-      final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
-      final message = errorBody['message'] ?? errorBody['error'] ?? 'ليس لديك صلاحية للموافقة على هذا الطلب';
-      throw Exception(message);
-    } else {
-      final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
-      throw Exception(errorBody['error'] ?? 'فشل مراجعة طلب الإجازة: ${response.statusCode}');
-    }
+    return (result ?? {})['data'] is Map<String, dynamic>
+        ? Map<String, dynamic>.from((result ?? {})['data'] as Map)
+        : result ?? {};
   }
 
   // دالة لمراجعة (قبول/رفض) طلبات السلف
@@ -163,33 +133,17 @@ class ManagerApiService {
       throw Exception('معرف طلب السلفة أو معرف المدير مطلوب');
     }
 
-    final url = '$apiBaseUrl/advances/$advanceId/review';
-    print('💰 Reviewing advance request: $advanceId, approve: $approve');
-    print('💰 Manager ID: $managerId');
+    final result = await SupabaseFunctionClient.post('branch-request-action', {
+      'type': 'advance',
+      'id': advanceId,
+      'action': approve ? 'approve' : 'reject',
+      'reviewerId': managerId,
+      if (notes != null) 'notes': notes,
+    });
 
-    final response = await http.post(
-      Uri.parse(url),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'action': approve ? 'approve' : 'reject',
-        'reviewer_id': managerId,
-        if (notes != null) 'notes': notes,
-      }),
-    );
-
-    print('💰 Response status: ${response.statusCode}');
-    print('💰 Response body: ${response.body}');
-
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body);
-    } else if (response.statusCode == 403) {
-      final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
-      final message = errorBody['message'] ?? errorBody['error'] ?? 'ليس لديك صلاحية للموافقة على هذا الطلب';
-      throw Exception(message);
-    } else {
-      final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
-      throw Exception(errorBody['error'] ?? 'فشل مراجعة طلب السلفة: ${response.statusCode}');
-    }
+    return (result ?? {})['data'] is Map<String, dynamic>
+        ? Map<String, dynamic>.from((result ?? {})['data'] as Map)
+        : result ?? {};
   }
 
   // دالة لمراجعة (قبول/رفض) طلبات الحضور
@@ -203,32 +157,16 @@ class ManagerApiService {
       throw Exception('معرف طلب الحضور أو معرف المدير مطلوب');
     }
 
-    final url = '$apiBaseUrl/attendance/requests/$requestId/review';
-    print('⏰ Reviewing attendance request: $requestId, approve: $approve');
-    print('⏰ Manager ID: $managerId');
+    final result = await SupabaseFunctionClient.post('branch-request-action', {
+      'type': 'attendance',
+      'id': requestId,
+      'action': approve ? 'approve' : 'reject',
+      'reviewerId': managerId,
+      if (notes != null) 'notes': notes,
+    });
 
-    final response = await http.post(
-      Uri.parse(url),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'action': approve ? 'approve' : 'reject',
-        'reviewer_id': managerId,
-        if (notes != null) 'notes': notes,
-      }),
-    );
-
-    print('⏰ Response status: ${response.statusCode}');
-    print('⏰ Response body: ${response.body}');
-
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body);
-    } else if (response.statusCode == 403) {
-      final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
-      final message = errorBody['message'] ?? errorBody['error'] ?? 'ليس لديك صلاحية للموافقة على هذا الطلب';
-      throw Exception(message);
-    } else {
-      final errorBody = response.body.isNotEmpty ? jsonDecode(response.body) : {};
-      throw Exception(errorBody['error'] ?? 'فشل مراجعة طلب الحضور: ${response.statusCode}');
-    }
+    return (result ?? {})['data'] is Map<String, dynamic>
+        ? Map<String, dynamic>.from((result ?? {})['data'] as Map)
+        : result ?? {};
   }
 }

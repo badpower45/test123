@@ -43,7 +43,7 @@ class OfflineDatabase {
 
     return await openDatabase(
       path,
-      version: 4, // Version 4: Shift times & hourly rate in cache
+      version: 6, // Version 6: Added notes to pending_checkouts
       onCreate: (db, version) async {
         print('🆕 Creating new database (version $version)');
         await _createDB(db, version);
@@ -121,6 +121,61 @@ class OfflineDatabase {
         print('ℹ️ hourly_rate column may already exist: $e');
       }
     }
+
+    if (oldVersion < 5) {
+      // Add new columns to pending_pulses table
+      try {
+        await db.execute('ALTER TABLE pending_pulses ADD COLUMN attendance_id TEXT');
+      } catch (e) {
+        print('ℹ️ attendance_id column may already exist: $e');
+      }
+      try {
+        await db.execute('ALTER TABLE pending_pulses ADD COLUMN latitude REAL');
+      } catch (e) {
+        print('ℹ️ latitude column may already exist: $e');
+      }
+      try {
+        await db.execute('ALTER TABLE pending_pulses ADD COLUMN longitude REAL');
+      } catch (e) {
+        print('ℹ️ longitude column may already exist: $e');
+      }
+      try {
+        await db.execute('ALTER TABLE pending_pulses ADD COLUMN inside_geofence INTEGER DEFAULT 0');
+      } catch (e) {
+        print('ℹ️ inside_geofence column may already exist: $e');
+      }
+      try {
+        await db.execute('ALTER TABLE pending_pulses ADD COLUMN distance_from_center REAL');
+      } catch (e) {
+        print('ℹ️ distance_from_center column may already exist: $e');
+      }
+      try {
+        await db.execute('ALTER TABLE pending_pulses ADD COLUMN wifi_bssid TEXT');
+      } catch (e) {
+        print('ℹ️ wifi_bssid column may already exist: $e');
+      }
+      try {
+        await db.execute('ALTER TABLE pending_pulses ADD COLUMN validated_by_wifi INTEGER DEFAULT 0');
+      } catch (e) {
+        print('ℹ️ validated_by_wifi column may already exist: $e');
+      }
+      try {
+        await db.execute('ALTER TABLE pending_pulses ADD COLUMN validated_by_location INTEGER DEFAULT 0');
+      } catch (e) {
+        print('ℹ️ validated_by_location column may already exist: $e');
+      }
+      print('✅ Added pulse fields to pending_pulses table');
+    }
+
+    if (oldVersion < 6) {
+      // Add notes column to pending_checkouts table
+      try {
+        await db.execute('ALTER TABLE pending_checkouts ADD COLUMN notes TEXT');
+        print('✅ Added notes column to pending_checkouts table');
+      } catch (e) {
+        print('ℹ️ notes column may already exist: $e');
+      }
+    }
   }
 
   Future _createDB(Database db, int version) async {
@@ -153,6 +208,7 @@ class OfflineDatabase {
         timestamp $textType,
         latitude $realType,
         longitude $realType,
+        notes $textTypeNull,
         created_at $textType,
         synced $integerType DEFAULT 0
       )
@@ -163,7 +219,15 @@ class OfflineDatabase {
       CREATE TABLE pending_pulses (
         id $idType,
         employee_id $textType,
+        attendance_id $textTypeNull,
         timestamp $textType,
+        latitude $realType,
+        longitude $realType,
+        inside_geofence $integerType DEFAULT 0,
+        distance_from_center $realType,
+        wifi_bssid $textTypeNull,
+        validated_by_wifi $integerType DEFAULT 0,
+        validated_by_location $integerType DEFAULT 0,
         created_at $textType,
         synced $integerType DEFAULT 0
       )
@@ -264,6 +328,7 @@ class OfflineDatabase {
     required DateTime timestamp,
     required double latitude,
     required double longitude,
+    String? notes,
   }) async {
     final db = await instance.database;
     final id = '${employeeId}_${timestamp.millisecondsSinceEpoch}';
@@ -275,6 +340,7 @@ class OfflineDatabase {
       'timestamp': timestamp.toIso8601String(),
       'latitude': latitude,
       'longitude': longitude,
+      'notes': notes,
       'created_at': DateTime.now().toIso8601String(),
       'synced': 0,
     });
@@ -315,6 +381,14 @@ class OfflineDatabase {
   Future<String> insertPendingPulse({
     required String employeeId,
     required DateTime timestamp,
+    String? attendanceId,
+    double? latitude,
+    double? longitude,
+    bool insideGeofence = false,
+    double? distanceFromCenter,
+    String? wifiBssid,
+    bool validatedByWifi = false,
+    bool validatedByLocation = false,
   }) async {
     final db = await instance.database;
     final id = '${employeeId}_${timestamp.millisecondsSinceEpoch}';
@@ -322,7 +396,15 @@ class OfflineDatabase {
     await db.insert('pending_pulses', {
       'id': id,
       'employee_id': employeeId,
+      'attendance_id': attendanceId,
       'timestamp': timestamp.toIso8601String(),
+      'latitude': latitude,
+      'longitude': longitude,
+      'inside_geofence': insideGeofence ? 1 : 0,
+      'distance_from_center': distanceFromCenter,
+      'wifi_bssid': wifiBssid,
+      'validated_by_wifi': validatedByWifi ? 1 : 0,
+      'validated_by_location': validatedByLocation ? 1 : 0,
       'created_at': DateTime.now().toIso8601String(),
       'synced': 0,
     });
@@ -337,6 +419,22 @@ class OfflineDatabase {
       where: 'synced = ?',
       whereArgs: [0],
     );
+  }
+
+  /// Backfill attendance_id for pulses that were captured before server attendance was created
+  Future<int> backfillAttendanceIdForPulses({
+    required String employeeId,
+    required String attendanceId,
+  }) async {
+    final db = await instance.database;
+    // Update pulses with NULL or placeholder attendance_id
+    final result = await db.update(
+      'pending_pulses',
+      {'attendance_id': attendanceId},
+      where: 'employee_id = ? AND (attendance_id IS NULL OR attendance_id = "" OR attendance_id LIKE ?)',
+      whereArgs: [employeeId, '%pending%'],
+    );
+    return result; // number of rows affected
   }
 
   Future<void> markPulseSynced(String id) async {
@@ -507,6 +605,10 @@ class OfflineDatabase {
     }
 
     final data = Map<String, dynamic>.from(result.first);
+    
+    // ✅ Add aliases for common field names (for backward compatibility)
+    data['name'] = data['branch_name'];
+    data['id'] = data['branch_id'];
     
     // Parse JSON array of BSSIDs
     if (data['wifi_bssids'] != null && data['wifi_bssids'].toString().isNotEmpty) {

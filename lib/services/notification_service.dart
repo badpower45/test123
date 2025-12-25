@@ -174,6 +174,90 @@ class NotificationService {
     );
   }
 
+  // Show remote notification (from server)
+  Future<void> showRemoteNotification({
+    required String title,
+    required String body,
+  }) async {
+    await initialize();
+
+    const androidDetails = AndroidNotificationDetails(
+      'remote_channel',
+      'تنبيهات النظام',
+      channelDescription: 'تنبيهات عامة من النظام',
+      importance: Importance.high,
+      priority: Priority.high,
+      playSound: true,
+      enableVibration: true,
+    );
+
+    const iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+    );
+
+    const details = NotificationDetails(
+      android: androidDetails,
+      iOS: iosDetails,
+    );
+
+    // Use a random ID or based on time to allow multiple notifications
+    final id = DateTime.now().millisecondsSinceEpoch % 100000;
+
+    await _notifications.show(
+      id,
+      title,
+      body,
+      details,
+    );
+  }
+
+  Future<void> showBreakStatusNotification({
+    required bool started,
+    int? durationMinutes,
+  }) async {
+    await initialize();
+
+    final androidDetails = AndroidNotificationDetails(
+      'break_channel',
+      'تنبيهات الاستراحة',
+      channelDescription: 'إشعارات بدء وإنهاء الاستراحة',
+      importance: Importance.high,
+      priority: Priority.high,
+    );
+
+    const iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+    );
+
+    final details = NotificationDetails(
+      android: androidDetails,
+      iOS: iosDetails,
+    );
+
+    final title = started ? '☕ تم بدء الاستراحة' : '✅ تم إنهاء الاستراحة';
+    String body;
+    if (started) {
+      final durationLine =
+          durationMinutes != null ? '\nالمدة المسموحة: $durationMinutes دقيقة' : '';
+      body = 'وقت الاستراحة لا يُحتسب من ساعات العمل.\n'
+          'لن يتم تطبيق خصومات الخروج من النطاق خلال هذه الفترة$durationLine.';
+    } else {
+      body = 'تم احتساب الاستراحة.\nتمت إعادة تفعيل مراقبة الموقع بشكل طبيعي.';
+    }
+
+    await _notifications.show(
+      started ? 5 : 6,
+      title,
+      body,
+      details,
+      payload: 'break_status_${started ? 'start' : 'end'}',
+    );
+  }
+
   // Cancel specific notification
   Future<void> cancelNotification(int id) async {
     await _notifications.cancel(id);

@@ -2,9 +2,13 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:universal_io/io.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:geolocator/geolocator.dart';
 
 import '../../constants/restaurant_config.dart';
-import '../../models/attendance_request.dart';
 import '../../models/employee.dart';
 import '../../services/branch_api_service.dart';
 import '../../services/requests_api_service.dart';
@@ -16,10 +20,21 @@ import '../../services/supabase_attendance_service.dart';
 import '../../services/absence_service.dart';
 import '../../services/payroll_service.dart';
 import '../../services/offline_data_service.dart';
+import '../../services/supabase_function_client.dart';
 import '../../services/pulse_tracking_service.dart';
+import '../../services/workmanager_pulse_service.dart';
+import '../../services/foreground_attendance_service.dart' hide TimeOfDay;
+import '../../services/alarm_manager_pulse_service.dart';
+import '../../services/session_validation_service.dart';
+import '../../services/app_logger.dart';
+import '../../services/device_compatibility_service.dart';
+import '../../services/checkout_debug_service.dart';
+import '../../services/aggressive_keep_alive_service.dart';
 import '../../database/offline_database.dart';
+import '../../services/wifi_service.dart';
 import '../../theme/app_colors.dart';
-import '../../widgets/violation_alert_dialog.dart';
+import '../../widgets/battery_optimization_guide.dart';
+import 'logs_viewer_page.dart';
 
 class EmployeeHomePage extends StatefulWidget {
   final String employeeId;
@@ -42,12 +57,21 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
   bool _isDataDownloaded = false;
   bool _isSyncing = false;
   
+  // Live earnings state (used internally)
+  double _hourlyRate = 0.0;
+  double _currentEarnings = 0.0;
+  
   // ✅ NEW: Store attendance_id locally for check-out
   String? _currentAttendanceId;
+  // ✅ NEW: Track if we started an optimistic local timer before server success
+  bool _optimisticCheckInStarted = false;
   
   final _offlineService = OfflineDataService();
   final _pulseService = PulseTrackingService();
   Timer? _shiftEndTimer; // ⏰ NEW: Timer for auto checkout at shift end
+  
+  // 🚨 NEW: Subscription for auto-checkout events
+  StreamSubscription<AutoCheckoutEvent>? _autoCheckoutSubscription;
 
   @override
   void initState() {
@@ -63,39 +87,204 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
     // ⚠️ Listen to violation alerts
     _pulseService.addListener(_checkForViolations);
     
+    // 🚨 NEW: Listen to auto-checkout events for immediate UI update
+    _autoCheckoutSubscription = _pulseService.onAutoCheckout.listen(_handleAutoCheckout);
+    
     // ⏰ NEW: Check for auto checkout every minute
     _shiftEndTimer = Timer.periodic(const Duration(minutes: 1), (_) => _checkAutoCheckout());
+    
+    // 🌐 Listen to connectivity changes for auto-sync
+    _setupConnectivityListener();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _showForcedCheckoutNoticeIfNeeded();
+    });
+  }
+  
+  /// Setup connectivity listener for auto-sync when internet is available
+  void _setupConnectivityListener() {
+    Connectivity().onConnectivityChanged.listen((results) async {
+      final hasConnection = results.any((result) => result != ConnectivityResult.none);
+      
+      if (hasConnection && !_isSyncing) {
+        // Refresh pending count first
+        await _loadPendingCount();
+        
+        if (_pendingCount > 0) {
+          // Internet is back and we have pending data
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('🌐 جاري تحميل البيانات...'),
+                duration: Duration(seconds: 2),
+                backgroundColor: Colors.blue,
+              ),
+            );
+          }
+          
+          // Auto-sync pending data
+          await _autoSyncPendingData();
+        }
+      }
+    });
+  }
+  
+  /// Auto-sync pending data when internet is available
+  Future<void> _autoSyncPendingData() async {
+    if (_isSyncing) return;
+    
+    setState(() => _isSyncing = true);
+    
+    try {
+      final syncService = SyncService.instance;
+      final result = await syncService.syncPendingData();
+      
+      if (mounted) {
+        if (result['success'] == true && result['synced'] > 0) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('✅ تم الرفع بالكامل - ${result['synced']} سجل'),
+              backgroundColor: AppColors.success,
+              duration: const Duration(seconds: 3),
+            ),
+          );
+          _loadPendingCount(); // Refresh count
+        }
+      }
+    } catch (e) {
+      AppLogger.instance.log('Auto-sync error', level: AppLogger.error, tag: 'EmployeeHome', error: e);
+    } finally {
+      if (mounted) {
+        setState(() => _isSyncing = false);
+      }
+    }
   }
 
   @override
   void dispose() {
     _timer?.cancel();
     _shiftEndTimer?.cancel(); // ⏰ Cancel shift timer
+    _autoCheckoutSubscription?.cancel(); // 🚨 Cancel auto-checkout subscription
     _pulseService.removeListener(_checkForViolations);
     super.dispose();
+  }
+
+  /// 🚨 Handle auto-checkout event from PulseTrackingService
+  /// This is called when 2 consecutive pulses are outside the zone
+  void _handleAutoCheckout(AutoCheckoutEvent event) {
+    if (!mounted) return;
+    
+    print('🚨 Auto-checkout event received in UI');
+    print('   Reason: ${event.reason}');
+    print('   Saved offline: ${event.savedOffline}');
+    
+    // ✅ IMMEDIATELY stop timer and update UI state
+    _timer?.cancel();
+    _timer = null;
+    
+    setState(() {
+      _isCheckedIn = false;
+      _checkInTime = null;
+      _elapsedTime = '00:00:00';
+      _currentEarnings = 0.0;
+      _currentAttendanceId = null;
+      _isLoading = false;
+    });
+    
+    // Show dialog to user
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.orange[700], size: 28),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text(
+                '🚨 انصراف تلقائي',
+                textAlign: TextAlign.right,
+                style: TextStyle(fontSize: 18),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(
+              event.reason,
+              textAlign: TextAlign.right,
+              style: const TextStyle(fontSize: 16),
+            ),
+            const SizedBox(height: 12),
+            if (event.savedOffline)
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.orange[50],
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.cloud_off, color: Colors.orange, size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'تم الحفظ محلياً - سيتم الرفع عند توفر الإنترنت',
+                        textAlign: TextAlign.right,
+                        style: TextStyle(fontSize: 13, color: Colors.orange),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 12),
+            Text(
+              'الوقت: ${event.timestamp.hour}:${event.timestamp.minute.toString().padLeft(2, '0')}',
+              textAlign: TextAlign.right,
+              style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('حسناً'),
+          ),
+        ],
+      ),
+    );
+    
+    // Refresh pending count
+    _loadPendingCount();
   }
 
   /// Check for violation alerts and show dialog
   void _checkForViolations() {
     if (!mounted) return;
     
-    if (_pulseService.hasActiveViolation && 
-        _pulseService.violationMessage != null &&
-        _pulseService.violationSeverity != null) {
-      
-      // Show violation dialog
-      showDialog(
-        context: context,
-        barrierDismissible: false, // Force user to acknowledge
-        builder: (context) => ViolationAlertDialog(
-          message: _pulseService.violationMessage!,
-          severity: _pulseService.violationSeverity!,
-          onAcknowledge: () {
-            _pulseService.acknowledgeViolation();
-          },
-        ),
-      );
+    // ✅ Check if tracking stopped (auto-checkout happened)
+    if (!_pulseService.isTracking && _isCheckedIn) {
+      print('🔄 Pulse tracking stopped - refreshing attendance status');
+      // Refresh immediately
+      _checkCurrentStatus().then((_) {
+        if (mounted && !_isCheckedIn) {
+          // Show confirmation that checkout was applied
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('✅ تم تحديث الحالة - تم تسجيل الانصراف التلقائي بنجاح'),
+              backgroundColor: AppColors.success,
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+      });
     }
+    
+    // Pulse tracking status is now handled via notifications
+    // No need for violation dialogs - system sends notifications automatically
   }
 
   /// Load branch data from cache or Supabase with auto-refresh
@@ -142,9 +331,9 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
               _allowedBssids = bssidsArray.map((e) => e.toString()).toList();
             }
           });
-          print('⚠️ Using stale cache (no internet): ${cached['branch_name']}');
+          AppLogger.instance.log('Using stale cache (no internet): ${cached['branch_name']}', level: AppLogger.warning, tag: 'EmployeeHome');
         } else {
-          print('⚠️ No internet and no cached branch data');
+          AppLogger.instance.log('No internet and no cached branch data', level: AppLogger.warning, tag: 'EmployeeHome');
         }
         return;
       }
@@ -174,6 +363,15 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
       }
       
       // Cache it locally for future use
+      // ✅ FIX: Safe DateTime parsing for updated_at
+      int dataVersion = 1;
+      if (branchData['updated_at'] != null) {
+        try {
+          dataVersion = DateTime.parse(branchData['updated_at'].toString()).millisecondsSinceEpoch ~/ 1000;
+        } catch (e) {
+          print('⚠️ Invalid updated_at format: ${branchData['updated_at']}');
+        }
+      }
       await db.cacheBranchData(
         employeeId: widget.employeeId,
         branchId: branchData['id'],
@@ -182,9 +380,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         latitude: branchData['latitude'],
         longitude: branchData['longitude'],
         geofenceRadius: branchData['geofence_radius'],
-        dataVersion: branchData['updated_at'] != null 
-            ? DateTime.parse(branchData['updated_at']).millisecondsSinceEpoch ~/ 1000
-            : 1,
+        dataVersion: dataVersion,
       );
       
       setState(() {
@@ -192,9 +388,9 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         _allowedBssids = wifiBssids;
       });
       
-      print('✅ Fetched and cached branch data: ${branchData['name']} (${wifiBssids.length} WiFi networks)');
+      AppLogger.instance.log('Fetched and cached branch data: ${branchData['name']} (${wifiBssids.length} WiFi networks)', tag: 'EmployeeHome');
     } catch (e) {
-      print('❌ Error loading branch data: $e');
+      AppLogger.instance.log('Error loading branch data', level: AppLogger.error, tag: 'EmployeeHome', error: e);
     }
   }
 
@@ -208,24 +404,208 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
     }
   }
 
+  Future<void> _showForcedCheckoutNoticeIfNeeded() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final pending = prefs.getBool('forced_auto_checkout_pending') ?? false;
+      if (!pending || !mounted) {
+        return;
+      }
+
+      final message = prefs.getString('forced_auto_checkout_message') ??
+          'تم تسجيل انصراف تلقائي بسبب الابتعاد عن الفرع.';
+      final requiresSync =
+          prefs.getBool('forced_auto_checkout_requires_sync') ?? false;
+      final timeIso = prefs.getString('forced_auto_checkout_time');
+      DateTime? timestamp;
+      if (timeIso != null) {
+        timestamp = DateTime.tryParse(timeIso);
+      }
+
+      await prefs.setBool('forced_auto_checkout_pending', false);
+      await prefs.remove('forced_auto_checkout_message');
+      await prefs.remove('forced_auto_checkout_time');
+      await prefs.remove('forced_auto_checkout_requires_sync');
+
+      // ✅ Refresh status from server first
+      await _checkCurrentStatus();
+
+      if (!mounted) {
+        return;
+      }
+
+      final timeText = timestamp != null
+          ? ' (${TimeOfDay.fromDateTime(timestamp.toLocal()).format(context)})'
+          : '';
+        final syncSuffix = requiresSync
+          ? '\nسيتم رفع الانصراف تلقائياً عند توفر الإنترنت.'
+          : '';
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$message$timeText$syncSuffix'),
+          backgroundColor: AppColors.warning,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    } catch (e) {
+      AppLogger.instance.log('Failed to show forced checkout notice', level: AppLogger.warning, tag: 'EmployeeHome', error: e);
+    }
+  }
+
   Future<void> _checkCurrentStatus() async {
     // Use Supabase to get employee status
     try {
+      print('🔄 Checking current attendance status for employee: ${widget.employeeId}');
+      
+      // ✅ STEP 1: Check SharedPreferences for offline attendance FIRST
+      final prefs = await SharedPreferences.getInstance();
+      final savedAttendanceId = prefs.getString('active_attendance_id');
+      final isOfflineAttendance = prefs.getBool('is_offline_attendance') ?? false;
+      final offlineCheckinTimeStr = prefs.getString('offline_checkin_time');
+      
+      if (savedAttendanceId != null && isOfflineAttendance && offlineCheckinTimeStr != null) {
+        print('📱 Found offline attendance in SharedPreferences: $savedAttendanceId');
+        
+        // Restore offline attendance state
+        setState(() {
+          _isCheckedIn = true;
+          _currentAttendanceId = savedAttendanceId;
+          try {
+            _checkInTime = DateTime.parse(offlineCheckinTimeStr).toLocal();
+          } catch (e) {
+            _checkInTime = DateTime.now();
+          }
+        });
+        
+        // Start timer
+        if (_checkInTime != null) {
+          _startTimer();
+        }
+        
+        // Start pulse tracking if not running
+        if (!_pulseService.isTracking) {
+          await _pulseService.startTracking(widget.employeeId, attendanceId: savedAttendanceId);
+          print('🎯 Resumed pulse tracking for offline attendance');
+        }
+        
+        print('✅ Restored offline attendance state');
+        return; // Don't query server for offline attendance
+      }
+      
+      // ✅ STEP 2: Check server for online attendance
       final status = await SupabaseAttendanceService.getEmployeeStatus(widget.employeeId);
       
+      final wasCheckedIn = _isCheckedIn;
       setState(() {
         _isCheckedIn = status['isCheckedIn'] as bool? ?? false;
-        // Parse checkInTime and convert from UTC to local time
-        _checkInTime = status['attendance']?['check_in_time'] != null
-            ? DateTime.parse(status['attendance']['check_in_time']).toLocal()
-            : null;
+        // Parse checkInTime and convert from UTC to local time (with safe parsing)
+        if (status['attendance']?['check_in_time'] != null) {
+          try {
+            _checkInTime = DateTime.parse(status['attendance']['check_in_time'].toString()).toLocal();
+          } catch (e) {
+            _checkInTime = null;
+          }
+        } else {
+          _checkInTime = null;
+        }
+        // Load hourly rate for earnings computation
+        _hourlyRate = (status['employee']?['hourly_rate'] as num?)?.toDouble() ?? 0.0;
+        
+        // ✅ Clear attendance ID if checked out
+        if (!_isCheckedIn) {
+          _currentAttendanceId = null;
+          _timer?.cancel(); // Stop earnings timer
+        }
       });
       
+      print('✅ Status updated: isCheckedIn=$_isCheckedIn (was: $wasCheckedIn)');
+      
+      // ✅ Ensure live earnings timer if checked-in
       if (_isCheckedIn && _checkInTime != null) {
+        // Initialize current earnings immediately
+        final duration = DateTime.now().difference(_checkInTime!);
+        _currentEarnings = _computeEarnings(duration);
         _startTimer();
       }
+
+      // ✅ CRITICAL: If user is checked-in but pulse tracking isn't running, start it now
+      if (_isCheckedIn && !_pulseService.isTracking) {
+        try {
+          final attendanceId = status['attendance']?['id'] as String?;
+          await _pulseService.startTracking(widget.employeeId, attendanceId: attendanceId);
+          AppLogger.instance.log('Resumed pulse tracking based on status check', tag: 'EmployeeHome');
+
+          // Ensure foreground service is running on Android
+          if (!kIsWeb && Platform.isAndroid) {
+            final fg = ForegroundAttendanceService.instance;
+            final login = await AuthService.getLoginData();
+            final employeeName = login['fullName'] ?? 'الموظف';
+            final healthy = await fg.isServiceHealthy();
+            if (!healthy) {
+              await fg.ensureServiceRunning(employeeId: widget.employeeId, employeeName: employeeName);
+            }
+          }
+        } catch (e) {
+          AppLogger.instance.log('Failed to resume pulse tracking from status', level: AppLogger.error, tag: 'EmployeeHome', error: e);
+        }
+      }
+      // Always refresh today's total when status is fetched
+      await _refreshTodayTotal();
     } catch (e) {
-      // handle error
+      print('❌ Error checking status: $e');
+      
+      // ✅ On network error, check SharedPreferences for offline attendance
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final savedAttendanceId = prefs.getString('active_attendance_id');
+        final offlineCheckinTimeStr = prefs.getString('offline_checkin_time');
+        
+        if (savedAttendanceId != null && offlineCheckinTimeStr != null) {
+          print('📱 Network error - restoring from SharedPreferences');
+          setState(() {
+            _isCheckedIn = true;
+            _currentAttendanceId = savedAttendanceId;
+            try {
+              _checkInTime = DateTime.parse(offlineCheckinTimeStr).toLocal();
+            } catch (e) {
+              _checkInTime = DateTime.now();
+            }
+          });
+          
+          if (_checkInTime != null) {
+            _startTimer();
+          }
+          
+          if (!_pulseService.isTracking) {
+            await _pulseService.startTracking(widget.employeeId, attendanceId: savedAttendanceId);
+          }
+        }
+      } catch (prefsError) {
+        print('⚠️ Could not restore from SharedPreferences: $prefsError');
+      }
+    }
+  }
+  
+  /// ✅ Refresh today's total with silent failure handling
+  Future<void> _refreshTodayTotal() async {
+    try {
+      // Persist today's earnings into daily_attendance_summary
+      // ✅ Use short timeout and don't throw on error
+      await SupabaseFunctionClient.post(
+        'employee-today-earnings',
+        {
+          'employee_id': widget.employeeId,
+          'persist': true,
+        },
+        timeout: const Duration(seconds: 3),
+        throwOnError: false, // ✅ Don't crash app if this fails
+      );
+    } catch (e) {
+      // ✅ Just log - don't show error to user
+      AppLogger.instance.log('Failed to persist today total (ignored)', level: AppLogger.warning, tag: 'EmployeeHome', error: e);
+      // Continue normal operation
     }
   }
 
@@ -308,9 +688,63 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         final duration = DateTime.now().difference(_checkInTime!);
         setState(() {
           _elapsedTime = _formatDuration(duration);
+          _currentEarnings = _computeEarnings(duration);
         });
       }
     });
+  }
+  
+  /// ✅ V2: Show battery optimization guide for problematic devices
+  Future<void> _showBatteryGuideIfNeeded() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final hasShownGuide = prefs.getBool('battery_guide_shown') ?? false;
+      
+      if (!hasShownGuide) {
+        // Initialize keep-alive service to check device
+        final keepAliveService = AggressiveKeepAliveService();
+        await keepAliveService.initialize();
+        
+        // Only show for problematic devices
+        if (keepAliveService.isAggressiveMode && mounted) {
+          // Mark as shown
+          await prefs.setBool('battery_guide_shown', true);
+          
+          // Show dialog after a short delay
+          await Future.delayed(const Duration(seconds: 2));
+          
+          if (mounted) {
+            showDialog(
+              context: context,
+              barrierDismissible: false,
+              builder: (context) => BatteryOptimizationDialog(
+                onSettings: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => BatteryOptimizationGuide(
+                        employeeId: widget.employeeId,
+                      ),
+                    ),
+                  );
+                },
+                onDismiss: () {},
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      AppLogger.instance.log('Error showing battery guide', level: AppLogger.warning, tag: 'BatteryGuide', error: e);
+    }
+  }
+
+  double _computeEarnings(Duration duration) {
+    // Pro-rated per second for smooth updates (equivalent to per-minute rounding when displayed)
+    final hours = duration.inSeconds / 3600.0;
+    final earnings = _hourlyRate * hours;
+    // Avoid negative/NaN
+    if (earnings.isNaN || earnings.isInfinite || earnings < 0) return 0.0;
+    return earnings;
   }
 
   String _formatDuration(Duration duration) {
@@ -376,12 +810,560 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
     }
   }
 
+  /// ✅ Helper: Check if employee has active attendance (prevent double check-in)
+  /// Priority: Offline-first approach
+  /// 1. Check local storage (SharedPreferences, SQLite)
+  /// 2. Check server with short timeout (3 seconds)
+  /// 3. If all fail, allow check-in (fail-safe)
+  Future<Map<String, dynamic>?> _checkForActiveAttendance() async {
+    try {
+      print('🔍 Checking for existing active attendance (offline-first)...');
+      
+      // ✅ STEP 1: Check SharedPreferences for active attendance ID
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final activeAttendanceId = prefs.getString('active_attendance_id');
+        
+        if (activeAttendanceId != null && activeAttendanceId.isNotEmpty) {
+          print('📱 Found local active attendance ID: $activeAttendanceId');
+          
+          // Try to get details from local storage
+          if (!kIsWeb) {
+            final db = OfflineDatabase.instance;
+            // Check if there's a pending check-in
+            final pendingCheckins = await db.getPendingCheckins();
+            if (pendingCheckins.isNotEmpty) {
+              final lastCheckin = pendingCheckins.last;
+              print('📱 Found pending local check-in: ${lastCheckin['timestamp']}');
+              return {
+                'id': activeAttendanceId,
+                'check_in_time': lastCheckin['timestamp'],
+                'employee_id': widget.employeeId,
+                'source': 'local',
+              };
+            }
+          }
+          
+          // Return minimal info if we have ID
+          return {
+            'id': activeAttendanceId,
+            'employee_id': widget.employeeId,
+            'source': 'local_prefs',
+          };
+        }
+      } catch (e) {
+        print('⚠️ Error checking local storage: $e');
+      }
+      
+      // ✅ STEP 2: Check SQLite for pending check-ins (mobile only)
+      if (!kIsWeb) {
+        try {
+          final db = OfflineDatabase.instance;
+          final pendingCheckins = await db.getPendingCheckins();
+          
+          if (pendingCheckins.isNotEmpty) {
+            final lastCheckin = pendingCheckins.last;
+            print('📱 Found pending local check-in: ${lastCheckin['timestamp']}');
+            
+            // Return local attendance info WITHOUT placeholder attendance_id
+            // attendance_id will remain null until server check-in succeeds (backfill later)
+            return {
+              'id': null,
+              'check_in_time': lastCheckin['timestamp'],
+              'employee_id': widget.employeeId,
+              'latitude': lastCheckin['latitude'],
+              'longitude': lastCheckin['longitude'],
+              'source': 'local_db_pending',
+              'pending_local': true,
+            };
+          }
+        } catch (e) {
+          print('⚠️ Error checking SQLite: $e');
+        }
+      }
+      
+      // ✅ STEP 3: Check server with SHORT timeout (3 seconds)
+      try {
+        print('🌐 Checking server for active attendance (timeout: 3s)...');
+        
+        final activeAttendance = await SupabaseAttendanceService
+            .getActiveAttendance(widget.employeeId)
+            .timeout(
+              const Duration(seconds: 3),
+              onTimeout: () {
+                print('⏱️ Server check timed out - allowing check-in');
+                return null;
+              },
+            );
+        
+        if (activeAttendance != null) {
+          print('⚠️ Found active attendance on server: ${activeAttendance['id']}');
+          print('   Check-in time: ${activeAttendance['check_in_time']}');
+          
+          // Save to local storage for future offline checks
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('active_attendance_id', activeAttendance['id']);
+          
+          return activeAttendance;
+        }
+      } catch (e) {
+        print('⚠️ Server check failed: $e');
+        // Don't block user - continue with check-in
+      }
+      
+      print('✅ No active attendance found - safe to check in');
+      return null;
+    } catch (e) {
+      print('❌ Error in _checkForActiveAttendance: $e');
+      // In case of error, allow check-in (fail-safe)
+      return null;
+    }
+  }
+
+  /// Get status of all tracking services
+  Future<Map<String, dynamic>> _getServicesStatus() async {
+    try {
+      final foregroundHealthy = await ForegroundAttendanceService.instance.isServiceHealthy();
+      
+      // Check AlarmManager (basic check - if registered)
+      final alarmService = AlarmManagerPulseService();
+      final alarmActive = alarmService.isRegistered;
+      
+      // WorkManager is harder to check, assume active if checked in
+      final workManagerActive = _isCheckedIn;
+      
+      return {
+        'foreground': foregroundHealthy,
+        'workmanager': workManagerActive,
+        'alarmmanager': alarmActive,
+      };
+    } catch (e) {
+      return {
+        'foreground': false,
+        'workmanager': false,
+        'alarmmanager': false,
+      };
+    }
+  }
+
+  /// Show diagnostic dialog for troubleshooting
+  Future<void> _showDiagnosticDialog() async {
+    if (!mounted) return;
+    
+    // Show loading dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const AlertDialog(
+        content: Row(
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(width: 20),
+            Text('جاري التشخيص...'),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      final report = await CheckoutDebugService.instance.runDiagnostic(
+        employeeId: widget.employeeId,
+        branchId: _branchData?['branch_id']?.toString(),
+      );
+      
+      if (!mounted) return;
+      Navigator.pop(context); // Close loading dialog
+      
+      final summary = CheckoutDebugService.instance.getReadableSummary(report);
+      
+      await showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Row(
+            children: [
+              Icon(
+                report['status'] == 'healthy' 
+                    ? Icons.check_circle 
+                    : report['status'] == 'critical'
+                        ? Icons.error
+                        : Icons.warning,
+                color: report['status'] == 'healthy'
+                    ? Colors.green
+                    : report['status'] == 'critical'
+                        ? Colors.red
+                        : Colors.orange,
+              ),
+              const SizedBox(width: 10),
+              const Text('تقرير التشخيص', style: TextStyle(fontSize: 18)),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: SelectableText(
+              summary,
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 12,
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                DeviceCompatibilityService.instance.showPermissionGuideDialog(context);
+              },
+              child: const Text('دليل الإعدادات'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryOrange,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('إغلاق'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context); // Close loading dialog
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('خطأ في التشخيص: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  /// Show permissions explanation dialog
+  Future<bool> _showPermissionsExplanationDialog() async {
+    if (!mounted) return false;
+    
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.security, color: AppColors.primaryOrange),
+            SizedBox(width: 10),
+            Text('أذونات ضرورية', style: TextStyle(fontSize: 20)),
+          ],
+        ),
+        content: const SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'لضمان عمل التطبيق بشكل صحيح في الخلفية، نحتاج للأذونات التالية:',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              SizedBox(height: 15),
+              _PermissionItem(
+                icon: Icons.notifications,
+                title: 'الإشعارات',
+                description: 'لعرض حالة التتبع وإبقاء التطبيق نشطاً',
+              ),
+              SizedBox(height: 10),
+              _PermissionItem(
+                icon: Icons.battery_charging_full,
+                title: 'تحسين البطارية',
+                description: 'لمنع النظام من إيقاف التطبيق لتوفير البطارية',
+              ),
+              SizedBox(height: 15),
+              Text(
+                '⚠️ بدون هذه الأذونات، قد يتوقف التتبع عند تصغير التطبيق',
+                style: TextStyle(
+                  color: Colors.orange,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('إلغاء', style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryOrange,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('متابعة'),
+          ),
+        ],
+      ),
+    );
+    
+    return result ?? false;
+  }
+
   Future<void> _handleCheckIn() async {
     setState(() => _isLoading = true);
 
     try {
-      print('🚀 Starting check-in process...');
-      print('📋 Employee ID: ${widget.employeeId}');
+      AppLogger.instance.log('Starting check-in process for employee: ${widget.employeeId}', tag: 'CheckIn');
+      
+      // ✅ CRITICAL: Request Location Permission FIRST (Android/iOS)
+      if (!kIsWeb) {
+        final locationPermission = await Permission.location.status;
+        
+        if (!locationPermission.isGranted) {
+          AppLogger.instance.log('Location permission not granted - requesting', tag: 'CheckIn');
+          
+          // Show explanation dialog
+          if (mounted) {
+            final shouldRequest = await showDialog<bool>(
+              context: context,
+              barrierDismissible: false,
+              builder: (context) => AlertDialog(
+                title: const Row(
+                  children: [
+                    Icon(Icons.location_on, color: AppColors.primaryOrange),
+                    SizedBox(width: 10),
+                    Text('صلاحية الموقع مطلوبة', style: TextStyle(fontSize: 18)),
+                  ],
+                ),
+                content: const SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'نحتاج إلى صلاحية الموقع للتأكد من تواجدك في الفرع أثناء تسجيل الحضور.',
+                        style: TextStyle(fontSize: 16),
+                      ),
+                      SizedBox(height: 15),
+                      Text(
+                        '⚠️ بدون هذه الصلاحية، لن يمكنك تسجيل الحضور',
+                        style: TextStyle(
+                          color: Colors.orange,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('إلغاء', style: TextStyle(color: Colors.grey)),
+                  ),
+                  ElevatedButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primaryOrange,
+                      foregroundColor: Colors.white,
+                    ),
+                    child: const Text('متابعة'),
+                  ),
+                ],
+              ),
+            );
+            
+            if (shouldRequest != true) {
+              setState(() => _isLoading = false);
+              return;
+            }
+          }
+          
+          // Request permission
+          final result = await Permission.location.request();
+          
+          if (!result.isGranted) {
+            setState(() => _isLoading = false);
+            
+            if (result.isPermanentlyDenied && mounted) {
+              // Guide to settings
+              await showDialog(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: const Text('صلاحية مطلوبة'),
+                  content: const Text(
+                    'تم رفض صلاحية الموقع بشكل دائم.\n\nيرجى الذهاب إلى الإعدادات → التطبيقات → Oldies Workers → الأذونات وتفعيل "الموقع".',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('إلغاء'),
+                    ),
+                    ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        openAppSettings();
+                      },
+                      child: const Text('فتح الإعدادات'),
+                    ),
+                  ],
+                ),
+              );
+            } else if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('❌ يجب تفعيل صلاحية الموقع لتسجيل الحضور'),
+                  backgroundColor: AppColors.error,
+                ),
+              );
+            }
+            return;
+          }
+          
+          AppLogger.instance.log('Location permission granted', tag: 'CheckIn');
+        }
+      }
+      
+      // ✅ Show permissions explanation on Android (first time or if needed)
+      if (!kIsWeb && Platform.isAndroid) {
+        final prefs = await SharedPreferences.getInstance();
+        final hasSeenPermissionDialog = prefs.getBool('has_seen_permission_dialog') ?? false;
+        
+        if (!hasSeenPermissionDialog) {
+          final userAccepted = await _showPermissionsExplanationDialog();
+          if (!userAccepted) {
+            setState(() => _isLoading = false);
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('يجب الموافقة على الأذونات لتسجيل الحضور'),
+                  backgroundColor: Colors.orange,
+                ),
+              );
+            }
+            return;
+          }
+          // Mark as seen
+          await prefs.setBool('has_seen_permission_dialog', true);
+        }
+      }
+      
+      // ✅ CRITICAL FIX: If attendance is already active, resume services instead of blocking
+      final existingAttendance = await _checkForActiveAttendance();
+      final bool isPendingLocal = existingAttendance != null && (
+        existingAttendance['pending_local'] == true || existingAttendance['id'] == null
+      );
+      if (existingAttendance != null && !isPendingLocal) {
+        final attendanceId = existingAttendance['id'] as String?;
+        final rawCheckIn = existingAttendance['check_in_time'];
+        
+        // ✅ FIX: Safe DateTime parsing with null check
+        DateTime? checkInTime;
+        if (rawCheckIn is DateTime) {
+          checkInTime = rawCheckIn;
+        } else if (rawCheckIn != null && rawCheckIn.toString().isNotEmpty && rawCheckIn.toString() != 'null') {
+          try {
+            checkInTime = DateTime.parse(rawCheckIn.toString());
+          } catch (e) {
+            print('⚠️ Invalid check_in_time format: $rawCheckIn');
+            checkInTime = DateTime.now(); // Fallback to now
+          }
+        } else {
+          checkInTime = DateTime.now(); // Fallback if null
+        }
+        final timeAgo = DateTime.now().difference(checkInTime);
+
+        String timeDisplay;
+        if (timeAgo.inHours > 0) {
+          timeDisplay = '${timeAgo.inHours} ساعة';
+        } else if (timeAgo.inMinutes > 0) {
+          timeDisplay = '${timeAgo.inMinutes} دقيقة';
+        } else {
+          timeDisplay = 'منذ لحظات';
+        }
+
+        AppLogger.instance.log('Found active attendance, resuming services (check-in $timeDisplay ago)', level: AppLogger.info, tag: 'EmployeeHome');
+
+        // ✅ NEW: Check for session gap > 5.5 minutes
+        if (timeAgo.inSeconds > 330 && _branchData != null) {
+          try {
+            final employeeData = await SupabaseAttendanceService.getEmployeeStatus(widget.employeeId);
+            final branchId = employeeData['employee']?['branch_id'];
+            final managerId = _branchData!['manager_id'] ?? employeeData['employee']?['branch']?['manager_id'];
+
+            if (branchId != null && managerId != null && attendanceId != null) {
+              AppLogger.instance.log('Checking for session gap (${timeAgo.inMinutes} minutes)', 
+                level: AppLogger.warning, tag: 'EmployeeHome');
+              
+              final validationCreated = await SessionValidationService.instance.checkAndCreateSessionValidation(
+                employeeId: widget.employeeId,
+                attendanceId: attendanceId,
+                branchId: branchId,
+                managerId: managerId,
+              );
+
+              if (validationCreated && mounted) {
+                // Notify user that validation request was created
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      '⚠️ تم إرسال طلب للمدير لتأكيد تواجدك خلال الـ ${timeAgo.inMinutes} دقيقة الماضية',
+                    ),
+                    backgroundColor: AppColors.warning,
+                    duration: const Duration(seconds: 5),
+                  ),
+                );
+              }
+            }
+          } catch (e) {
+            AppLogger.instance.log('Error checking session validation', 
+              level: AppLogger.warning, tag: 'EmployeeHome', error: e);
+            // Continue anyway - don't block user
+          }
+        }
+
+        // Store attendance id for later checkout
+        _currentAttendanceId = attendanceId;
+
+        // Start pulse tracking immediately
+        await _pulseService.startTracking(widget.employeeId, attendanceId: attendanceId);
+
+        // ✅ NEW: Restore UI timer & earnings when resuming existing attendance
+        try {
+          final statusData = await SupabaseAttendanceService.getEmployeeStatus(widget.employeeId);
+          final hourly = (statusData['employee']?['hourly_rate'] as num?)?.toDouble();
+          setState(() {
+            _isCheckedIn = true;
+            _checkInTime = checkInTime?.toLocal() ?? DateTime.now(); // ✅ FIX: Safe null check
+            if (hourly != null) _hourlyRate = hourly;
+            // Precompute current earnings instantly
+            final duration = DateTime.now().difference(_checkInTime!);
+            _currentEarnings = _computeEarnings(duration);
+          });
+          _startTimer();
+        } catch (e) {
+          AppLogger.instance.log('Failed to restore timer for existing attendance', level: AppLogger.warning, tag: 'EmployeeHome', error: e);
+        }
+
+        // Ensure foreground service is running (Android)
+        if (!kIsWeb && Platform.isAndroid) {
+          final foregroundService = ForegroundAttendanceService.instance;
+          final employeeName = (await AuthService.getLoginData())['fullName'] ?? 'الموظف';
+          final healthy = await foregroundService.isServiceHealthy();
+          if (!healthy) {
+            await foregroundService.ensureServiceRunning(employeeId: widget.employeeId, employeeName: employeeName);
+          }
+        }
+
+        // Notify user gently that tracking has resumed
+        final nameForNotif = (await AuthService.getLoginData())['fullName'] ?? 'الموظف';
+        await NotificationService.instance.showGeofenceViolation(
+          employeeName: nameForNotif,
+          message: '✅ تم استئناف التتبع لحضورك النشط. سيتم احتساب النبضات تلقائياً.',
+        );
+
+        // Short-circuit the check-in flow since we resumed
+        setState(() => _isLoading = false);
+        return;
+      }
+      
       print('📦 Branch Data Available: ${_branchData != null}');
       
       if (_branchData != null) {
@@ -415,111 +1397,321 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         throw Exception(validation.message);
       }
 
-      print('✅ Validation passed: ${validation.message}');
-      print('📍 Position: ${validation.position?.latitude}, ${validation.position?.longitude}');
-      print('📶 WiFi BSSID: ${validation.bssid}');
+      AppLogger.instance.log('Validation passed: ${validation.message}', tag: 'CheckIn');
+      AppLogger.instance.log('Position: ${validation.position?.latitude}, ${validation.position?.longitude}', tag: 'CheckIn');
+      AppLogger.instance.log('WiFi BSSID: ${validation.bssid}', tag: 'CheckIn');
 
       // Use validated position and BSSID (may be null if only one was validated)
       final position = validation.position;
-      final wifiBSSID = validation.bssid;
+      var wifiBSSID = validation.bssid;
+      
+      // If BSSID is null but we're connected to WiFi, try to get it
+      if (wifiBSSID == null && !kIsWeb) {
+        try {
+          // First check availability with detailed error info
+          final availability = await WiFiService.checkBssidAvailability();
+          if (availability['available'] == true) {
+            wifiBSSID = await WiFiService.getCurrentWifiBssidValidated();
+            print('📶 Got BSSID from WiFiService: $wifiBSSID');
+          } else {
+            // Log the specific issue for debugging
+            final errorCode = availability['errorCode'] as String?;
+            print('⚠️ BSSID not available: ${availability['message']} (code: $errorCode)');
+            AppLogger.instance.log(
+              'BSSID unavailable: ${availability['message']}',
+              level: AppLogger.warning,
+              tag: 'CheckIn',
+            );
+            
+            // Show device-specific help if it's a known issue
+            if (errorCode != null && mounted && (errorCode == 'BSSID_PLACEHOLDER' || errorCode == 'LOCATION_SERVICE_DISABLED')) {
+              // Don't block check-in, but inform user for future reference
+              Future.delayed(const Duration(seconds: 2), () {
+                if (mounted) {
+                  DeviceCompatibilityService.instance.checkAndShowBssidWarning(context, errorCode);
+                }
+              });
+            }
+          }
+        } catch (e) {
+          print('⚠️ Could not get BSSID: $e');
+        }
+      }
 
       final latitude = position?.latitude ?? 0.0;
       final longitude = position?.longitude ?? 0.0;
 
-      // Check internet connection
-      final syncService = SyncService.instance;
-      final hasInternet = await syncService.hasInternet();
+      // ✅ Start optimistic local timer immediately (don't wait for server)
+      if (!_isCheckedIn && _checkInTime == null) {
+        setState(() {
+          _isCheckedIn = true;
+          _checkInTime = DateTime.now();
+          _currentEarnings = 0.0;
+        });
+        _optimisticCheckInStarted = true;
+        _startTimer();
+        AppLogger.instance.log('Started optimistic local check-in timer', tag: 'CheckIn');
+      }
 
-      if (hasInternet) {
-        // Online mode: Send to Supabase directly
-        print('🌐 Online mode - sending to Supabase with WiFi: $wifiBSSID');
+      // Try online mode first, fallback to offline if it fails
+      final syncService = SyncService.instance;
+      bool checkInSuccess = false;
+      String? attendanceId;
+      
+      // Try online mode first
+      try {
+        print('🌐 Attempting online check-in with WiFi: $wifiBSSID');
         final response = await SupabaseAttendanceService.checkIn(
           employeeId: widget.employeeId,
           latitude: latitude,
           longitude: longitude,
-          wifiBssid: wifiBSSID, // ✅ إضافة WiFi BSSID
+          wifiBssid: wifiBSSID,
+          branchId: validation.branchId,
+          distance: validation.distance,
+        ).timeout(
+          const Duration(seconds: 10),
+          onTimeout: () {
+            print('⏱️ Check-in request timed out');
+            throw TimeoutException('Request timeout');
+          },
         );
         
-        if (response == null) {
-          throw Exception('فشل تسجيل الحضور');
-        }
-        
-        print('✅ Check-in response: ${response['id']}');
-        
-        // Check shift absence (if employee has shift times)
-        if (_branchData != null) {
-          final employeeData = await SupabaseAttendanceService.getEmployeeStatus(widget.employeeId);
-          final emp = employeeData['employee'];
+        if (response != null && response['id'] != null) {
+          checkInSuccess = true;
+          attendanceId = response['id'] as String;
+          AppLogger.instance.log('Online check-in successful: ${response['id']}', tag: 'CheckIn');
           
-          if (emp != null && emp['shift_start_time'] != null) {
-            await AbsenceService.checkShiftAbsence(
-              employeeId: widget.employeeId,
-              branchId: _branchData!['branch_id'],
-              managerId: emp['branch']?['manager_id'] ?? '',
-              shiftStartTime: emp['shift_start_time'],
-              shiftEndTime: emp['shift_end_time'] ?? '17:00',
-              checkInTime: DateTime.now(),
+          // Check shift absence (if employee has shift times)
+          if (_branchData != null) {
+            try {
+              final employeeData = await SupabaseAttendanceService.getEmployeeStatus(widget.employeeId);
+              final emp = employeeData['employee'];
+              
+              if (emp != null && emp['shift_start_time'] != null) {
+                await AbsenceService.checkShiftAbsence(
+                  employeeId: widget.employeeId,
+                  branchId: _branchData!['branch_id'],
+                  managerId: emp['branch']?['manager_id'] ?? '',
+                  shiftStartTime: emp['shift_start_time'],
+                  shiftEndTime: emp['shift_end_time'] ?? '17:00',
+                  checkInTime: DateTime.now(),
+                );
+                
+                // Sync daily attendance for payroll
+                final hourlyRate = (emp['hourly_rate'] as num?)?.toDouble() ?? 0.0;
+                // Update hourly rate for live earnings
+                _hourlyRate = hourlyRate;
+                final checkInTimeStr = TimeOfDay.now().format(context);
+                
+                await PayrollService().syncDailyAttendance(
+                  employeeId: widget.employeeId,
+                  date: DateTime.now(),
+                  checkInTime: checkInTimeStr,
+                  checkOutTime: null,
+                  hourlyRate: hourlyRate,
+                );
+              }
+            } catch (e) {
+              print('⚠️ Error in post-check-in tasks: $e');
+              // Continue anyway - check-in was successful
+            }
+          }
+          
+          // ✅ Store attendance_id for check-out
+          _currentAttendanceId = attendanceId;
+          
+          // Check-in successful (online)
+          if (_optimisticCheckInStarted) {
+            // Keep original optimistic start time, just clear loading
+            setState(() {
+              _isLoading = false;
+            });
+          } else {
+            setState(() {
+              _isCheckedIn = true;
+              _checkInTime = DateTime.now();
+              _isLoading = false;
+              _currentEarnings = 0.0;
+            });
+            _startTimer();
+          }
+          await _refreshTodayTotal();
+          
+          // ✅ Start pulse tracking when check-in succeeds
+          if (_branchData != null) {
+            await _pulseService.startTracking(
+              widget.employeeId, 
+              attendanceId: attendanceId,
+            );
+            print('🎯 Started pulse tracking after check-in');
+            
+            // ✅ Start FOREGROUND service to keep app alive in background
+            if (!kIsWeb && Platform.isAndroid) {
+              try {
+                final ForegroundAttendanceService foregroundService = ForegroundAttendanceService.instance;
+                final authData = await AuthService.getLoginData();
+                final employeeName = authData['fullName'] ?? 'الموظف';
+                
+                // ✅ VALIDATE: Check if service actually started
+                final foregroundStarted = await foregroundService.startTracking(
+                  employeeId: widget.employeeId,
+                  employeeName: employeeName,
+                );
+                
+                if (foregroundStarted) {
+                  AppLogger.instance.log('Foreground service started - app will stay alive', tag: 'CheckIn');
+                } else {
+                  AppLogger.instance.log('Failed to start foreground service', level: AppLogger.error, tag: 'CheckIn');
+                  // Show warning to user
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('⚠️ تحذير: خدمة التتبع في الخلفية قد لا تعمل بشكل صحيح'),
+                        backgroundColor: Colors.orange,
+                        duration: Duration(seconds: 5),
+                      ),
+                    );
+                  }
+                }
+                
+                // Also start background pulse service (WorkManager) as backup
+                await WorkManagerPulseService.instance.startPeriodicPulses(
+                  employeeId: widget.employeeId,
+                  attendanceId: attendanceId,
+                  branchId: _branchData!['id'] as String,
+                );
+                AppLogger.instance.log('Background pulse service started (WorkManager)', tag: 'CheckIn');
+                
+                // ✅ Start AlarmManager as additional backup layer
+                final alarmService = AlarmManagerPulseService();
+                final alarmInitialized = await alarmService.initialize();
+                if (alarmInitialized) {
+                  // ✅ Request SCHEDULE_EXACT_ALARM permission (Android 12+)
+                  final hasAlarmPermission = await alarmService.requestExactAlarmPermission();
+                  if (hasAlarmPermission) {
+                    await alarmService.startPeriodicAlarms(widget.employeeId);
+                    AppLogger.instance.log('AlarmManager backup started', tag: 'CheckIn');
+                  } else {
+                    AppLogger.instance.log('AlarmManager permission denied - skipping', level: AppLogger.warning, tag: 'CheckIn');
+                    // Show warning but don't block check-in
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('⚠️ تحذير: لم يتم تفعيل نظام التنبيهات الاحتياطي'),
+                          backgroundColor: Colors.orange,
+                          duration: Duration(seconds: 3),
+                        ),
+                      );
+                    }
+                  }
+                }
+              } catch (e) {
+                print('⚠️ Could not start foreground/background services: $e');
+                // Show detailed error with guidance
+                if (mounted) {
+                  showDialog(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: const Row(
+                        children: [
+                          Icon(Icons.warning_amber, color: Colors.orange, size: 28),
+                          SizedBox(width: 10),
+                          Text('تحذير: خدمة التتبع'),
+                        ],
+                      ),
+                      content: const SingleChildScrollView(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'لم نتمكن من بدء خدمة التتبع في الخلفية بشكل صحيح.',
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                            ),
+                            SizedBox(height: 15),
+                            Text(
+                              'هذا قد يعني:',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            SizedBox(height: 8),
+                            Text('• التتبع قد يتوقف عند تصغير التطبيق'),
+                            Text('• قد لا يتم تسجيل الحضور بدقة'),
+                            SizedBox(height: 15),
+                            Text(
+                              'للحل:',
+                              style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange),
+                            ),
+                            SizedBox(height: 8),
+                            Text('1. افتح الإعدادات → التطبيقات'),
+                            Text('2. ابحث عن "Oldies Workers"'),
+                            Text('3. اضغط على "البطارية"'),
+                            Text('4. اختر "غير محدود" أو "غير محسّن"'),
+                            Text('5. فعّل "السماح بنشاط الخلفية"'),
+                            SizedBox(height: 15),
+                            Text(
+                              '⚠️ يُفضل إعادة تسجيل الحضور بعد تغيير الإعدادات',
+                              style: TextStyle(
+                                color: Colors.red,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('فهمت', style: TextStyle(fontSize: 16)),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+              }
+            }
+          }
+          
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('✓ تم تسجيل الحضور بنجاح'),
+                backgroundColor: AppColors.success,
+                behavior: SnackBarBehavior.floating,
+              ),
             );
             
-            // Sync daily attendance for payroll
-            final hourlyRate = (emp['hourly_rate'] as num?)?.toDouble() ?? 0.0;
-            final checkInTimeStr = TimeOfDay.now().format(context);
-            
-            await PayrollService().syncDailyAttendance(
-              employeeId: widget.employeeId,
-              date: DateTime.now(),
-              checkInTime: checkInTimeStr,
-              checkOutTime: null,
-              hourlyRate: hourlyRate,
-            );
+            // ✅ V2: Show battery optimization guide for problematic devices (first time only)
+            if (!kIsWeb && Platform.isAndroid) {
+              _showBatteryGuideIfNeeded();
+            }
           }
         }
-        
-        // ✅ Store attendance_id for check-out
-        _currentAttendanceId = response['id'];
-        
-        // New check-in successful
-        setState(() {
-          _isCheckedIn = true;
-          _checkInTime = DateTime.now();
-          _isLoading = false;
-        });
-        
-        _startTimer();
-        
-        // ✅ Start pulse tracking when check-in succeeds
-        if (_branchData != null) {
-          await _pulseService.startTracking(widget.employeeId, attendanceId: response['id']);
-          print('🎯 Started pulse tracking after check-in');
-        }
-        
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('✓ تم تسجيل الحضور بنجاح'),
-              backgroundColor: AppColors.success,
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
-        }
-      } else {
-        // Offline mode: Save locally
-        print('📴 Offline mode - saving locally with WiFi: $wifiBSSID');
-        
+      } catch (e) {
+        print('⚠️ Online check-in failed: $e');
+        print('📴 Falling back to offline mode...');
+      }
+      
+      // If online failed, save offline
+      if (!checkInSuccess) {
         if (kIsWeb) {
-          // ❌ Web platform doesn't support full offline mode with SQLite
-          // Show error message
+          // Web requires internet
           throw Exception(
-            'الاتصال بالإنترنت مطلوب لتسجيل الحضور على المتصفح.\n'
-            'يرجى التحقق من اتصالك والمحاولة مرة أخرى.'
+            'فشل تسجيل الحضور.\n'
+            'يرجى التحقق من اتصالك بالإنترنت والمحاولة مرة أخرى.'
           );
         }
         
-        // Mobile: Use SQLite for offline storage
+        // Mobile: Save offline
+        print('📴 Saving check-in offline with WiFi: $wifiBSSID');
         final db = OfflineDatabase.instance;
         
-        // Check if we have cached branch data (means we can work offline)
+        // Check if we have cached branch data
         final hasCachedData = await db.hasCachedBranchData(widget.employeeId);
+        
+        // ✅ Generate a local offline attendance ID
+        final offlineAttendanceId = 'offline_${widget.employeeId}_${DateTime.now().millisecondsSinceEpoch}';
+        print('📴 Generated offline attendance ID: $offlineAttendanceId');
         
         await db.insertPendingCheckin(
           employeeId: widget.employeeId,
@@ -529,26 +1721,40 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           wifiBssid: wifiBSSID,
         );
         
+        // ✅ Save offline attendance ID to SharedPreferences for checkout
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('active_attendance_id', offlineAttendanceId);
+        await prefs.setBool('is_offline_attendance', true);
+        await prefs.setString('offline_checkin_time', DateTime.now().toIso8601String());
+        print('📴 Saved offline attendance state to SharedPreferences');
+        
         // Start sync service if not already running
         syncService.startPeriodicSync();
         
-        // Only show notification if we have cached data (true offline mode)
+        // Show offline notification
         if (hasCachedData) {
           await NotificationService.instance.showOfflineModeNotification();
         }
         
         // تحديث الحالة فوراً
-        setState(() {
-          _isCheckedIn = true;
-          _checkInTime = DateTime.now();
-          _isLoading = false;
-          // ✅ No attendance_id in offline mode
-          _currentAttendanceId = null;
-        });
+        if (_optimisticCheckInStarted) {
+          // Timer already running; just clear loading state
+            setState(() {
+              _isLoading = false;
+              _currentAttendanceId = offlineAttendanceId; // ✅ Store offline ID
+            });
+        } else {
+          setState(() {
+            _isCheckedIn = true;
+            _checkInTime = DateTime.now();
+            _isLoading = false;
+            _currentAttendanceId = offlineAttendanceId; // ✅ Store offline ID
+          });
+          _startTimer();
+        }
+        await _refreshTodayTotal();
         
-        _startTimer();
-        
-        // ✅ Start pulse tracking when check-in succeeds (offline mode, no attendance_id)
+        // ✅ Start pulse tracking when check-in succeeds (offline mode, with offline attendance_id)
         if (_branchData != null) {
           await _pulseService.startTracking(widget.employeeId);
           print('🎯 Started pulse tracking after offline check-in');
@@ -648,12 +1854,59 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
   }
 
   Future<void> _handleCheckOut() async {
+    // ✅ Guard against double-tap
+    if (_isLoading) {
+      print('⚠️ Check-out already in progress, ignoring...');
+      return;
+    }
+    
     setState(() => _isLoading = true);
 
     try {
       print('🚪 Starting check-out process...');
 
-      // Create a simple employee object for validation
+      // ✅ STEP 1: Check for active attendance (local first, then server)
+      String? attendanceId = _currentAttendanceId;
+      Map<String, dynamic>? activeAttendanceRecord;
+      bool isOfflineAttendance = false;
+
+      if (attendanceId == null) {
+        print('🔍 No local attendance_id in memory, checking SharedPreferences...');
+        
+        // ✅ Check SharedPreferences for offline attendance
+        final prefs = await SharedPreferences.getInstance();
+        final savedAttendanceId = prefs.getString('active_attendance_id');
+        isOfflineAttendance = prefs.getBool('is_offline_attendance') ?? false;
+        
+        if (savedAttendanceId != null && savedAttendanceId.isNotEmpty) {
+          attendanceId = savedAttendanceId;
+          print('📱 Found saved attendance_id: $attendanceId (offline: $isOfflineAttendance)');
+        } else {
+          // Try server as last resort
+          print('🌐 Checking server for active attendance...');
+          try {
+            activeAttendanceRecord = await SupabaseAttendanceService.getActiveAttendance(widget.employeeId);
+            if (activeAttendanceRecord != null) {
+              attendanceId = activeAttendanceRecord['id'] as String;
+              print('✅ Found active attendance on server: $attendanceId');
+            }
+          } catch (e) {
+            print('⚠️ Server check failed: $e');
+          }
+        }
+        
+        if (attendanceId == null) {
+          throw Exception('لا يوجد سجل حضور نشط\nيرجى تسجيل الحضور أولاً');
+        }
+      } else {
+        // Check if current attendance is offline
+        final prefs = await SharedPreferences.getInstance();
+        isOfflineAttendance = prefs.getBool('is_offline_attendance') ?? attendanceId.startsWith('offline_');
+      }
+      
+      print('📋 Using attendance_id: $attendanceId (offline: $isOfflineAttendance)');
+
+      // ✅ STEP 2: Now validate geofence (after confirming attendance exists)
       final authData = await AuthService.getLoginData();
       final employee = Employee(
         id: authData['employeeId'] ?? widget.employeeId,
@@ -663,102 +1916,134 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         branch: authData['branch'] ?? 'المركز الرئيسي',
       );
 
-      // Use the new validation method for check-out (GPS only)
+      // Use the new validation method for check-out (WiFi OR GPS)
       final validation = await GeofenceService.validateForCheckOut(employee);
 
       if (!validation.isValid) {
         throw Exception(validation.message);
       }
 
-      // Ensure we have position for check-out
-      if (validation.position == null) {
-        throw Exception('خطأ في تحديد الموقع');
+      // ✅ SIMPLIFIED: Get position from validation or use defaults
+      double latitude = 0.0;
+      double longitude = 0.0;
+      
+      if (validation.position != null) {
+        latitude = validation.position!.latitude;
+        longitude = validation.position!.longitude;
+        print('📍 Using validated position: $latitude, $longitude');
+      } else {
+        // WiFi validation passed - use branch location (no need to wait for GPS)
+        print('📍 WiFi validated - using branch location');
+        if (_branchData != null) {
+          latitude = _branchData!['latitude']?.toDouble() ?? 0.0;
+          longitude = _branchData!['longitude']?.toDouble() ?? 0.0;
+          print('📍 Using branch location: $latitude, $longitude');
+        }
       }
 
-      final position = validation.position!;
+      // Try online mode first, fallback to offline if it fails
+      bool checkOutSuccess = false;
 
-      // Check internet connection
-      final syncService = SyncService.instance;
-      final hasInternet = await syncService.hasInternet();
+      // Try online mode first
+      try {
+        print('🌐 Attempting online check-out');
 
-      if (hasInternet) {
-        // Online mode: Send to Supabase directly
-        // ✅ Use stored attendance_id if available, otherwise fetch
-        String? attendanceId = _currentAttendanceId;
-        Map<String, dynamic>? activeAttendanceRecord;
-        
-        if (attendanceId == null) {
-          activeAttendanceRecord = await SupabaseAttendanceService.getActiveAttendance(widget.employeeId);
-          
-          if (activeAttendanceRecord == null) {
-            throw Exception('لا يوجد سجل حضور نشط\nيرجى تسجيل الحضور أولاً');
+        // Get WiFi BSSID if available
+        String? wifiBSSID = validation.bssid;
+        if (wifiBSSID == null && !kIsWeb) {
+          try {
+            wifiBSSID = await WiFiService.getCurrentWifiBssidValidated();
+            print('📶 Got WiFi BSSID for check-out: $wifiBSSID');
+          } catch (e) {
+            print('⚠️ Could not get WiFi BSSID: $e');
           }
-          
-          attendanceId = activeAttendanceRecord['id'] as String;
         }
         
         final success = await SupabaseAttendanceService.checkOut(
           attendanceId: attendanceId,
-          latitude: position.latitude,
-          longitude: position.longitude,
+          latitude: latitude,
+          longitude: longitude,
+          wifiBssid: wifiBSSID,
         );
 
-        if (!success) {
-          throw Exception('فشل تسجيل الانصراف');
+        if (success) {
+          checkOutSuccess = true;
+          print('✅ Online check-out successful');
+          
+          // Update daily attendance with check-out time
+          try {
+            final employeeData = await SupabaseAttendanceService.getEmployeeStatus(widget.employeeId);
+            final emp = employeeData['employee'];
+            
+            if (activeAttendanceRecord == null) {
+              activeAttendanceRecord = await SupabaseAttendanceService.getActiveAttendance(widget.employeeId);
+            }
+            
+            if (emp != null && emp['hourly_rate'] != null && activeAttendanceRecord != null) {
+              final hourlyRate = (emp['hourly_rate'] as num?)?.toDouble() ?? 0.0;
+              final checkOutTimeStr = TimeOfDay.now().format(context);
+              
+              // Get check-in time from active attendance (with safe parsing)
+              DateTime? checkInDateTime;
+              try {
+                checkInDateTime = DateTime.parse(activeAttendanceRecord['check_in_time'].toString());
+              } catch (e) {
+                checkInDateTime = null;
+              }
+              final checkInTimeStr = checkInDateTime != null 
+                  ? TimeOfDay.fromDateTime(checkInDateTime).format(context) 
+                  : TimeOfDay.now().format(context);
+              
+              await PayrollService().syncDailyAttendance(
+                employeeId: widget.employeeId,
+                date: DateTime.now(),
+                checkInTime: checkInTimeStr,
+                checkOutTime: checkOutTimeStr,
+                hourlyRate: hourlyRate,
+              );
+            }
+          } catch (e) {
+            print('⚠️ Error in post-check-out tasks: $e');
+            // Continue anyway - check-out was successful
+          }
         }
-
-        // Update daily attendance with check-out time
-        final employeeData = await SupabaseAttendanceService.getEmployeeStatus(widget.employeeId);
-        final emp = employeeData['employee'];
+      } catch (e) {
+        print('⚠️ Online check-out failed: $e');
+        print('📴 Falling back to offline mode...');
+      }
+      
+      // If online failed, save offline
+      if (!checkOutSuccess) {
+        if (kIsWeb) {
+          // Web requires internet
+          throw Exception(
+            'فشل تسجيل الانصراف.\n'
+            'يرجى التحقق من اتصالك بالإنترنت والمحاولة مرة أخرى.'
+          );
+        }
         
-        if (emp != null && emp['hourly_rate'] != null && activeAttendanceRecord != null) {
-          final hourlyRate = (emp['hourly_rate'] as num?)?.toDouble() ?? 0.0;
-          final checkOutTimeStr = TimeOfDay.now().format(context);
-          
-          // Get check-in time from active attendance
-          final checkInDateTime = DateTime.parse(activeAttendanceRecord['check_in_time']);
-          final checkInTimeStr = TimeOfDay.fromDateTime(checkInDateTime).format(context);
-          
-          await PayrollService().syncDailyAttendance(
-            employeeId: widget.employeeId,
-            date: DateTime.now(),
-            checkInTime: checkInTimeStr,
-            checkOutTime: checkOutTimeStr,
-            hourlyRate: hourlyRate,
-          );
-        }
-
-        // New check-out successful
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('✓ تم تسجيل الانصراف بنجاح'),
-              backgroundColor: AppColors.success,
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
-        }
-      } else {
-        // Offline mode: Save locally
+        // Mobile: Save offline
+        print('📴 Saving check-out offline');
         final db = OfflineDatabase.instance;
 
-        // Check if we have cached branch data (means we can work offline)
+        // Check if we have cached branch data
         final hasCachedData = await db.hasCachedBranchData(widget.employeeId);
 
         // For checkout we need attendance_id, but in offline mode we might not have it
         // So we'll save with a placeholder and let the sync service handle it
         await db.insertPendingCheckout(
           employeeId: widget.employeeId,
-          attendanceId: null, // Will be resolved during sync
+          attendanceId: _currentAttendanceId, // Use current if available
           timestamp: DateTime.now(),
-          latitude: position.latitude,
-          longitude: position.longitude,
+          latitude: latitude,
+          longitude: longitude,
         );
 
         // Start sync service if not already running
+        final syncService = SyncService.instance;
         syncService.startPeriodicSync();
 
-        // Only show notification if we have cached data (true offline mode)
+        // Show offline notification
         if (hasCachedData) {
           await NotificationService.instance.showOfflineModeNotification();
         }
@@ -777,6 +2062,17 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
             ),
           );
         }
+      } else {
+        // Online check-out successful
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('✓ تم تسجيل الانصراف بنجاح'),
+              backgroundColor: AppColors.success,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
       }
 
       setState(() {
@@ -785,16 +2081,61 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         _elapsedTime = '00:00:00';
         _isLoading = false;
         _currentAttendanceId = null; // ✅ Clear attendance_id
+        _currentEarnings = 0.0;
       });
+
+      // ✅ Clear attendance state from SharedPreferences
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove('active_attendance_id');
+        await prefs.remove('is_offline_attendance');
+        await prefs.remove('offline_checkin_time');
+        print('✅ Cleared attendance state from SharedPreferences');
+      } catch (e) {
+        print('⚠️ Error clearing SharedPreferences: $e');
+      }
 
       _timer?.cancel();
 
       // ✅ Stop pulse tracking when check-out
       _pulseService.stopTracking();
       print('🛑 Stopped pulse tracking after check-out');
+      
+      // ✅ Stop foreground service
+      if (!kIsWeb && Platform.isAndroid) {
+        try {
+          final stopped = await ForegroundAttendanceService.instance.stopTracking();
+          if (stopped) {
+            AppLogger.instance.log('Foreground attendance service stopped', tag: 'CheckOut');
+          }
+        } catch (e) {
+          AppLogger.instance.log('Could not stop foreground service', level: AppLogger.warning, tag: 'CheckOut', error: e);
+        }
+      }
+      
+      // ✅ Stop background pulse service (WorkManager)
+      if (!kIsWeb && Platform.isAndroid) {
+        try {
+          await WorkManagerPulseService.instance.stopPeriodicPulses();
+          AppLogger.instance.log('Background pulse service stopped (WorkManager)', tag: 'CheckOut');
+        } catch (e) {
+          AppLogger.instance.log('Could not stop background pulse service', level: AppLogger.warning, tag: 'CheckOut', error: e);
+        }
+        
+        // ✅ Stop AlarmManager backup
+        try {
+          await AlarmManagerPulseService().stopPeriodicAlarms();
+          AppLogger.instance.log('AlarmManager backup stopped', tag: 'CheckOut');
+        } catch (e) {
+          AppLogger.instance.log('Could not stop AlarmManager', level: AppLogger.warning, tag: 'CheckOut', error: e);
+        }
+      }
 
       // Stop geofence monitoring on checkout
       GeofenceService.instance.stopMonitoring();
+
+      // Refresh today's totals after checkout
+      await _refreshTodayTotal();
 
     } catch (e) {
       setState(() => _isLoading = false);
@@ -853,10 +2194,12 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
     setState(() => _isLoading = true);
 
     try {
+      print('🔍 Submitting break request for employee: ${widget.employeeId}, duration: $duration minutes');
       await RequestsApiService.submitBreakRequest(
         employeeId: widget.employeeId,
         durationMinutes: duration,
       );
+      print('✅ Break request submitted successfully');
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -868,6 +2211,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         );
       }
     } catch (e) {
+      print('❌ Break request error: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -932,25 +2276,8 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
   }
 
   void _showAttendanceRequestDialog() async {
-    // تحقق من وجود طلب حضور لنفس اليوم
+    // Skip check for existing requests - directly show dialog
     final today = DateTime.now();
-    final requests = await RequestsApiService.fetchAttendanceRequests(widget.employeeId);
-    final hasTodayRequest = requests.any((r) =>
-      r.requestedTime.year == today.year &&
-      r.requestedTime.month == today.month &&
-      r.requestedTime.day == today.day &&
-      r.status == RequestStatus.pending
-    );
-    if (hasTodayRequest) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('لا يمكنك إرسال أكثر من طلب حضور في نفس اليوم'),
-          backgroundColor: AppColors.error,
-        ),
-      );
-      return;
-    }
-
     final reasonController = TextEditingController();
     DateTime? selectedTime = DateTime.now();
 
@@ -1218,6 +2545,18 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         title: const Text('الصفحة الرئيسية'),
         backgroundColor: AppColors.primaryOrange,
         actions: [
+          // Debug/Diagnostic button
+          IconButton(
+            icon: const Icon(Icons.bug_report),
+            onPressed: () => _showDiagnosticDialog(),
+            tooltip: 'تشخيص المشاكل',
+          ),
+          // Help button for device-specific settings
+          IconButton(
+            icon: const Icon(Icons.help_outline),
+            onPressed: () => DeviceCompatibilityService.instance.showPermissionGuideDialog(context),
+            tooltip: 'دليل الإعدادات',
+          ),
           // Download/Sync Button
           if (_isSyncing)
             const Padding(
@@ -1312,7 +2651,96 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
                 ),
               ),
               
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
+              
+              // ✅ Enhanced Service Status Indicator (only show when checked in)
+              if (_isCheckedIn && !kIsWeb && Platform.isAndroid)
+                FutureBuilder<Map<String, dynamic>>(
+                  future: _getServicesStatus(),
+                  builder: (context, snapshot) {
+                    final status = snapshot.data ?? {};
+                    final foregroundActive = status['foreground'] ?? false;
+                    final workManagerActive = status['workmanager'] ?? false;
+                    final alarmManagerActive = status['alarmmanager'] ?? false;
+                    final activeCount = [foregroundActive, workManagerActive, alarmManagerActive].where((x) => x).length;
+                    
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 16),
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: activeCount >= 2
+                              ? [Colors.green.withOpacity(0.1), Colors.green.withOpacity(0.05)]
+                              : [Colors.orange.withOpacity(0.1), Colors.orange.withOpacity(0.05)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: activeCount >= 2 ? Colors.green : Colors.orange,
+                          width: 2,
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
+                                activeCount >= 2 ? Icons.shield_outlined : Icons.warning_amber,
+                                color: activeCount >= 2 ? Colors.green : Colors.orange,
+                                size: 24,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      activeCount >= 2 ? 'التتبع نشط' : 'تحذير',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                        color: activeCount >= 2 ? Colors.green[900] : Colors.orange[900],
+                                      ),
+                                    ),
+                                    Text(
+                                      '$activeCount من 3 آليات تعمل',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: (activeCount >= 2 ? Colors.green : Colors.orange)[700],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          const Divider(height: 1),
+                          const SizedBox(height: 12),
+                          _ServiceStatusRow(
+                            icon: Icons.notifications_active,
+                            label: 'خدمة المقدمة',
+                            isActive: foregroundActive,
+                          ),
+                          const SizedBox(height: 8),
+                          _ServiceStatusRow(
+                            icon: Icons.work_outline,
+                            label: 'مدير المهام',
+                            isActive: workManagerActive,
+                          ),
+                          const SizedBox(height: 8),
+                          _ServiceStatusRow(
+                            icon: Icons.alarm,
+                            label: 'المنبهات',
+                            isActive: alarmManagerActive,
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
               
               // Status Card with Timer
               Container(
@@ -1519,30 +2947,85 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
                         ),
                       ),
                       TextButton(
-                        onPressed: () async {
+                        onPressed: _isSyncing ? null : () async {
                           // Manual sync
-                          final syncService = SyncService.instance;
-                          final result = await syncService.syncPendingData();
+                          setState(() => _isSyncing = true);
                           
-                          if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(result['message'] ?? 'تم'),
-                                backgroundColor: result['success'] 
-                                    ? AppColors.success 
-                                    : AppColors.error,
-                              ),
-                            );
-                            _loadPendingCount();
+                          try {
+                            final syncService = SyncService.instance;
+                            final hasInternet = await syncService.hasInternet();
+                            
+                            if (!hasInternet) {
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('❌ لا يوجد اتصال بالإنترنت'),
+                                    backgroundColor: AppColors.error,
+                                  ),
+                                );
+                              }
+                              return;
+                            }
+                            
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('🌐 جاري تحميل البيانات...'),
+                                  duration: Duration(seconds: 1),
+                                  backgroundColor: Colors.blue,
+                                ),
+                              );
+                            }
+                            
+                            final result = await syncService.syncPendingData();
+                            
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    result['success'] == true && result['synced'] > 0
+                                        ? '✅ تم الرفع بالكامل - ${result['synced']} سجل'
+                                        : (result['message'] ?? 'تم'),
+                                  ),
+                                  backgroundColor: result['success'] 
+                                      ? AppColors.success 
+                                      : AppColors.error,
+                                  duration: const Duration(seconds: 3),
+                                ),
+                              );
+                              _loadPendingCount();
+                            }
+                          } catch (e) {
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('❌ خطأ في الرفع: $e'),
+                                  backgroundColor: AppColors.error,
+                                ),
+                              );
+                            }
+                          } finally {
+                            if (mounted) {
+                              setState(() => _isSyncing = false);
+                            }
                           }
                         },
-                        child: const Text(
-                          'رفع الآن',
-                          style: TextStyle(
-                            color: AppColors.warning,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
+                        child: _isSyncing
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(AppColors.warning),
+                                ),
+                              )
+                            : const Text(
+                                'رفع الآن',
+                                style: TextStyle(
+                                  color: AppColors.warning,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
                       ),
                     ],
                   ),
@@ -1639,6 +3122,104 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Helper widget for permission explanation items
+class _PermissionItem extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String description;
+
+  const _PermissionItem({
+    required this.icon,
+    required this.title,
+    required this.description,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, color: AppColors.primaryOrange, size: 24),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                description,
+                style: const TextStyle(
+                  fontSize: 14,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Service status row widget
+class _ServiceStatusRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool isActive;
+
+  const _ServiceStatusRow({
+    required this.icon,
+    required this.label,
+    required this.isActive,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(
+          icon,
+          size: 18,
+          color: isActive ? Colors.green : Colors.grey,
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 13,
+              color: isActive ? Colors.green[900] : Colors.grey[600],
+              fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
+            ),
+          ),
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: isActive ? Colors.green : Colors.grey[300],
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            isActive ? 'نشط' : 'متوقف',
+            style: TextStyle(
+              fontSize: 11,
+              color: isActive ? Colors.white : Colors.grey[700],
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

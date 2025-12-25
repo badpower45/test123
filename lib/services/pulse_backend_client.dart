@@ -1,41 +1,55 @@
-import 'dart:convert';
-
-import 'package:http/http.dart' as http;
-
-import '../constants/api_endpoints.dart';
 import '../models/pulse.dart';
+import 'supabase_function_client.dart';
+
+typedef PulseSender = Future<bool> Function(Pulse pulse);
+typedef PulseBulkSender = Future<bool> Function(List<Pulse> pulses);
 
 class PulseBackendClient {
   PulseBackendClient._();
+
+  static PulseSender? _singleOverride;
+  static PulseBulkSender? _bulkOverride;
+
+  static void setTestingOverrides({
+    PulseSender? singleSender,
+    PulseBulkSender? bulkSender,
+  }) {
+    _singleOverride = singleSender;
+    _bulkOverride = bulkSender;
+  }
+
+  static void resetTestingOverrides() {
+    _singleOverride = null;
+    _bulkOverride = null;
+  }
 
   static Future<void> initialize() async {
     // No initialization required for the REST backend.
   }
 
   static Future<bool> sendPulse(Pulse pulse) async {
-    try {
-      final response = await http.post(
-        Uri.parse(pulseEndpoint),
-        headers: const {'Content-Type': 'application/json'},
-        body: jsonEncode(pulse.toApiPayload()),
-      );
-      return response.statusCode >= 200 && response.statusCode < 300;
-    } catch (_) {
-      return false;
+    if (_singleOverride != null) {
+      return _singleOverride!(pulse);
     }
+    return sendBulk([pulse]);
   }
 
   static Future<bool> sendBulk(List<Pulse> pulses) async {
     if (pulses.isEmpty) {
       return true;
     }
-    var allSent = true;
-    for (final pulse in pulses) {
-      final sent = await sendPulse(pulse);
-      if (!sent) {
-        allSent = false;
-      }
+    if (_bulkOverride != null) {
+      return _bulkOverride!(pulses);
     }
-    return allSent;
+    try {
+      final payload = pulses.map((pulse) => pulse.toApiPayload()).toList();
+      final response = await SupabaseFunctionClient.post('sync-pulses', {
+        'pulses': payload,
+      });
+      final failedCount = ((response ?? {})['failed'] ?? 0) as int;
+      return failedCount == 0;
+    } catch (_) {
+      return false;
+    }
   }
 }

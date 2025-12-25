@@ -44,17 +44,51 @@ class AttendanceRequest extends HiveObject {
   bool get isRejected => status == RequestStatus.rejected;
 
   factory AttendanceRequest.fromJson(Map<String, dynamic> json) {
+    // ✅ FIX: Safe date parsing with null checks
+    DateTime requestedTime;
+    DateTime createdAt;
+    DateTime? reviewedAt;
+    
+    try {
+      final requestedTimeStr = (json['requestedTime'] ?? json['requested_time'])?.toString();
+      if (requestedTimeStr == null || requestedTimeStr.isEmpty) {
+        requestedTime = DateTime.now();
+      } else {
+        requestedTime = DateTime.parse(requestedTimeStr);
+      }
+    } catch (e) {
+      requestedTime = DateTime.now();
+    }
+    
+    try {
+      final createdAtStr = (json['createdAt'] ?? json['created_at'])?.toString();
+      if (createdAtStr == null || createdAtStr.isEmpty) {
+        createdAt = DateTime.now();
+      } else {
+        createdAt = DateTime.parse(createdAtStr);
+      }
+    } catch (e) {
+      createdAt = DateTime.now();
+    }
+    
+    try {
+      final reviewedAtStr = (json['reviewedAt'] ?? json['reviewed_at'])?.toString();
+      if (reviewedAtStr != null && reviewedAtStr.isNotEmpty) {
+        reviewedAt = DateTime.parse(reviewedAtStr);
+      }
+    } catch (e) {
+      reviewedAt = null;
+    }
+    
     return AttendanceRequest(
       id: (json['id'] ?? '') as String,
       employeeId: (json['employeeId'] ?? json['employee_id'] ?? '') as String,
-      requestedTime: DateTime.parse((json['requestedTime'] ?? json['requested_time']) as String),
+      requestedTime: requestedTime,
       reason: (json['reason'] ?? '') as String,
       requestType: _mapRequestType(json['requestType'] ?? json['request_type']),
       status: _mapStatus(json['status'] as String? ?? ''),
-      createdAt: DateTime.parse((json['createdAt'] ?? json['created_at']) as String),
-      reviewedAt: (json['reviewedAt'] ?? json['reviewed_at']) != null
-          ? DateTime.parse((json['reviewedAt'] ?? json['reviewed_at']) as String)
-          : null,
+      createdAt: createdAt,
+      reviewedAt: reviewedAt,
       reviewedBy: (json['reviewedBy'] ?? json['reviewed_by']) as String?,
       rejectionReason: (json['reviewNotes'] ?? json['rejection_reason']) as String?,
     );

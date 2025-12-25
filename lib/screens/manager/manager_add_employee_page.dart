@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
 import '../../theme/app_colors.dart';
-import '../../constants/api_endpoints.dart';
 import '../../models/employee.dart';
+import '../../services/supabase_branch_service.dart';
+import '../../services/supabase_auth_service.dart';
 
 class ManagerAddEmployeePage extends StatefulWidget {
   final String managerId;
@@ -21,6 +20,7 @@ class ManagerAddEmployeePage extends StatefulWidget {
 
 class _ManagerAddEmployeePageState extends State<ManagerAddEmployeePage> {
   final _formKey = GlobalKey<FormState>();
+  final _idController = TextEditingController();
   final _nameController = TextEditingController();
   final _pinController = TextEditingController();
   final _hourlyRateController = TextEditingController();
@@ -36,6 +36,7 @@ class _ManagerAddEmployeePageState extends State<ManagerAddEmployeePage> {
 
   @override
   void dispose() {
+    _idController.dispose();
     _nameController.dispose();
     _pinController.dispose();
     _hourlyRateController.dispose();
@@ -74,62 +75,92 @@ class _ManagerAddEmployeePageState extends State<ManagerAddEmployeePage> {
     setState(() => _loading = true);
 
     try {
-      // Generate employee ID from name and timestamp
-      final timestamp = DateTime.now().millisecondsSinceEpoch.toString().substring(7);
-      final namePart = _nameController.text.trim().replaceAll(' ', '_').substring(0, 
-        _nameController.text.trim().replaceAll(' ', '_').length > 10 ? 10 : _nameController.text.trim().replaceAll(' ', '_').length
-      );
-      final generatedId = '${namePart}_$timestamp';
-      
-      final response = await http.post(
-        Uri.parse('$apiBaseUrl/employees'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'id': generatedId, // Generate unique ID
-          'fullName': _nameController.text.trim(),
-          'pin': _pinController.text.trim(),
-          'role': _selectedRole.name,
-          'branch': widget.managerBranch,
-          'hourlyRate': double.tryParse(_hourlyRateController.text) ?? 0,
-          'shiftStartTime': _shiftStartTime != null 
-              ? '${_shiftStartTime!.hour.toString().padLeft(2, '0')}:${_shiftStartTime!.minute.toString().padLeft(2, '0')}'
-              : null,
-          'shiftEndTime': _shiftEndTime != null
-              ? '${_shiftEndTime!.hour.toString().padLeft(2, '0')}:${_shiftEndTime!.minute.toString().padLeft(2, '0')}'
-              : null,
-          'address': _addressController.text.trim().isNotEmpty 
-              ? _addressController.text.trim() 
-              : null,
-          'birthDate': _birthDate?.toIso8601String(),
-          'email': _emailController.text.trim().isNotEmpty 
-              ? _emailController.text.trim() 
-              : null,
-          'phone': _phoneController.text.trim().isNotEmpty 
-              ? _phoneController.text.trim() 
-              : null,
-        }),
-      );
-
-      if (!mounted) return;
-
-      if (response.statusCode == 201 || response.statusCode == 200) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('تم إضافة الموظف بنجاح'),
-            backgroundColor: AppColors.success,
-          ),
-        );
-        Navigator.pop(context, true); // Return true to indicate success
-      } else {
-        final error = jsonDecode(response.body)['error'] ?? 'فشل إضافة الموظف';
-        throw Exception(error);
+      // Get branch ID from branch name
+      String? branchId;
+      try {
+        final branchData = await SupabaseBranchService.getBranchByName(widget.managerBranch);
+        branchId = branchData?['id'] as String?;
+        print('🔍 [Manager Add Employee] Branch: ${widget.managerBranch}, Branch ID: $branchId');
+      } catch (e) {
+        print('⚠️ [Manager Add Employee] Could not get branch ID: $e');
+        // Continue with branch name as fallback
       }
+      
+      // Use employee ID from input field (same as owner)
+      final employeeId = _idController.text.trim();
+      
+      // Prepare employee data (same format as owner)
+      final employeeData = <String, dynamic>{
+        'id': employeeId,
+        'full_name': _nameController.text.trim(),
+        'pin': _pinController.text.trim(),
+        'role': _selectedRole.name, // staff, monitor, or hr only
+        'branch_id': branchId, // Send branchId (UUID) if available
+        'branch': widget.managerBranch, // Also send branch name
+        'hourly_rate': double.tryParse(_hourlyRateController.text) ?? 0,
+        'is_active': true,
+      };
+      
+      // Add shift times if provided
+      if (_shiftStartTime != null) {
+        employeeData['shift_start_time'] = '${_shiftStartTime!.hour.toString().padLeft(2, '0')}:${_shiftStartTime!.minute.toString().padLeft(2, '0')}';
+      }
+      if (_shiftEndTime != null) {
+        employeeData['shift_end_time'] = '${_shiftEndTime!.hour.toString().padLeft(2, '0')}:${_shiftEndTime!.minute.toString().padLeft(2, '0')}';
+      }
+      
+      // Add personal information if provided
+      if (_addressController.text.trim().isNotEmpty) {
+        employeeData['address'] = _addressController.text.trim();
+      }
+      if (_birthDate != null) {
+        employeeData['birth_date'] = _birthDate!.toIso8601String();
+      }
+      if (_emailController.text.trim().isNotEmpty) {
+        employeeData['email'] = _emailController.text.trim();
+      }
+      if (_phoneController.text.trim().isNotEmpty) {
+        employeeData['phone'] = _phoneController.text.trim();
+      }
+      
+      // Use SupabaseAuthService.createEmployee (same as owner)
+      final employee = await SupabaseAuthService.createEmployee(employeeData);
+      
+      if (!mounted) return;
+      
+      if (employee == null) {
+        throw Exception('فشل في إضافة الموظف');
+      }
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('✓ تم إضافة الموظف بنجاح'),
+          backgroundColor: AppColors.success,
+        ),
+      );
+      Navigator.pop(context, true); // Return true to indicate success
     } catch (e) {
       if (!mounted) return;
+      
+      String errorMessage = 'خطأ في إضافة الموظف';
+      final errorStr = e.toString();
+      
+      if (errorStr.contains('duplicate key') || errorStr.contains('23505')) {
+        errorMessage = 'معرف الموظف مستخدم بالفعل';
+      } else if (errorStr.contains('violates foreign key') || errorStr.contains('23503')) {
+        errorMessage = 'الفرع المحدد غير موجود';
+      } else {
+        errorMessage = errorStr.replaceFirst('Exception: ', '');
+        if (errorMessage.isEmpty || errorMessage == 'null') {
+          errorMessage = 'فشل في إضافة الموظف. يرجى المحاولة مرة أخرى.';
+        }
+      }
+      
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('خطأ: ${e.toString()}'),
+          content: Text(errorMessage),
           backgroundColor: AppColors.error,
+          duration: const Duration(seconds: 4),
         ),
       );
     } finally {
@@ -158,13 +189,20 @@ class _ManagerAddEmployeePageState extends State<ManagerAddEmployeePage> {
         ),
         iconTheme: const IconThemeData(color: Colors.white),
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 20,
+            bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+          ),
+          child: Form(
+            key: _formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
               // Info Card
               Container(
                 padding: const EdgeInsets.all(16),
@@ -194,6 +232,22 @@ class _ManagerAddEmployeePageState extends State<ManagerAddEmployeePage> {
 
               // Basic Information Section
               _buildSectionTitle('المعلومات الأساسية'),
+              const SizedBox(height: 16),
+
+              TextFormField(
+                controller: _idController,
+                decoration: _buildInputDecoration(
+                  label: 'معرف الموظف',
+                  icon: Icons.badge,
+                ),
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return 'الرجاء إدخال معرف الموظف';
+                  }
+                  return null;
+                },
+              ),
+
               const SizedBox(height: 16),
 
               TextFormField(
@@ -296,21 +350,27 @@ class _ManagerAddEmployeePageState extends State<ManagerAddEmployeePage> {
                   ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(
-                        _shiftStartTime == null
-                            ? 'اختر وقت بداية الشيفت'
-                            : _shiftStartTime!.format(context),
-                        style: TextStyle(
-                          color: _shiftStartTime == null
-                              ? Colors.grey.shade600
-                              : AppColors.textPrimary,
+                      Expanded(
+                        child: Text(
+                          _shiftStartTime == null
+                              ? 'اختر وقت بداية الشيفت'
+                              : _shiftStartTime!.format(context),
+                          style: TextStyle(
+                            color: _shiftStartTime == null
+                                ? Colors.grey.shade600
+                                : AppColors.textPrimary,
+                          ),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
                       if (_shiftStartTime != null)
                         IconButton(
                           icon: const Icon(Icons.clear, size: 20),
                           onPressed: () => setState(() => _shiftStartTime = null),
+                          constraints: const BoxConstraints(),
+                          padding: const EdgeInsets.all(8),
                         )
                       else
                         const Icon(Icons.schedule, size: 20),
@@ -339,21 +399,27 @@ class _ManagerAddEmployeePageState extends State<ManagerAddEmployeePage> {
                   ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(
-                        _shiftEndTime == null
-                            ? 'اختر وقت نهاية الشيفت'
-                            : _shiftEndTime!.format(context),
-                        style: TextStyle(
-                          color: _shiftEndTime == null
-                              ? Colors.grey.shade600
-                              : AppColors.textPrimary,
+                      Expanded(
+                        child: Text(
+                          _shiftEndTime == null
+                              ? 'اختر وقت نهاية الشيفت'
+                              : _shiftEndTime!.format(context),
+                          style: TextStyle(
+                            color: _shiftEndTime == null
+                                ? Colors.grey.shade600
+                                : AppColors.textPrimary,
+                          ),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
                       if (_shiftEndTime != null)
                         IconButton(
                           icon: const Icon(Icons.clear, size: 20),
                           onPressed: () => setState(() => _shiftEndTime = null),
+                          constraints: const BoxConstraints(),
+                          padding: const EdgeInsets.all(8),
                         )
                       else
                         const Icon(Icons.schedule, size: 20),
@@ -388,15 +454,19 @@ class _ManagerAddEmployeePageState extends State<ManagerAddEmployeePage> {
                   ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(
-                        _birthDate == null
-                            ? 'اختر تاريخ الميلاد'
-                            : _formatDate(_birthDate!),
-                        style: TextStyle(
-                          color: _birthDate == null
-                              ? Colors.grey.shade600
-                              : AppColors.textPrimary,
+                      Expanded(
+                        child: Text(
+                          _birthDate == null
+                              ? 'اختر تاريخ الميلاد'
+                              : _formatDate(_birthDate!),
+                          style: TextStyle(
+                            color: _birthDate == null
+                                ? Colors.grey.shade600
+                                : AppColors.textPrimary,
+                          ),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
                       const Icon(Icons.calendar_today, size: 20),
@@ -470,6 +540,7 @@ class _ManagerAddEmployeePageState extends State<ManagerAddEmployeePage> {
                           ),
                         )
                       : const Row(
+                          mainAxisSize: MainAxisSize.min,
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             Icon(Icons.person_add, size: 24),
@@ -486,8 +557,9 @@ class _ManagerAddEmployeePageState extends State<ManagerAddEmployeePage> {
                 ),
               ),
 
-              const SizedBox(height: 24),
-            ],
+              const SizedBox(height: 32),
+              ],
+            ),
           ),
         ),
       ),

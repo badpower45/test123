@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:geolocator/geolocator.dart';
 
@@ -78,15 +79,33 @@ class LocalGeofenceService {
         return null;
       }
 
-      // Get current position
+      // Fast path: last known location (helps on older devices)
+      try {
+        final lastPos = await Geolocator.getLastKnownPosition();
+        if (lastPos != null) {
+          return lastPos;
+        }
+      } catch (_) {}
+
+      // Get current position with medium accuracy, longer timeout
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
+        desiredAccuracy: LocationAccuracy.medium,
+        forceAndroidLocationManager: false,
+        timeLimit: const Duration(seconds: 25),
+      ).timeout(
+        const Duration(seconds: 27),
+        onTimeout: () => throw TimeoutException('Location timeout'),
       );
 
       return position;
     } catch (e) {
       print('❌ Error getting current location: $e');
-      return null;
+      // Final fallback: try last known once more
+      try {
+        return await Geolocator.getLastKnownPosition();
+      } catch (_) {
+        return null;
+      }
     }
   }
 

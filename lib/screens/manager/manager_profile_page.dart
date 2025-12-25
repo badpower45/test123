@@ -36,8 +36,20 @@ class _ManagerProfilePageState extends State<ManagerProfilePage> {
       final employeeData = data['employee'];
       
       if (employeeData != null) {
-        // Extract branch name
-        _branchName = employeeData['branch']?['name'] ?? 'غير محدد';
+        // Extract branch name - handle both String and Map formats
+        final branchData = employeeData['branch'];
+        if (branchData is String) {
+          _branchName = branchData;
+        } else if (branchData is Map<String, dynamic>) {
+          _branchName = branchData['name'] as String?;
+        } else {
+          // Try branches object
+          final branchesData = employeeData['branches'];
+          if (branchesData is Map<String, dynamic>) {
+            _branchName = branchesData['name'] as String?;
+          }
+        }
+        _branchName ??= 'غير محدد';
         
         // Get from local cache (for other fields)
         final emp = await EmployeeRepository.findById(widget.managerId);

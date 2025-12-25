@@ -116,27 +116,46 @@ class _OwnerEmployeesScreenState extends State<OwnerEmployeesScreen> {
 
     if (confirmed != true) return;
 
+    // Show loading indicator
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
+
     try {
+      // Use Supabase directly to delete employee
       final success = await SupabaseAuthService.deleteEmployee(employee.id);
-      
-      if (!success) {
-        throw Exception('فشل في حذف الموظف');
-      }
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('✓ تم حذف الموظف بنجاح'),
-          backgroundColor: AppColors.success,
-        ),
-      );
-      _loadEmployees();
+      Navigator.pop(context); // Close loading dialog
+
+      if (success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✓ تم حذف الموظف بنجاح'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+        _loadEmployees();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('فشل في حذف الموظف. قد يكون هناك سجلات مرتبطة به.'),
+            backgroundColor: AppColors.error,
+            duration: Duration(seconds: 5),
+          ),
+        );
+      }
     } catch (e) {
       if (!mounted) return;
+      Navigator.pop(context); // Close loading dialog
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('خطأ: $e'),
+          content: Text('خطأ: ${e.toString().replaceFirst('Exception: ', '')}'),
           backgroundColor: AppColors.error,
+          duration: const Duration(seconds: 5),
         ),
       );
     }

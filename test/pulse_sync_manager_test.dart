@@ -5,13 +5,14 @@ import 'package:hive/hive.dart';
 
 import 'package:oldies_workers_app/models/pulse.dart';
 import 'package:oldies_workers_app/models/pulse_log_entry.dart';
-// Removed unused import: 'package:oldies_workers_app/services/pulse_backend_client.dart';
+import 'package:oldies_workers_app/services/pulse_backend_client.dart';
 import 'package:oldies_workers_app/services/pulse_sync_manager.dart';
 
 void main() {
   late Directory tempDir;
   Pulse? lastSinglePulse;
   List<Pulse>? lastBulkPayload;
+  var bulkShouldSucceed = true;
 
   setUp(() async {
     tempDir = await Directory.systemTemp.createTemp('oldies_pulse_test');
@@ -20,14 +21,24 @@ void main() {
     registerPulseLogEntryAdapter();
     lastSinglePulse = null;
     lastBulkPayload = null;
-        // Removed: PulseBackendClient.setTestingOverrides (method does not exist)
+    bulkShouldSucceed = true;
+    PulseBackendClient.setTestingOverrides(
+      singleSender: (pulse) async {
+        lastSinglePulse = pulse;
+        return true;
+      },
+      bulkSender: (pulses) async {
+        lastBulkPayload = pulses;
+        return bulkShouldSucceed;
+      },
+    );
   });
 
   tearDown(() async {
     await Hive.close();
     await Hive.deleteFromDisk();
     await tempDir.delete(recursive: true);
-        // Removed: PulseBackendClient.resetTestingOverrides (method does not exist)
+    PulseBackendClient.resetTestingOverrides();
   });
 
   test('stores pulses offline when sync is not triggered', () async {
@@ -47,6 +58,7 @@ void main() {
   });
 
   test('syncPendingPulses clears the queue when backend reports success', () async {
+    bulkShouldSucceed = true;
     final firstPulse = Pulse(
       employeeId: 'EMP001',
       latitude: 30.0,
@@ -74,7 +86,7 @@ void main() {
   });
 
   test('syncPendingPulses keeps pulses when backend fails', () async {
-        // Removed: PulseBackendClient.setTestingOverrides (method does not exist)
+    bulkShouldSucceed = false;
 
     final pulse = Pulse(
       employeeId: 'EMP001',
