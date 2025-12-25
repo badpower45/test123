@@ -376,14 +376,137 @@ serve(async (req: Request) => {
       inserted += 1;
     }
 
+    // 🚀 PHASE 6+: TIME RECONCILIATION
+    // Check for time gaps in pulses and auto-close abandoned sessions
+    const reconciliationResults = await reconcileAttendanceSessions(supabase, payload);
+
     return response(200, {
       success: errors.length === 0,
       inserted,
       failed: errors.length,
       errors,
+      reconciliation: reconciliationResults,
     });
   } catch (error) {
     console.error('[sync-pulses] Unexpected error', error);
     return response(500, { success: false, error: 'Internal server error' });
   }
 });
+
+/**
+ * 🚀 TIME RECONCILIATION: Auto-close sessions with >10 min pulse gaps
+ * 
+ * Logic:
+ * 1. For each unique employee in uploaded pulses
+ * 2. Get their active attendance session
+ * 3. Get ALL pulses for that session (sorted by time)
+ * 4. Check for gaps > 10 minutes between consecutive pulses
+ * 5. If gap found: close session at timestamp of last pulse before gap
+ * 
+ * This prevents employees from:
+ * - Checking in at work
+ * - Going home and keeping phone off for hours
+ * - Coming back online and pretending they worked all day
+ */
+async function reconcileAttendanceSessions(
+  supabase: any,
+  uploadedPulses: PulseInput[]
+): Promise<{ checked: number; closed: number; sessions: string[] }> {
+  const uniqueEmployees = new Set<string>();
+  uploadedPulses.forEach(pulse => {
+    if (pulse.employee_id) uniqueEmployees.add(pulse.employee_id);
+  });
+
+  let checkedCount = 0;
+  let closedCount = 0;
+  const closedSessions: string[] = [];
+
+  for (const employeeId of uniqueEmployees) {
+    try {
+      // Get active attendance for this employee
+      const { data: activeAttendance } = await supabase
+        .from('attendance')
+        .select('id, check_in_time, employee_id')
+        .eq('employee_id', employeeId)
+        .eq('status', 'active')
+        .order('check_in_time', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (!activeAttendance) continue;
+
+      checkedCount++;
+      const attendanceId = activeAttendance.id;
+
+      // Get ALL pulses for this session, sorted by time
+      const { data: pulses } = await supabase
+        .from('pulses')
+        .select('id, timestamp, is_within_geofence, distance_from_center')
+        .eq('attendance_id', attendanceId)
+        .order('timestamp', { ascending: true });
+
+      if (!pulses || pulses.length < 2) continue;
+
+      // Check for time gaps > 10 minutes (600,000 ms)
+      const MAX_GAP_MS = 10 * 60 * 1000;
+      let lastValidPulseTime: Date | null = null;
+      let gapDetected = false;
+
+      for (let i = 0; i < pulses.length; i++) {
+        const currentPulse = pulses[i];
+        const currentTime = new Date(currentPulse.timestamp);
+
+        if (i === 0) {
+          lastValidPulseTime = currentTime;
+          continue;
+        }
+
+        if (!lastValidPulseTime) continue;
+
+        const gap = currentTime.getTime() - lastValidPulseTime.getTime();
+
+        if (gap > MAX_GAP_MS) {
+          // GAP DETECTED! Close session at lastValidPulseTime
+          console.log(`[Reconciliation] Gap detected for employee ${employeeId}: ${gap / 1000 / 60} minutes`);
+          console.log(`[Reconciliation] Closing session at: ${lastValidPulseTime.toISOString()}`);
+
+          // Close the attendance session
+          const { error: updateError } = await supabase
+            .from('attendance')
+            .update({
+              check_out_time: lastValidPulseTime.toISOString(),
+              status: 'completed',
+              notes: `Auto-closed by Time Reconciliation: ${gap / 1000 / 60} min gap detected`,
+            })
+            .eq('id', attendanceId);
+
+          if (!updateError) {
+            closedCount++;
+            closedSessions.push(attendanceId);
+            console.log(`[Reconciliation] ✅ Session ${attendanceId} auto-closed`);
+          } else {
+            console.error(`[Reconciliation] ❌ Failed to close session ${attendanceId}:`, updateError);
+          }
+
+          gapDetected = true;
+          break; // Stop checking this session
+        }
+
+        lastValidPulseTime = currentTime;
+      }
+
+      if (!gapDetected) {
+        console.log(`[Reconciliation] ✅ Session ${attendanceId} has no gaps - OK`);
+      }
+
+    } catch (err) {
+      console.error(`[Reconciliation] Error processing employee ${employeeId}:`, err);
+    }
+  }
+
+  return {
+    checked: checkedCount,
+    closed: closedCount,
+    sessions: closedSessions,
+  };
+}
