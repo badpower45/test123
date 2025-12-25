@@ -15,9 +15,26 @@ class LocationService {
 
   Future<bool> _ensurePermissionGranted() async {
     LocationPermission permission = await Geolocator.checkPermission();
+    
+    // 🚀 PHASE 3: Request permission if denied
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
     }
+    
+    // Try to upgrade to "always" permission if we only have "whileInUse"
+    // This is important for background pulse tracking
+    if (permission == LocationPermission.whileInUse) {
+      print('[LocationService] ⚠️ Only whileInUse permission - requesting always for background tracking...');
+      // Request again to show "Allow all the time" option (Android 10+)
+      final upgraded = await Geolocator.requestPermission();
+      if (upgraded == LocationPermission.always) {
+        print('[LocationService] ✅ Upgraded to always permission!');
+        permission = upgraded;
+      } else {
+        print('[LocationService] ⚠️ User declined always permission - continuing with whileInUse');
+      }
+    }
+    
     if (permission == LocationPermission.deniedForever ||
         permission == LocationPermission.unableToDetermine ||
         permission == LocationPermission.denied) {

@@ -64,13 +64,24 @@ class LocalGeofenceService {
         return null;
       }
 
-      // Check location permissions
+      // 🚀 PHASE 3: Check and request location permissions (including always permission)
       LocationPermission permission = await Geolocator.checkPermission();
+      
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
         if (permission == LocationPermission.denied) {
           print('❌ Location permissions denied');
           return null;
+        }
+      }
+      
+      // Try to upgrade to always permission for background tracking
+      if (permission == LocationPermission.whileInUse) {
+        print('⚠️ Only whileInUse permission - requesting always...');
+        final upgraded = await Geolocator.requestPermission();
+        if (upgraded == LocationPermission.always) {
+          print('✅ Upgraded to always permission!');
+          permission = upgraded;
         }
       }
 

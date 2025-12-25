@@ -63,12 +63,33 @@ class GeofenceService {
     _geofenceRadius = geofenceRadius;
     _requiredBssids = requiredBssids.map((e) => e.toUpperCase()).toList();
 
-    // Request background location permission
-    final permission = await Geolocator.requestPermission();
+    // 🚀 PHASE 3: Request ALWAYS location permission for background tracking
+    LocationPermission permission = await Geolocator.checkPermission();
+    
+    // If denied, request permission
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    
+    // After initial permission, check if we need to request "always" (background) permission
+    // On Android 10+, this requires a second prompt
+    if (permission == LocationPermission.whileInUse) {
+      print('[GeofenceService] ⚠️ Got whileInUse permission, requesting always permission for background tracking...');
+      // Note: On Android 10+, this will show the "Allow all the time" dialog
+      permission = await Geolocator.requestPermission();
+    }
+    
     if (permission == LocationPermission.denied ||
         permission == LocationPermission.deniedForever) {
-      print('[GeofenceService] Location permission denied');
+      print('[GeofenceService] ❌ Location permission denied - cannot track in background');
       return;
+    }
+    
+    if (permission == LocationPermission.whileInUse) {
+      print('[GeofenceService] ⚠️ Only whileInUse permission granted - background tracking may not work');
+      // Continue anyway - will work when app is in foreground
+    } else if (permission == LocationPermission.always) {
+      print('[GeofenceService] ✅ Always permission granted - full background tracking enabled!');
     }
 
     _isMonitoring = true;
@@ -603,11 +624,50 @@ class GeofenceService {
     );
   }
 
-  /// --- Validate for Check-Out (WiFi OR GPS - Same as Check-In for flexibility) ---
-  /// ✅ FIXED: Made check-out validation flexible like check-in
-  /// Previously required GPS with high accuracy which failed on many devices
-  static Future<GeofenceValidationResult> validateForCheckOut(Employee employee) async {
-    print('🔍 [ValidateCheckOut] Starting validation for employee: ${employee.id}');
+  /// ✅ UNIFIED: Validation for both Check-In and Check-Out
+  /// Same logic - WiFi OR GPS (flexible and reliable)
+  static Future<GeofenceValidationResult> validateForAttendance(
+    Employee employee, {
+    required String type, // 'check-in' or 'check-out'
+  }) async {
+    print('🔍 [Validate${type == 'check-in' ? 'CheckIn' : 'CheckOut'}] Starting validation for employee: ${employee.id}');
+
+    // Shift time validation (check-in only)
+    if (type == 'check-in') {
+      // Check if shift times are set
+      if (employee.shiftStartTime != null && employee.shiftEndTime != null) {
+        final now = TimeOfDay.now();
+        final nowMinutes = now.hour * 60 + now.minute;
+        
+        final shiftStart = employee.shiftStartTime!;
+        final shiftStartMinutes = shiftStart.hour * 60 + shiftStart.minute;
+        
+        final shiftEnd = employee.shiftEndTime!;
+        final shiftEndMinutes = shiftEnd.hour * 60 + shiftEnd.minute;
+        
+        // Allow check-in from 1 hour before shift start to shift end
+        final earlyCheckInMinutes = shiftStartMinutes - 60;
+        
+        bool isWithinShiftTime = false;
+        if (shiftStartMinutes < shiftEndMinutes) {
+          // Same day shift
+          isWithinShiftTime = nowMinutes >= earlyCheckInMinutes && nowMinutes <= shiftEndMinutes;
+        } else {
+          // Night shift (crosses midnight)
+          isWithinShiftTime = nowMinutes >= earlyCheckInMinutes || nowMinutes <= shiftEndMinutes;
+        }
+        
+        if (!isWithinShiftTime) {
+          print('❌ Outside shift time: ${employee.shiftStartTime}-${employee.shiftEndTime}');
+          return GeofenceValidationResult(
+            isValid: false,
+            message: 'لا يمكن تسجيل الحضور خارج موعد شيفتك\n'
+                'يرجى تسجيل الحضور خلال موعد الشيفت',
+          );
+        }
+        print('✅ Within shift time: ${employee.shiftStartTime}-${employee.shiftEndTime}');
+      }
+    }
 
     Position? position;
     String? bssid;
@@ -618,46 +678,49 @@ class GeofenceService {
     if (kIsWeb) {
       final offlineService = OfflineDataService();
       branchData = await offlineService.getCachedBranchData(employeeId: employee.id);
+      print('🌐 [Web] Loading branch data from Hive for employee: ${employee.id}');
     } else {
       final db = OfflineDatabase.instance;
       branchData = await db.getCachedBranchData(employee.id);
+      print('📱 [Mobile] Loading branch data from SQLite for employee: ${employee.id}');
     }
 
     // Check if we have branch data
     if (branchData == null) {
-      // ✅ NEW: Allow check-out without branch data (offline mode)
-      print('⚠️ [ValidateCheckOut] No branch data - allowing checkout anyway');
       return GeofenceValidationResult(
-        isValid: true,
-        message: '✅ تسجيل الانصراف (بدون تحقق من الموقع)',
-        position: null,
+        isValid: false,
+        message: '❌ لا توجد بيانات للفرع المحفوظة.\nالرجاء الاتصال بالإنترنت أولاً لتحميل بيانات الفرع.',
       );
     }
 
     final String? branchId = branchData['branch_id']?.toString() ?? 
-                              branchData['id']?.toString();
+                              branchData['id']?.toString() ??
+                              branchData['branchId']?.toString();
+    
+    print('🏢 Branch ID resolved: $branchId');
+
     final double? branchLat = branchData['latitude']?.toDouble();
     final double? branchLng = branchData['longitude']?.toDouble();
     final double geofenceRadius = (branchData['geofence_radius'] ?? 100).toDouble();
     
     // Get array of allowed BSSIDs
     final List<String> allowedBssids = [];
-    if (!kIsWeb) {
-      if (branchData['wifi_bssids_array'] != null) {
-        final bssidsArray = branchData['wifi_bssids_array'] as List<dynamic>;
-        allowedBssids.addAll(bssidsArray.map((e) => e.toString().toUpperCase()));
-      }
-    } else {
+    
+    if (kIsWeb) {
       final bssidValue = branchData['bssid'];
       if (bssidValue != null && bssidValue.toString().isNotEmpty) {
         allowedBssids.addAll(
           bssidValue.toString().split(',').map((e) => e.trim().toUpperCase())
         );
       }
+    } else {
+      if (branchData['wifi_bssids_array'] != null) {
+        final bssidsArray = branchData['wifi_bssids_array'] as List<dynamic>;
+        allowedBssids.addAll(bssidsArray.map((e) => e.toString().toUpperCase()));
+      }
     }
 
-    print('🔍 [ValidateCheckOut] Branch: lat=$branchLat, lng=$branchLng, radius=$geofenceRadius');
-    print('🔍 [ValidateCheckOut] Allowed BSSIDs: $allowedBssids');
+    print('🔍 Branch: lat=$branchLat, lng=$branchLng, radius=$geofenceRadius, bssids=$allowedBssids');
 
     // ⚡ PRIORITY 1: Check WiFi FIRST (fastest and most reliable)
     if (allowedBssids.isNotEmpty && !kIsWeb) {
@@ -665,23 +728,24 @@ class GeofenceService {
         bssid = await WiFiService.getCurrentWifiBssidValidated();
         final currentBssid = bssid.toUpperCase();
         
-        print('📶 [ValidateCheckOut] Current WiFi: $currentBssid');
+        print('📶 Current WiFi: $currentBssid');
+        print('📋 Allowed WiFi: $allowedBssids');
         
         if (allowedBssids.contains(currentBssid)) {
-          print('✅ [ValidateCheckOut] WiFi MATCH! Check-out approved instantly');
+          print('✅ WiFi MATCH! ${type} approved instantly');
           return GeofenceValidationResult(
             isValid: true,
-            message: '✅ متصل بشبكة الفرع',
+            message: '✅ متصل بشبكة الفرع\nتم التحقق فوراً',
             position: null,
             bssid: bssid,
             branchId: branchId,
             distance: 0.0,
           );
         } else {
-          print('⚠️ [ValidateCheckOut] WiFi mismatch - will check GPS');
+          print('⚠️ WiFi mismatch - will check GPS');
         }
       } catch (e) {
-        print('⚠️ [ValidateCheckOut] WiFi check failed: $e - will check GPS');
+        print('⚠️ WiFi check failed: $e - will check GPS');
       }
     }
 
@@ -698,8 +762,9 @@ class GeofenceService {
               lastPos.latitude,
               lastPos.longitude,
             );
+            // Use same radius for both check-in and check-out
             if (lastDistance <= geofenceRadius * 1.2) {
-              print('✅ [ValidateCheckOut] Using last known: ${lastPos.latitude}, ${lastPos.longitude} (distance ${lastDistance.toStringAsFixed(1)}m)');
+              print('✅ Using last known: ${lastPos.latitude}, ${lastPos.longitude} (distance ${lastDistance.toStringAsFixed(1)}m)');
               return GeofenceValidationResult(
                 isValid: true,
                 message: '✅ الموقع صحيح (موقع محفوظ)\n(${lastDistance.round()}م)',
@@ -710,10 +775,10 @@ class GeofenceService {
             }
           }
         } catch (e) {
-          print('⚠️ [ValidateCheckOut] Last known unavailable: $e');
+          print('⚠️ Last known unavailable: $e');
         }
 
-        // Live GPS with lenient settings
+        // Live GPS
         position = await Geolocator.getCurrentPosition(
           desiredAccuracy: LocationAccuracy.medium,
           forceAndroidLocationManager: false,
@@ -723,12 +788,8 @@ class GeofenceService {
           onTimeout: () => throw TimeoutException('Location timeout'),
         );
 
-        print('📍 [ValidateCheckOut] Location: ${position.latitude}, ${position.longitude}');
-        print('📍 [ValidateCheckOut] Accuracy: ${position.accuracy.toStringAsFixed(1)}m');
-
-        if (position.accuracy > 150) {
-          print('⚠️ [ValidateCheckOut] Low accuracy: ${position.accuracy.toStringAsFixed(1)}m');
-        }
+        print('📍 Location: ${position.latitude}, ${position.longitude}');
+        print('📍 Accuracy: ${position.accuracy.toStringAsFixed(1)}m');
 
         final distance = Geolocator.distanceBetween(
           position.latitude,
@@ -737,17 +798,94 @@ class GeofenceService {
           branchLng,
         );
 
-        print('📏 [ValidateCheckOut] Distance: ${distance.round()}m (max: ${geofenceRadius.round()}m)');
+        print('📏 Distance: ${distance.round()}m (max: ${geofenceRadius.round()}m)');
 
-        // Lenient radius for checkout (1.5x)
-        final checkoutRadius = geofenceRadius * 1.5;
-
-        if (distance <= checkoutRadius) {
-          print('✅ [ValidateCheckOut] Location VALID: ${distance.round()}m');
+        // ✅ UNIFIED: Same radius for both check-in and check-out (strict)
+        if (distance <= geofenceRadius) {
+          print('✅ Location VALID: ${distance.round()}m');
           return GeofenceValidationResult(
             isValid: true,
             message: '✅ الموقع صحيح (${distance.round()}م)',
             position: position,
+            branchId: branchId,
+            distance: distance,
+          );
+        } else {
+          print('❌ Location INVALID: ${distance.round()}m > ${geofenceRadius.round()}m');
+          return GeofenceValidationResult(
+            isValid: false,
+            message: '❌ خارج نطاق الفرع\n'
+                'المسافة: ${distance.round()}م\n'
+                'المسموح: ${geofenceRadius.round()}م',
+            branchId: branchId,
+            distance: distance,
+          );
+        }
+      } catch (e) {
+        print('❌ GPS error: $e');
+        return GeofenceValidationResult(
+          isValid: false,
+          message: '❌ فشل تحديد الموقع\n'
+              'يرجى:\n'
+              '• تفعيل خدمات الموقع (GPS)\n'
+              '• أو الاتصال بشبكة WiFi الخاصة بالفرع',
+          branchId: branchId,
+        );
+      }
+    }
+
+    // If no GPS coordinates configured, fail
+    return GeofenceValidationResult(
+      isValid: false,
+      message: '❌ لا يمكن التحقق من الموقع\n'
+          'يرجى:\n'
+          '• الاتصال بشبكة WiFi الخاصة بالفرع\n'
+          '• أو التواجد في موقع الفرع مع تفعيل GPS',
+      branchId: branchId,
+    );
+  }
+
+  /// --- Legacy Check-In wrapper (calls unified validation) ---
+  static Future<GeofenceValidationResult> validateForCheckIn(Employee employee) async {
+    return validateForAttendance(employee, type: 'check-in');
+  }
+
+  /// --- Legacy Check-Out wrapper (calls unified validation) ---
+  static Future<GeofenceValidationResult> validateForCheckOut(Employee employee) async {
+    print('🔍 [ValidateCheckOut] Starting validation for employee: ${employee.id}');
+
+    // ✅ UNIFIED: Now using the same validation logic as check-in
+    return validateForAttendance(employee, type: 'check-out');
+  }
+
+  /// --- DEPRECATED: Old validateForCheckOut implementation below (kept for reference) ---
+  /*
+  static Future<GeofenceValidationResult> _oldValidateForCheckOut(Employee employee) async {
+    Position? position;
+    String? bssid;
+
+    // Get cached branch data
+    Map<String, dynamic>? branchData;
+    
+    if (kIsWeb) {
+      final offlineService = OfflineDataService();
+      branchData = await offlineService.getCachedBranchData(employeeId: employee.id);
+    } else {
+      final db = OfflineDatabase.instance;
+      branchData = await db.getCachedBranchData(employee.id);
+    }
+
+    if (branchData == null) {
+      print('⚠️ [ValidateCheckOut] No branch data - allowing checkout anyway');
+      return GeofenceValidationResult(
+        isValid: true,
+        message: '✅ تسجيل الانصراف (بدون تحقق من الموقع)',
+        position: null,
+      );
+    }
+    // ... rest of old implementation
+  }
+  */
             branchId: branchId,
             distance: distance,
           );

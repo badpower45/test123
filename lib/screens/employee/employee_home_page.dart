@@ -30,6 +30,7 @@ import '../../services/app_logger.dart';
 import '../../services/device_compatibility_service.dart';
 import '../../services/checkout_debug_service.dart';
 import '../../services/aggressive_keep_alive_service.dart';
+import '../../services/attendance_timer_service.dart'; // 🚀 PHASE 4
 import '../../database/offline_database.dart';
 import '../../services/wifi_service.dart';
 import '../../theme/app_colors.dart';
@@ -48,8 +49,9 @@ class EmployeeHomePage extends StatefulWidget {
 class _EmployeeHomePageState extends State<EmployeeHomePage> {
   bool _isCheckedIn = false;
   DateTime? _checkInTime;
-  String _elapsedTime = '00:00:00';
-  Timer? _timer;
+  // 🚀 PHASE 4: Timer moved to service - no longer stored in UI
+  // String _elapsedTime = '00:00:00'; // REMOVED
+  // Timer? _timer; // REMOVED
   bool _isLoading = false;
   int _pendingCount = 0;
   Map<String, dynamic>? _branchData;
@@ -68,6 +70,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
   
   final _offlineService = OfflineDataService();
   final _pulseService = PulseTrackingService();
+  final _timerService = AttendanceTimerService.instance; // 🚀 PHASE 4
   Timer? _shiftEndTimer; // ⏰ NEW: Timer for auto checkout at shift end
   
   // 🚨 NEW: Subscription for auto-checkout events
@@ -76,6 +79,10 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
   @override
   void initState() {
     super.initState();
+    
+    // 🚀 PHASE 4: Add listener for timer updates
+    _timerService.addListener(_onTimerUpdate);
+    
     _checkOfflineDataStatus();
     _loadBranchData(); // Load branch data first
     _checkCurrentStatus();
@@ -162,14 +169,26 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
 
   @override
   void dispose() {
-    _timer?.cancel();
+    // 🚀 PHASE 4: Remove timer listener
+    _timerService.removeListener(_onTimerUpdate);
+    
     _shiftEndTimer?.cancel(); // ⏰ Cancel shift timer
     _autoCheckoutSubscription?.cancel(); // 🚨 Cancel auto-checkout subscription
     _pulseService.removeListener(_checkForViolations);
     super.dispose();
   }
 
-  /// 🚨 Handle auto-checkout event from PulseTrackingService
+  /// � PHASE 4: Timer update listener
+  /// Called by AttendanceTimerService when timer updates
+  void _onTimerUpdate(String elapsedTime, double earnings) {
+    if (mounted) {
+      setState(() {
+        _currentEarnings = earnings;
+      });
+    }
+  }
+
+  /// �🚨 Handle auto-checkout event from PulseTrackingService
   /// This is called when 2 consecutive pulses are outside the zone
   void _handleAutoCheckout(AutoCheckoutEvent event) {
     if (!mounted) return;
@@ -178,14 +197,12 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
     print('   Reason: ${event.reason}');
     print('   Saved offline: ${event.savedOffline}');
     
-    // ✅ IMMEDIATELY stop timer and update UI state
-    _timer?.cancel();
-    _timer = null;
+    // ✅ PHASE 4: Stop timer service
+    _timerService.stopTimer();
     
     setState(() {
       _isCheckedIn = false;
       _checkInTime = null;
-      _elapsedTime = '00:00:00';
       _currentEarnings = 0.0;
       _currentAttendanceId = null;
       _isLoading = false;
@@ -516,7 +533,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         // ✅ Clear attendance ID if checked out
         if (!_isCheckedIn) {
           _currentAttendanceId = null;
-          _timer?.cancel(); // Stop earnings timer
+          _timerService.stopTimer(); // 🚀 PHASE 4: Stop timer service
         }
       });
       
@@ -681,53 +698,122 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
     }
   }
 
+  /// 🚀 PHASE 4: Start timer using AttendanceTimerService
+  /// Timer continues even if page is closed
   void _startTimer() {
-    _timer?.cancel();
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_checkInTime != null) {
-        final duration = DateTime.now().difference(_checkInTime!);
-        setState(() {
-          _elapsedTime = _formatDuration(duration);
-          _currentEarnings = _computeEarnings(duration);
-        });
-      }
-    });
+    if (_checkInTime != null && _hourlyRate > 0) {
+      _timerService.startTimer(
+        checkInTime: _checkInTime!,
+        hourlyRate: _hourlyRate,
+      );
+    }
   }
   
-  /// ✅ V2: Show battery optimization guide for problematic devices
+  /// 🚀 PHASE 5: Show battery optimization guide
+  /// Shows for ALL Android devices to ensure best performance
   Future<void> _showBatteryGuideIfNeeded() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final hasShownGuide = prefs.getBool('battery_guide_shown') ?? false;
       
-      if (!hasShownGuide) {
-        // Initialize keep-alive service to check device
-        final keepAliveService = AggressiveKeepAliveService();
-        await keepAliveService.initialize();
+      // 🚀 PHASE 5: Show for all Android devices (not just problematic ones)
+      if (!hasShownGuide && mounted) {
+        // Check if battery optimization is already disabled
+        final batteryStatus = await Permission.ignoreBatteryOptimizations.status;
         
-        // Only show for problematic devices
-        if (keepAliveService.isAggressiveMode && mounted) {
+        // Only show if not already granted
+        if (!batteryStatus.isGranted) {
           // Mark as shown
           await prefs.setBool('battery_guide_shown', true);
           
-          // Show dialog after a short delay
+          // Show dialog after a short delay (let check-in success message show first)
           await Future.delayed(const Duration(seconds: 2));
           
           if (mounted) {
             showDialog(
               context: context,
-              barrierDismissible: false,
-              builder: (context) => BatteryOptimizationDialog(
-                onSettings: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (context) => BatteryOptimizationGuide(
-                        employeeId: widget.employeeId,
+              barrierDismissible: true,
+              builder: (context) => AlertDialog(
+                title: Row(
+                  children: [
+                    Icon(Icons.battery_charging_full, color: Colors.orange[700], size: 28),
+                    const SizedBox(width: 10),
+                    const Text('🔋 تحسين أداء التطبيق'),
+                  ],
+                ),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'لضمان عمل تتبع الحضور بشكل مثالي:',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                    ),
+                    const SizedBox(height: 15),
+                    _buildBatteryStep('1', 'تعطيل تحسين البطارية للتطبيق'),
+                    const SizedBox(height: 10),
+                    _buildBatteryStep('2', 'يضمن استمرار إرسال النبضات في الخلفية'),
+                    const SizedBox(height: 10),
+                    _buildBatteryStep('3', 'لن يستنزف البطارية - التطبيق مُحسّن'),
+                    const SizedBox(height: 15),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.orange[50],
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.orange[200]!),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.info_outline, color: Colors.orange[700], size: 20),
+                          const SizedBox(width: 10),
+                          const Expanded(
+                            child: Text(
+                              'مهم خاصة لأجهزة Samsung و Xiaomi و Realme',
+                              style: TextStyle(fontSize: 12, color: Colors.black87),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  );
-                },
-                onDismiss: () {},
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('لاحقاً', style: TextStyle(color: Colors.grey)),
+                  ),
+                  ElevatedButton(
+                    onPressed: () async {
+                      Navigator.pop(context);
+                      // Request permission directly
+                      final status = await Permission.ignoreBatteryOptimizations.request();
+                      
+                      if (status.isGranted && mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('✅ تم تعطيل تحسين البطارية - الأداء سيكون ممتاز!'),
+                            backgroundColor: Colors.green,
+                          ),
+                        );
+                      } else if (status.isPermanentlyDenied && mounted) {
+                        // Show guide page
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (context) => BatteryOptimizationGuide(
+                              employeeId: widget.employeeId,
+                            ),
+                          ),
+                        );
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orange[700],
+                      foregroundColor: Colors.white,
+                    ),
+                    child: const Text('تفعيل الآن'),
+                  ),
+                ],
               ),
             );
           }
@@ -736,6 +822,148 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
     } catch (e) {
       AppLogger.instance.log('Error showing battery guide', level: AppLogger.warning, tag: 'BatteryGuide', error: e);
     }
+  }
+
+  Widget _buildBatteryStep(String number, String text) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 24,
+          height: 24,
+          decoration: BoxDecoration(
+            color: Colors.orange[700],
+            shape: BoxShape.circle,
+          ),
+          child: Center(
+            child: Text(
+              number,
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            text,
+            style: const TextStyle(fontSize: 14),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 🚀 PHASE 3: Show location permission guide to educate user about "Always Allow" permission
+  Future<void> _showLocationPermissionGuideIfNeeded() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final hasShownLocationGuide = prefs.getBool('location_permission_guide_shown') ?? false;
+      
+      // Only show once per install
+      if (!hasShownLocationGuide && mounted) {
+        // Check current permission status
+        final permission = await Geolocator.checkPermission();
+        
+        // Only show if we don't have "always" permission yet
+        if (permission != LocationPermission.always) {
+          // Mark as shown
+          await prefs.setBool('location_permission_guide_shown', true);
+          
+          // Show dialog after a short delay (let check-in success message show first)
+          await Future.delayed(const Duration(seconds: 3));
+          
+          if (mounted) {
+            showDialog(
+              context: context,
+              barrierDismissible: true,
+              builder: (context) => AlertDialog(
+                title: const Row(
+                  children: [
+                    Icon(Icons.location_on, color: Colors.blue, size: 28),
+                    SizedBox(width: 10),
+                    Text('📍 تفعيل التتبع الدائم'),
+                  ],
+                ),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'للحصول على أفضل أداء لنظام تتبع الحضور:',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                    ),
+                    const SizedBox(height: 15),
+                    _buildPermissionStep('1', 'اختر "السماح طوال الوقت" (Always Allow)'),
+                    const SizedBox(height: 10),
+                    _buildPermissionStep('2', 'هذا يسمح بتتبع حضورك حتى عند إغلاق التطبيق'),
+                    const SizedBox(height: 10),
+                    _buildPermissionStep('3', 'سيتم إرسال النبضات تلقائياً في الخلفية'),
+                    const SizedBox(height: 15),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.blue[50],
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.blue[200]!),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.privacy_tip, color: Colors.blue[700], size: 20),
+                          const SizedBox(width: 10),
+                          const Expanded(
+                            child: Text(
+                              'نحن نحترم خصوصيتك - يُستخدم الموقع فقط لتتبع الحضور أثناء ساعات العمل',
+                              style: TextStyle(fontSize: 12, color: Colors.black87),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('حسناً', style: TextStyle(fontSize: 16)),
+                  ),
+                ],
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      AppLogger.instance.log('Error showing location guide', level: AppLogger.warning, tag: 'LocationGuide', error: e);
+    }
+  }
+
+  Widget _buildPermissionStep(String number, String text) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 24,
+          height: 24,
+          decoration: BoxDecoration(
+            color: Colors.blue,
+            shape: BoxShape.circle,
+          ),
+          child: Center(
+            child: Text(
+              number,
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            text,
+            style: const TextStyle(fontSize: 14),
+          ),
+        ),
+      ],
+    );
   }
 
   double _computeEarnings(Duration duration) {
@@ -807,6 +1035,180 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
     } catch (e) {
       print('❌ Error in auto checkout check: $e');
       // Don't show error to user, just log it
+    }
+  }
+
+  /// 🚀 PHASE 2: Unified Pulse System with 5-Layer Protection
+  /// Starts all pulse tracking services in the correct order with proper error handling
+  /// Layers:
+  /// 1. PulseTrackingService (primary foreground service)
+  /// 2. ForegroundAttendanceService (persistent notification)
+  /// 3. AlarmManager (guaranteed - works even if app killed)
+  /// 4. WorkManager (15-min backup for old devices)
+  /// 5. AggressiveKeepAlive (for Samsung/Xiaomi/Realme problematic devices)
+  Future<void> _startUnifiedPulseSystem({
+    required String employeeId,
+    required String attendanceId,
+    required String branchId,
+  }) async {
+    print('🚀 PHASE 2: Starting Unified Pulse System with 5-Layer Protection');
+    print('   Employee: $employeeId');
+    print('   Attendance: $attendanceId');
+    print('   Branch: $branchId');
+    
+    if (kIsWeb) {
+      print('⚠️ Web platform - pulse tracking not available');
+      return;
+    }
+    
+    if (!Platform.isAndroid) {
+      print('⚠️ Non-Android platform - pulse tracking limited');
+      return;
+    }
+    
+    try {
+      // Get employee data for service initialization
+      final authData = await AuthService.getLoginData();
+      final employeeName = authData['fullName'] ?? 'الموظف';
+      
+      // ✅ LAYER 1: Start PulseTrackingService (Primary Foreground Service)
+      print('📍 Layer 1: Starting PulseTrackingService...');
+      // Note: PulseTrackingService is started via ForegroundAttendanceService
+      
+      // ✅ LAYER 2: Start ForegroundAttendanceService (Persistent Notification)
+      print('🔔 Layer 2: Starting ForegroundAttendanceService...');
+      final foregroundService = ForegroundAttendanceService.instance;
+      await foregroundService.startTracking(
+        employeeId: employeeId,
+        employeeName: employeeName,
+      );
+      print('✅ ForegroundAttendanceService started successfully');
+      
+      // ✅ LAYER 3: Start AlarmManager (Guaranteed - Even When App Killed)
+      print('⏰ Layer 3: Starting AlarmManagerPulseService...');
+      final alarmService = AlarmManagerPulseService();
+      await alarmService.startPeriodicAlarms(employeeId);
+      print('✅ AlarmManagerPulseService started successfully');
+      
+      // ✅ LAYER 4: Start WorkManager (15-Min Backup for Old Devices)
+      print('🔄 Layer 4: Starting WorkManagerPulseService...');
+      await WorkManagerPulseService.instance.startPeriodicPulses(
+        employeeId: employeeId,
+        attendanceId: attendanceId,
+        branchId: branchId,
+      );
+      print('✅ WorkManagerPulseService started successfully');
+      
+      // ✅ LAYER 5: Start AggressiveKeepAlive (For Problematic Devices)
+      print('💪 Layer 5: Starting AggressiveKeepAliveService...');
+      await AggressiveKeepAliveService().startKeepAlive(employeeId);
+      print('✅ AggressiveKeepAliveService started successfully');
+      
+      print('🎉 All 5 layers of pulse protection started successfully!');
+      
+      // Log success
+      AppLogger.instance.log(
+        'Unified Pulse System started with 5-layer protection',
+        tag: 'UnifiedPulse',
+      );
+      
+    } catch (e, stackTrace) {
+      print('❌ Error starting unified pulse system: $e');
+      print('Stack trace: $stackTrace');
+      
+      AppLogger.instance.log(
+        'Failed to start unified pulse system',
+        level: AppLogger.error,
+        tag: 'UnifiedPulse',
+        error: e,
+      );
+      
+      // Don't throw - pulse tracking is secondary to check-in success
+      // User should still be checked in even if pulse tracking fails
+    }
+  }
+
+  /// 🛑 PHASE 2: Stop Unified Pulse System
+  /// Stops all 5 layers of pulse tracking services
+  Future<void> _stopUnifiedPulseSystem() async {
+    print('🛑 PHASE 2: Stopping Unified Pulse System (5 layers)');
+    
+    if (kIsWeb) {
+      print('⚠️ Web platform - pulse tracking not available');
+      return;
+    }
+    
+    if (!Platform.isAndroid) {
+      print('⚠️ Non-Android platform - pulse tracking limited');
+      return;
+    }
+    
+    try {
+      // ✅ LAYER 1: Stop PulseTrackingService
+      print('🛑 Layer 1: Stopping PulseTrackingService...');
+      _pulseService.stopTracking();
+      print('✅ PulseTrackingService stopped');
+      
+      // ✅ LAYER 2: Stop ForegroundAttendanceService
+      print('🛑 Layer 2: Stopping ForegroundAttendanceService...');
+      try {
+        final stopped = await ForegroundAttendanceService.instance.stopTracking();
+        if (stopped) {
+          print('✅ ForegroundAttendanceService stopped successfully');
+        } else {
+          print('⚠️ ForegroundAttendanceService already stopped');
+        }
+      } catch (e) {
+        print('⚠️ Error stopping ForegroundAttendanceService: $e');
+      }
+      
+      // ✅ LAYER 3: Stop AlarmManagerPulseService
+      print('🛑 Layer 3: Stopping AlarmManagerPulseService...');
+      try {
+        await AlarmManagerPulseService().stopPeriodicAlarms();
+        print('✅ AlarmManagerPulseService stopped successfully');
+      } catch (e) {
+        print('⚠️ Error stopping AlarmManagerPulseService: $e');
+      }
+      
+      // ✅ LAYER 4: Stop WorkManagerPulseService
+      print('🛑 Layer 4: Stopping WorkManagerPulseService...');
+      try {
+        await WorkManagerPulseService.instance.stopPeriodicPulses();
+        print('✅ WorkManagerPulseService stopped successfully');
+      } catch (e) {
+        print('⚠️ Error stopping WorkManagerPulseService: $e');
+      }
+      
+      // ✅ LAYER 5: Stop AggressiveKeepAliveService
+      print('🛑 Layer 5: Stopping AggressiveKeepAliveService...');
+      try {
+        await AggressiveKeepAliveService().stopKeepAlive();
+        print('✅ AggressiveKeepAliveService stopped successfully');
+      } catch (e) {
+        print('⚠️ Error stopping AggressiveKeepAliveService: $e');
+      }
+      
+      print('🎉 All 5 layers of pulse protection stopped successfully!');
+      
+      // Log success
+      AppLogger.instance.log(
+        'Unified Pulse System stopped (all 5 layers)',
+        tag: 'UnifiedPulse',
+      );
+      
+    } catch (e, stackTrace) {
+      print('❌ Error stopping unified pulse system: $e');
+      print('Stack trace: $stackTrace');
+      
+      AppLogger.instance.log(
+        'Failed to stop unified pulse system',
+        level: AppLogger.error,
+        tag: 'UnifiedPulse',
+        error: e,
+      );
+      
+      // Don't throw - continue with checkout anyway
     }
   }
 
@@ -1539,136 +1941,17 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           
           // ✅ Start pulse tracking when check-in succeeds
           if (_branchData != null) {
-            await _pulseService.startTracking(
-              widget.employeeId, 
+            // 🚀 PHASE 2: Unified Pulse System with 5-Layer Protection
+            await _startUnifiedPulseSystem(
+              employeeId: widget.employeeId,
               attendanceId: attendanceId,
+              branchId: _branchData!['id'] as String,
             );
-            print('🎯 Started pulse tracking after check-in');
             
-            // ✅ Start FOREGROUND service to keep app alive in background
-            if (!kIsWeb && Platform.isAndroid) {
-              try {
-                final ForegroundAttendanceService foregroundService = ForegroundAttendanceService.instance;
-                final authData = await AuthService.getLoginData();
-                final employeeName = authData['fullName'] ?? 'الموظف';
-                
-                // ✅ VALIDATE: Check if service actually started
-                final foregroundStarted = await foregroundService.startTracking(
-                  employeeId: widget.employeeId,
-                  employeeName: employeeName,
-                );
-                
-                if (foregroundStarted) {
-                  AppLogger.instance.log('Foreground service started - app will stay alive', tag: 'CheckIn');
-                } else {
-                  AppLogger.instance.log('Failed to start foreground service', level: AppLogger.error, tag: 'CheckIn');
-                  // Show warning to user
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('⚠️ تحذير: خدمة التتبع في الخلفية قد لا تعمل بشكل صحيح'),
-                        backgroundColor: Colors.orange,
-                        duration: Duration(seconds: 5),
-                      ),
-                    );
-                  }
-                }
-                
-                // Also start background pulse service (WorkManager) as backup
-                await WorkManagerPulseService.instance.startPeriodicPulses(
-                  employeeId: widget.employeeId,
-                  attendanceId: attendanceId,
-                  branchId: _branchData!['id'] as String,
-                );
-                AppLogger.instance.log('Background pulse service started (WorkManager)', tag: 'CheckIn');
-                
-                // ✅ Start AlarmManager as additional backup layer
-                final alarmService = AlarmManagerPulseService();
-                final alarmInitialized = await alarmService.initialize();
-                if (alarmInitialized) {
-                  // ✅ Request SCHEDULE_EXACT_ALARM permission (Android 12+)
-                  final hasAlarmPermission = await alarmService.requestExactAlarmPermission();
-                  if (hasAlarmPermission) {
-                    await alarmService.startPeriodicAlarms(widget.employeeId);
-                    AppLogger.instance.log('AlarmManager backup started', tag: 'CheckIn');
-                  } else {
-                    AppLogger.instance.log('AlarmManager permission denied - skipping', level: AppLogger.warning, tag: 'CheckIn');
-                    // Show warning but don't block check-in
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('⚠️ تحذير: لم يتم تفعيل نظام التنبيهات الاحتياطي'),
-                          backgroundColor: Colors.orange,
-                          duration: Duration(seconds: 3),
-                        ),
-                      );
-                    }
-                  }
-                }
-              } catch (e) {
-                print('⚠️ Could not start foreground/background services: $e');
-                // Show detailed error with guidance
-                if (mounted) {
-                  showDialog(
-                    context: context,
-                    builder: (context) => AlertDialog(
-                      title: const Row(
-                        children: [
-                          Icon(Icons.warning_amber, color: Colors.orange, size: 28),
-                          SizedBox(width: 10),
-                          Text('تحذير: خدمة التتبع'),
-                        ],
-                      ),
-                      content: const SingleChildScrollView(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'لم نتمكن من بدء خدمة التتبع في الخلفية بشكل صحيح.',
-                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                            ),
-                            SizedBox(height: 15),
-                            Text(
-                              'هذا قد يعني:',
-                              style: TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                            SizedBox(height: 8),
-                            Text('• التتبع قد يتوقف عند تصغير التطبيق'),
-                            Text('• قد لا يتم تسجيل الحضور بدقة'),
-                            SizedBox(height: 15),
-                            Text(
-                              'للحل:',
-                              style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange),
-                            ),
-                            SizedBox(height: 8),
-                            Text('1. افتح الإعدادات → التطبيقات'),
-                            Text('2. ابحث عن "Oldies Workers"'),
-                            Text('3. اضغط على "البطارية"'),
-                            Text('4. اختر "غير محدود" أو "غير محسّن"'),
-                            Text('5. فعّل "السماح بنشاط الخلفية"'),
-                            SizedBox(height: 15),
-                            Text(
-                              '⚠️ يُفضل إعادة تسجيل الحضور بعد تغيير الإعدادات',
-                              style: TextStyle(
-                                color: Colors.red,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 13,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(context),
-                          child: const Text('فهمت', style: TextStyle(fontSize: 16)),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-              }
+            // 🚀 PHASE 6: Start sync service for offline pulses
+            if (!kIsWeb) {
+              SyncService.instance.startPeriodicSync();
+              print('✅ Started sync service for offline pulses');
             }
           }
           
@@ -1684,6 +1967,9 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
             // ✅ V2: Show battery optimization guide for problematic devices (first time only)
             if (!kIsWeb && Platform.isAndroid) {
               _showBatteryGuideIfNeeded();
+              
+              // 🚀 PHASE 3: Show location permission guide (educate about "Always Allow")
+              _showLocationPermissionGuideIfNeeded();
             }
           }
         }
@@ -1864,6 +2150,19 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
 
     try {
       print('🚪 Starting check-out process...');
+
+      // 🚀 PHASE 6: Try to sync pending pulses before check-out
+      if (!kIsWeb) {
+        try {
+          print('🔄 Syncing pending pulses before check-out...');
+          final syncResult = await SyncService.instance.forceSyncNow();
+          if (syncResult['success'] == true && syncResult['synced'] > 0) {
+            print('✅ Synced ${syncResult['synced']} pending records');
+          }
+        } catch (e) {
+          print('⚠️ Sync before check-out failed (will try again later): $e');
+        }
+      }
 
       // ✅ STEP 1: Check for active attendance (local first, then server)
       String? attendanceId = _currentAttendanceId;
@@ -2078,7 +2377,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
       setState(() {
         _isCheckedIn = false;
         _checkInTime = null;
-        _elapsedTime = '00:00:00';
+        // _elapsedTime removed - handled by _timerService now (Phase 4)
         _isLoading = false;
         _currentAttendanceId = null; // ✅ Clear attendance_id
         _currentEarnings = 0.0;
@@ -2095,41 +2394,12 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         print('⚠️ Error clearing SharedPreferences: $e');
       }
 
-      _timer?.cancel();
+      // 🚀 PHASE 4: Stop timer service
+      _timerService.stopTimer();
 
-      // ✅ Stop pulse tracking when check-out
-      _pulseService.stopTracking();
-      print('🛑 Stopped pulse tracking after check-out');
-      
-      // ✅ Stop foreground service
-      if (!kIsWeb && Platform.isAndroid) {
-        try {
-          final stopped = await ForegroundAttendanceService.instance.stopTracking();
-          if (stopped) {
-            AppLogger.instance.log('Foreground attendance service stopped', tag: 'CheckOut');
-          }
-        } catch (e) {
-          AppLogger.instance.log('Could not stop foreground service', level: AppLogger.warning, tag: 'CheckOut', error: e);
-        }
-      }
-      
-      // ✅ Stop background pulse service (WorkManager)
-      if (!kIsWeb && Platform.isAndroid) {
-        try {
-          await WorkManagerPulseService.instance.stopPeriodicPulses();
-          AppLogger.instance.log('Background pulse service stopped (WorkManager)', tag: 'CheckOut');
-        } catch (e) {
-          AppLogger.instance.log('Could not stop background pulse service', level: AppLogger.warning, tag: 'CheckOut', error: e);
-        }
-        
-        // ✅ Stop AlarmManager backup
-        try {
-          await AlarmManagerPulseService().stopPeriodicAlarms();
-          AppLogger.instance.log('AlarmManager backup stopped', tag: 'CheckOut');
-        } catch (e) {
-          AppLogger.instance.log('Could not stop AlarmManager', level: AppLogger.warning, tag: 'CheckOut', error: e);
-        }
-      }
+      // 🚀 PHASE 2: Stop unified pulse system (all 5 layers)
+      await _stopUnifiedPulseSystem();
+      print('🛑 Stopped unified pulse system after check-out');
 
       // Stop geofence monitoring on checkout
       GeofenceService.instance.stopMonitoring();
@@ -2822,7 +3092,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              _elapsedTime,
+                              _timerService.elapsedTime, // 🚀 PHASE 4: From service
                               style: const TextStyle(
                                 fontSize: 32,
                                 fontWeight: FontWeight.bold,
