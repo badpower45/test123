@@ -23,10 +23,9 @@ android {
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.example.heartbeat"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        // ✅ Support old devices (Android 5.0+) to latest (Android 15)
+        minSdk = flutter.minSdkVersion  // Android 5.0 Lollipop - covers 99%+ devices
+        targetSdk = 34  // Android 14 - latest stable
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }

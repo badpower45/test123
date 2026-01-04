@@ -639,33 +639,39 @@ class GeofenceService {
         final now = TimeOfDay.now();
         final nowMinutes = now.hour * 60 + now.minute;
         
-        final shiftStart = employee.shiftStartTime!;
-        final shiftStartMinutes = shiftStart.hour * 60 + shiftStart.minute;
+        // Parse shift times from strings
+        final shiftStart = _parseTimeOfDay(employee.shiftStartTime!);
+        final shiftEnd = _parseTimeOfDay(employee.shiftEndTime!);
         
-        final shiftEnd = employee.shiftEndTime!;
-        final shiftEndMinutes = shiftEnd.hour * 60 + shiftEnd.minute;
-        
-        // Allow check-in from 1 hour before shift start to shift end
-        final earlyCheckInMinutes = shiftStartMinutes - 60;
-        
-        bool isWithinShiftTime = false;
-        if (shiftStartMinutes < shiftEndMinutes) {
-          // Same day shift
-          isWithinShiftTime = nowMinutes >= earlyCheckInMinutes && nowMinutes <= shiftEndMinutes;
+        if (shiftStart == null || shiftEnd == null) {
+          print('⚠️ Invalid shift time format');
+          // Continue with location validation
         } else {
-          // Night shift (crosses midnight)
-          isWithinShiftTime = nowMinutes >= earlyCheckInMinutes || nowMinutes <= shiftEndMinutes;
+          final shiftStartMinutes = shiftStart.hour * 60 + shiftStart.minute;
+          final shiftEndMinutes = shiftEnd.hour * 60 + shiftEnd.minute;
+          
+          // Allow check-in from 1 hour before shift start to shift end
+          final earlyCheckInMinutes = shiftStartMinutes - 60;
+          
+          bool isWithinShiftTime = false;
+          if (shiftStartMinutes < shiftEndMinutes) {
+            // Same day shift
+            isWithinShiftTime = nowMinutes >= earlyCheckInMinutes && nowMinutes <= shiftEndMinutes;
+          } else {
+            // Night shift (crosses midnight)
+            isWithinShiftTime = nowMinutes >= earlyCheckInMinutes || nowMinutes <= shiftEndMinutes;
+          }
+          
+          if (!isWithinShiftTime) {
+            print('❌ Outside shift time: ${employee.shiftStartTime}-${employee.shiftEndTime}');
+            return GeofenceValidationResult(
+              isValid: false,
+              message: 'لا يمكن تسجيل الحضور خارج موعد شيفتك\n'
+                  'يرجى تسجيل الحضور خلال موعد الشيفت',
+            );
+          }
+          print('✅ Within shift time: ${employee.shiftStartTime}-${employee.shiftEndTime}');
         }
-        
-        if (!isWithinShiftTime) {
-          print('❌ Outside shift time: ${employee.shiftStartTime}-${employee.shiftEndTime}');
-          return GeofenceValidationResult(
-            isValid: false,
-            message: 'لا يمكن تسجيل الحضور خارج موعد شيفتك\n'
-                'يرجى تسجيل الحضور خلال موعد الشيفت',
-          );
-        }
-        print('✅ Within shift time: ${employee.shiftStartTime}-${employee.shiftEndTime}');
       }
     }
 
@@ -845,11 +851,6 @@ class GeofenceService {
     );
   }
 
-  /// --- Legacy Check-In wrapper (calls unified validation) ---
-  static Future<GeofenceValidationResult> validateForCheckIn(Employee employee) async {
-    return validateForAttendance(employee, type: 'check-in');
-  }
-
   /// --- Legacy Check-Out wrapper (calls unified validation) ---
   static Future<GeofenceValidationResult> validateForCheckOut(Employee employee) async {
     print('🔍 [ValidateCheckOut] Starting validation for employee: ${employee.id}');
@@ -886,63 +887,6 @@ class GeofenceService {
     // ... rest of old implementation
   }
   */
-            branchId: branchId,
-            distance: distance,
-          );
-        } else {
-          print('⚠️ [ValidateCheckOut] Location outside radius but allowing checkout');
-          return GeofenceValidationResult(
-            isValid: true,
-            message: '⚠️ أنت خارج نطاق الفرع (${distance.round()}م)\nتم تسجيل الانصراف مع ملاحظة',
-            position: position,
-            branchId: branchId,
-            distance: distance,
-          );
-        }
-      } catch (e) {
-        print('⚠️ [ValidateCheckOut] Location error: $e');
-        // Fallback: try last known again
-        try {
-          final lastPos = await Geolocator.getLastKnownPosition();
-          if (lastPos != null) {
-            final lastDistance = Geolocator.distanceBetween(
-              branchLat,
-              branchLng,
-              lastPos.latitude,
-              lastPos.longitude,
-            );
-            if (lastDistance <= geofenceRadius * 1.5) {
-              return GeofenceValidationResult(
-                isValid: true,
-                message: '✅ تم التحقق بموقع محفوظ مؤخراً\n(${lastDistance.round()}م)',
-                position: lastPos,
-                branchId: branchId,
-                distance: lastDistance,
-              );
-            }
-          }
-        } catch (_) {}
-
-        // ✅ Allow checkout even if all GPS attempts failed (failsafe)
-        return GeofenceValidationResult(
-          isValid: true,
-          message: '⚠️ تم تسجيل الانصراف بدون تحديد موقع (تعذر GPS/WiFi)\nستُضاف ملاحظة للمراجعة',
-          position: null,
-          branchId: branchId,
-          distance: null,
-        );
-      }
-    }
-
-    // ✅ NEW: If all checks fail, still allow checkout (better than trapping employee)
-    print('⚠️ [ValidateCheckOut] All checks failed - allowing checkout anyway');
-    return GeofenceValidationResult(
-      isValid: true,
-      message: '✅ تسجيل الانصراف (تعذر التحقق من الموقع)',
-      position: position,
-      branchId: branchId,
-    );
-  }
 
   // ⏰ Helper: Parse time string "HH:mm" to TimeOfDay
   static TimeOfDay? _parseTimeOfDay(String timeStr) {

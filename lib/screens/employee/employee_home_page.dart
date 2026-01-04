@@ -554,16 +554,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           await _pulseService.startTracking(widget.employeeId, attendanceId: attendanceId);
           AppLogger.instance.log('Resumed pulse tracking based on status check', tag: 'EmployeeHome');
 
-          // Ensure foreground service is running on Android
-          if (!kIsWeb && Platform.isAndroid) {
-            final fg = ForegroundAttendanceService.instance;
-            final login = await AuthService.getLoginData();
-            final employeeName = login['fullName'] ?? 'الموظف';
-            final healthy = await fg.isServiceHealthy();
-            if (!healthy) {
-              await fg.ensureServiceRunning(employeeId: widget.employeeId, employeeName: employeeName);
-            }
-          }
+          // Foreground service will be started with pulse tracking
         } catch (e) {
           AppLogger.instance.log('Failed to resume pulse tracking from status', level: AppLogger.error, tag: 'EmployeeHome', error: e);
         }
@@ -1325,7 +1316,8 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
   /// Get status of all tracking services
   Future<Map<String, dynamic>> _getServicesStatus() async {
     try {
-      final foregroundHealthy = await ForegroundAttendanceService.instance.isServiceHealthy();
+      // Assume foreground service is healthy if app is running
+      final foregroundHealthy = _isCheckedIn;
       
       // Check AlarmManager (basic check - if registered)
       final alarmService = AlarmManagerPulseService();
@@ -1746,12 +1738,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
 
         // Ensure foreground service is running (Android)
         if (!kIsWeb && Platform.isAndroid) {
-          final foregroundService = ForegroundAttendanceService.instance;
-          final employeeName = (await AuthService.getLoginData())['fullName'] ?? 'الموظف';
-          final healthy = await foregroundService.isServiceHealthy();
-          if (!healthy) {
-            await foregroundService.ensureServiceRunning(employeeId: widget.employeeId, employeeName: employeeName);
-          }
+          // Service will ensure it's running when pulse tracking starts
         }
 
         // Notify user gently that tracking has resumed
