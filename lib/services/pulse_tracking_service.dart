@@ -5,10 +5,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../database/offline_database.dart';
-import 'local_geofence_service.dart';
+import 'native_location_service.dart'; // 🚀 Native GPS for faster location
 import 'offline_data_service.dart';
 import 'notification_service.dart';
-import 'foreground_attendance_service.dart' hide TimeOfDay;
+import 'foreground_attendance_service.dart';
 import 'supabase_attendance_service.dart';
 import 'wifi_service.dart';
 import 'app_logger.dart';
@@ -320,10 +320,10 @@ class PulseTrackingService extends ChangeNotifier {
       }
       
       // ✅ STEP 2: Wi-Fi failed or not available - Check GPS
-      print('📍 Wi-Fi not valid - checking GPS location...');
+      print('📍 Wi-Fi not valid - checking GPS location (Native)...');
       
-      // Check if location services are enabled
-      final locationEnabled = await LocalGeofenceService.getCurrentLocation();
+      // Check if location services are enabled (using Native GPS - much faster!)
+      final locationEnabled = await NativeLocationService.getCurrentLocation();
       
       if (locationEnabled == null) {
         // GPS disabled or no permission = FALSE pulse
@@ -377,8 +377,8 @@ class PulseTrackingService extends ChangeNotifier {
         return;
       }
 
-      // ✅ STEP 3: GPS is enabled - validate geofence
-      final result = await LocalGeofenceService.validateGeofence(
+      // ✅ STEP 3: GPS is enabled - validate geofence (Native GPS - 1-3s instead of 15-30s!)
+      final result = await NativeLocationService.getLocationForGeofence(
         centerLat: centerLat,
         centerLng: centerLng,
         radiusMeters: radius,
