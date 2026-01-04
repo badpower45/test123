@@ -1,7 +1,10 @@
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter/services.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import '../database/offline_database.dart';
 import 'native_location_service.dart';
+import 'wifi_service.dart';
 
 /// 🎧 Background Pulse Listener
 /// 
@@ -69,11 +72,70 @@ class BackgroundPulseListener {
       
       print('📋 Pulse details: Employee=$employeeId, Count=$pulseCount, Time=$timestamp');
       
-      // Get current location using Native GPS
+      // Get branch data from cache to validate geofence
+      Map<String, dynamic>? branchData;
+      try {
+        final box = await Hive.openBox('branch_data');
+        final cachedData = box.get('branch_$employeeId');
+        await box.close();
+        
+        if (cachedData != null && cachedData is Map) {
+          branchData = Map<String, dynamic>.from(cachedData);
+          print('📍 Branch loaded: ${branchData['name']}');
+        }
+      } catch (e) {
+        print('⚠️ Could not load branch data: $e');
+      }
+      
+      // Get current location using Native GPS (ultra fast!)
       final position = await NativeLocationService.getCurrentLocation();
       
       if (position == null) {
         print('⚠️ Could not get location for pulse - saving with null coordinates');
+      }
+      
+      // Calculate geofence validation
+      bool insideGeofence = false;
+      double distance = 0.0;
+      String? wifiBssid;
+      bool validatedByWifi = false;
+      
+      if (branchData != null) {
+        final centerLat = branchData['latitude'] as double?;
+        final centerLng = branchData['longitude'] as double?;
+        final radius = (branchData['geofence_radius'] as num?)?.toDouble() ?? 100.0;
+        
+        // Check WiFi first (faster and more reliable indoors)
+        try {
+          wifiBssid = await WiFiService.getCurrentWifiBssidValidated();
+          if (branchData['wifi_bssids'] != null) {
+            final requiredBssids = (branchData['wifi_bssids'] as String)
+                .replaceAll('[', '')
+                .replaceAll(']', '')
+                .replaceAll('"', '')
+                .split(',')
+                .map((e) => e.trim())
+                .toList();
+            
+            if (requiredBssids.contains(wifiBssid)) {
+              insideGeofence = true;
+              validatedByWifi = true;
+              print('✅ WiFi validated: $wifiBssid');
+            }
+          }
+        } catch (e) {
+          print('⚠️ WiFi check error: $e');
+        }
+        
+        // If WiFi didn't validate, check GPS
+        if (!validatedByWifi && position != null && centerLat != null && centerLng != null) {
+          distance = _calculateDistance(
+            centerLat, centerLng, 
+            position.latitude, position.longitude,
+          );
+          insideGeofence = distance <= radius;
+          print('📏 Distance: ${distance.toStringAsFixed(1)}m, Inside: $insideGeofence');
+        }
       }
       
       // Save pulse to SQLite
@@ -84,20 +146,47 @@ class BackgroundPulseListener {
         timestamp: timestamp,
         latitude: position?.latitude,
         longitude: position?.longitude,
-        insideGeofence: false, // Will be validated later
-        distanceFromCenter: 0.0,
-        wifiBssid: null,
-        validatedByWifi: false,
-        validatedByLocation: position != null,
+        insideGeofence: insideGeofence,
+        distanceFromCenter: distance,
+        wifiBssid: wifiBssid,
+        validatedByWifi: validatedByWifi,
+        validatedByLocation: position != null && !validatedByWifi,
       );
       
-      print('✅ Pulse #$pulseCount saved to SQLite');
+      print('✅ Pulse #$pulseCount saved to SQLite (${insideGeofence ? "INSIDE" : "OUTSIDE"})');
       
       // Trigger callback if registered
       _onPulseRecordedCallback?.call();
     } catch (e) {
       print('❌ Error handling pulse from native: $e');
     }
+  }
+  
+  /// Calculate distance between two points in meters (Haversine formula)
+  static double _calculateDistance(
+    double lat1,
+    double lon1,
+    double lat2,
+    double lon2,
+  ) {
+    const earthRadiusMeters = 6371000.0;
+    
+    final dLat = _degreesToRadians(lat2 - lat1);
+    final dLon = _degreesToRadians(lon2 - lon1);
+    
+    final a = sin(dLat / 2) * sin(dLat / 2) +
+        cos(_degreesToRadians(lat1)) *
+            cos(_degreesToRadians(lat2)) *
+            sin(dLon / 2) *
+            sin(dLon / 2);
+    
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    
+    return earthRadiusMeters * c;
+  }
+
+  static double _degreesToRadians(double degrees) {
+    return degrees * pi / 180;
   }
   
   /// Dispose the listener

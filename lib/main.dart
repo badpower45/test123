@@ -22,6 +22,7 @@ import 'screens/login_screen.dart';
 import 'screens/splash_screen.dart';
 import 'services/pulse_backend_client.dart';
 import 'services/pulse_sync_manager.dart';
+import 'services/background_pulse_listener.dart'; // 🎧 Native pulse listener
 import 'services/workmanager_pulse_service.dart';
 import 'services/foreground_attendance_service.dart';
 import 'services/pulse_tracking_service.dart';
@@ -71,6 +72,15 @@ Future<void> main() async {
   await PulseSyncManager.initializeForMainIsolate();
   await PulseBackendClient.initialize();
   await NotificationService.instance.initialize();
+  
+  // 🎧 Initialize Background Pulse Listener (Native Service → Flutter)
+  if (!kIsWeb && Platform.isAndroid) {
+    await BackgroundPulseListener.initialize(
+      onPulseRecorded: () {
+        print('💓 Native pulse recorded - UI will auto-update');
+      },
+    );
+  }
 
   // 4. ✅ ANDROID 11+ CHINESE DEVICE OPTIMIZATION (THE BEAST MODE)
   if (!kIsWeb && Platform.isAndroid) {
