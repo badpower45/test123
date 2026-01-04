@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../database/offline_database.dart';
 import 'native_location_service.dart'; // 🚀 Native GPS for faster location
+import 'background_pulse_listener.dart'; // 🎧 Listen to native pulses
 import 'offline_data_service.dart';
 import 'notification_service.dart';
 import 'foreground_attendance_service.dart';
@@ -83,6 +84,14 @@ class PulseTrackingService extends ChangeNotifier {
     }
 
     print('🎯 Starting pulse tracking for employee: $employeeId');
+    
+    // Initialize background pulse listener (for native service)
+    await BackgroundPulseListener.initialize(
+      onPulseRecorded: () {
+        // Update UI when native service records a pulse
+        _refreshPulseCount();
+      },
+    );
     
     // Initialize notification service
     try {
@@ -875,10 +884,25 @@ class PulseTrackingService extends ChangeNotifier {
       'last_pulse': _lastPulseTime?.toIso8601String(),
     };
   }
+  
+  /// Refresh pulse count from database (called when native service records a pulse)
+  Future<void> _refreshPulseCount() async {
+    if (_currentEmployeeId == null) return;
+    
+    try {
+      final stats = await getTrackingStats(_currentEmployeeId!);
+      _pulsesCount = stats['total_pulses'] ?? 0;
+      print('🔄 Pulse count refreshed: $_pulsesCount');
+      notifyListeners();
+    } catch (e) {
+      print('⚠️ Error refreshing pulse count: $e');
+    }
+  }
 
   @override
   void dispose() {
     stopTracking();
+    BackgroundPulseListener.dispose();
     super.dispose();
   }
 }

@@ -156,8 +156,20 @@ class PersistentPulseService : Service() {
         Log.d(TAG, "💓 Sending pulse #$pulseCount at $timestamp")
         
         try {
-            // TODO: Call Flutter MethodChannel to send pulse
-            // For now, we'll just update the notification
+            // ✅ Call Flutter MethodChannel to record pulse in SQLite
+            val pulseData = mapOf(
+                "employee_id" to employeeId,
+                "attendance_id" to attendanceId,
+                "branch_id" to branchId,
+                "timestamp" to System.currentTimeMillis(),
+                "pulse_count" to pulseCount
+            )
+            
+            // Send to MainActivity to forward to Flutter
+            val intent = Intent("com.example.heartbeat.PULSE_RECORDED").apply {
+                putExtra("pulse_data", HashMap(pulseData))
+            }
+            sendBroadcast(intent)
             
             withContext(Dispatchers.Main) {
                 updateNotification("نبضة #$pulseCount - $timestamp")
