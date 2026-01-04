@@ -107,10 +107,15 @@ class PulseTrackingService extends ChangeNotifier {
     print('Radius: ${branchData['geofence_radius']}m');
 
     _isTracking = true;
-    _pulsesCount = 0;
     _currentBranchData = branchData;
     _lastPulseTime = DateTime.now();
     _recentPulses.clear();
+    
+    // ✅ بدل ما نبدأ من صفر، نجيب العدد من قاعدة البيانات
+    final stats = await getTrackingStats(employeeId);
+    _pulsesCount = stats['total_pulses'] ?? 0;
+    print('📊 استئناف تتبع النبضات: عدد النبضات الحالي = $_pulsesCount');
+    
     notifyListeners();
 
     // Send first pulse immediately
@@ -233,6 +238,11 @@ class PulseTrackingService extends ChangeNotifier {
         
         _pulsesCount++;
         _lastPulseTime = timestamp;
+        
+        // ✅ تحديث العداد من قاعدة البيانات لضمان الدقة
+        final updatedStats = await getTrackingStats(_currentEmployeeId!);
+        _pulsesCount = updatedStats['total_pulses'] ?? _pulsesCount;
+        
         notifyListeners();
         
         return; // Done - break override applied
@@ -295,6 +305,11 @@ class PulseTrackingService extends ChangeNotifier {
             
             _pulsesCount++;
             _lastPulseTime = timestamp;
+            
+            // ✅ تحديث العداد من قاعدة البيانات لضمان الدقة
+            final updatedStats = await getTrackingStats(_currentEmployeeId!);
+            _pulsesCount = updatedStats['total_pulses'] ?? _pulsesCount;
+            
             notifyListeners();
             
             return; // Done - no need for GPS
@@ -345,6 +360,10 @@ class PulseTrackingService extends ChangeNotifier {
         
         _pulsesCount++;
         _lastPulseTime = timestamp;
+        
+        // ✅ تحديث العداد من قاعدة البيانات لضمان الدقة
+        final updatedStats = await getTrackingStats(_currentEmployeeId!);
+        _pulsesCount = updatedStats['total_pulses'] ?? _pulsesCount;
         
         // Send warning notification
         await NotificationService.instance.showGeofenceViolation(
@@ -411,6 +430,10 @@ class PulseTrackingService extends ChangeNotifier {
 
       _pulsesCount++;
       _lastPulseTime = timestamp;
+      
+      // ✅ تحديث العداد من قاعدة البيانات لضمان الدقة
+      final updatedStats = await getTrackingStats(_currentEmployeeId!);
+      _pulsesCount = updatedStats['total_pulses'] ?? _pulsesCount;
 
       // Print pulse status
       print('📊 Pulse #$_pulsesCount: ${isInsideGeofence ? "✅ INSIDE" : "❌ OUTSIDE"} geofence (${distance.toStringAsFixed(1)}m)');
@@ -779,29 +802,71 @@ class PulseTrackingService extends ChangeNotifier {
   }
 
   /// Get tracking statistics
+  /// ✅ يجمع النبضات من Hive (المزامنة) + SQLite (المعلقة)
   Future<Map<String, dynamic>> getTrackingStats(String employeeId) async {
     final today = DateTime.now();
-    final pulses = await _offlineService.getPulsesForDate(
+    final startOfDay = DateTime(today.year, today.month, today.day);
+    final endOfDay = startOfDay.add(const Duration(days: 1));
+    
+    // 1. النبضات المزامنة من Hive
+    final syncedPulses = await _offlineService.getPulsesForDate(
       employeeId: employeeId,
       date: today,
     );
 
+    // 2. النبضات المعلقة من SQLite (لو مش Web)
+    List<Map<String, dynamic>> pendingPulses = [];
+    if (!kIsWeb) {
+      try {
+        final db = OfflineDatabase.instance;
+        final allPending = await db.getPendingPulses();
+        
+        // فلترة النبضات الخاصة بالموظف واليوم الحالي
+        pendingPulses = allPending.where((p) {
+          if (p['employee_id'] != employeeId) return false;
+          
+          try {
+            final timestamp = DateTime.parse(p['timestamp']?.toString() ?? '');
+            return timestamp.isAfter(startOfDay) && timestamp.isBefore(endOfDay);
+          } catch (e) {
+            return false;
+          }
+        }).toList();
+        
+        print('📊 نبضات مزامنة (Hive): ${syncedPulses.length}, معلقة (SQLite): ${pendingPulses.length}');
+      } catch (e) {
+        print('⚠️ خطأ في قراءة النبضات المعلقة: $e');
+      }
+    }
+
+    // 3. حساب الإحصائيات من المصدرين
     int insideCount = 0;
     int outsideCount = 0;
 
-    for (var pulse in pulses) {
+    // من Hive
+    for (var pulse in syncedPulses) {
       if (pulse['inside_geofence'] == true) {
         insideCount++;
       } else {
         outsideCount++;
       }
     }
+    
+    // من SQLite
+    for (var pulse in pendingPulses) {
+      if (pulse['inside_geofence'] == 1) { // SQLite بيخزن int مش bool
+        insideCount++;
+      } else {
+        outsideCount++;
+      }
+    }
 
+    final totalPulses = syncedPulses.length + pendingPulses.length;
     final totalMinutes = insideCount * 5;
     final hours = totalMinutes / 60;
 
     return {
-      'total_pulses': pulses.length,
+      'total_pulses': totalPulses,
       'inside_geofence': insideCount,
       'outside_geofence': outsideCount,
       'total_minutes': totalMinutes,

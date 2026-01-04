@@ -71,15 +71,17 @@ class FastGPSModule(private val context: Context) {
      */
     private fun tryNetworkProvider(callback: (Location?) -> Unit) {
         var locationReceived = false
+        var networkListener: LocationListener? = null
+        
         val timeoutRunnable = Runnable {
             if (!locationReceived) {
                 Log.w(TAG, "⏱️ Network location timeout, using last known")
-                locationManager.removeUpdates(networkListener)
+                networkListener?.let { locationManager.removeUpdates(it) }
                 useLastKnownLocation(callback)
             }
         }
         
-        val networkListener = object : LocationListener {
+        networkListener = object : LocationListener {
             override fun onLocationChanged(location: Location) {
                 if (!locationReceived) {
                     locationReceived = true
