@@ -7,6 +7,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 
+import 'core/config/build_config.dart';
 import 'models/employee.dart';
 import 'models/employee_adjustment.dart';
 import 'models/pulse.dart';
@@ -34,6 +35,10 @@ import 'config/supabase_config.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // 🎯 Detect and Configure Build Flavor (Lite vs Full)
+  await BuildConfig.detectFlavor();
+  BuildConfig.printConfig();
   
   // 1. Critical Crash Prevention
   FlutterError.onError = (FlutterErrorDetails details) {

@@ -30,6 +30,22 @@ android {
         versionName = flutter.versionName
     }
 
+    // 🎯 Build Flavors Configuration
+    flavorDimensions += "version"
+    productFlavors {
+        create("lite") {
+            dimension = "version"
+            applicationIdSuffix = ".lite"
+            versionNameSuffix = "-lite"
+            // For Employees/Managers - lightweight version without BLV and Google Maps
+        }
+        
+        create("full") {
+            dimension = "version"
+            // For Owners - full version with all features
+        }
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.

@@ -98,6 +98,20 @@
             </intent-filter>
         </receiver>
 
+        <!-- 🔥 Persistent Pulse Service - Native Android Service -->
+        <service
+            android:name=".PersistentPulseService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="location|dataSync"
+            android:stopWithTask="false" />
+
+        <!-- Pulse Alarm Receiver - Resurrects service if killed -->
+        <receiver
+            android:name=".PulseAlarmReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
     </application>
 
     <queries>
