@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../database/offline_database.dart';
 import 'native_location_service.dart'; // 🚀 Native GPS for faster location
+import 'native_pulse_service.dart'; // 🔥 Native Persistent Service for old devices
 import 'background_pulse_listener.dart'; // 🎧 Listen to native pulses
 import 'offline_data_service.dart';
 import 'notification_service.dart';
@@ -127,6 +128,26 @@ class PulseTrackingService extends ChangeNotifier {
     
     notifyListeners();
 
+    // 🔥 START NATIVE PERSISTENT SERVICE (for old devices)
+    // This ensures pulses continue even if app is killed in background
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        final branchId = (_currentBranchData!['id'] ?? _currentBranchData!['branch_id']) as String?;
+        final success = await NativePulseService.startPersistentService(
+          employeeId: employeeId,
+          attendanceId: attendanceId ?? 'pending',
+          branchId: branchId ?? '',
+        );
+        if (success) {
+          print('✅ Native Persistent Service started - will survive app closure');
+        } else {
+          print('⚠️ Failed to start Native Persistent Service');
+        }
+      } catch (e) {
+        print('⚠️ Error starting Native Service: $e');
+      }
+    }
+
     // Send first pulse immediately
     await _sendPulse();
 
@@ -139,7 +160,7 @@ class PulseTrackingService extends ChangeNotifier {
   }
 
   /// Stop pulse tracking
-  void stopTracking({bool fromAutoCheckout = false}) {
+  Future<void> stopTracking({bool fromAutoCheckout = false}) async {
     if (!_isTracking && !fromAutoCheckout) {
       print('Pulse tracking not active');
       return;
@@ -153,6 +174,16 @@ class PulseTrackingService extends ChangeNotifier {
     _recentPulses.clear();
     _currentBranchData = null;
     _currentEmployeeId = null;
+    
+    // 🔥 STOP NATIVE PERSISTENT SERVICE
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        await NativePulseService.stopPersistentService();
+        print('✅ Native Persistent Service stopped');
+      } catch (e) {
+        print('⚠️ Error stopping Native Service: $e');
+      }
+    }
     
     // Reset auto-checkout flag when manually stopped (not from auto-checkout)
     if (!fromAutoCheckout) {

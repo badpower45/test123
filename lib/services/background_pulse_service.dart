@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:geolocator/geolocator.dart';
 
+import '../database/offline_database.dart';
 import '../models/pulse.dart';
 import '../services/location_service.dart';
 import '../services/wifi_service.dart';
@@ -197,11 +198,35 @@ class BackgroundPulseService {
         if (sent) {
           sentOnline = true;
         } else {
-          await PulseSyncManager.storePulseOffline(pulse);
+          // Save to SQLite for later sync
+          final db = OfflineDatabase.instance;
+          await db.insertPendingPulse(
+            employeeId: pulse.employeeId,
+            timestamp: pulse.timestamp,
+            latitude: pulse.latitude,
+            longitude: pulse.longitude,
+            insideGeofence: geofenceValid,
+            distanceFromCenter: distance,
+            wifiBssid: wifiBssid,
+            validatedByWifi: wifiValid,
+            validatedByLocation: geofenceValid,
+          );
           queuedOffline = true;
         }
       } else {
-        await PulseSyncManager.storePulseOffline(pulse);
+        // Offline - save to SQLite
+        final db = OfflineDatabase.instance;
+        await db.insertPendingPulse(
+          employeeId: pulse.employeeId,
+          timestamp: pulse.timestamp,
+          latitude: pulse.latitude,
+          longitude: pulse.longitude,
+          insideGeofence: geofenceValid,
+          distanceFromCenter: distance,
+          wifiBssid: wifiBssid,
+          validatedByWifi: wifiValid,
+          validatedByLocation: geofenceValid,
+        );
         queuedOffline = true;
       }
 
