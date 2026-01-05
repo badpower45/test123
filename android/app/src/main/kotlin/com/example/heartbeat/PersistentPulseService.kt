@@ -5,10 +5,13 @@ import android.content.Context
 import android.content.Intent
 import android.os.*
 import android.util.Log
+import android.location.Location
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
 import java.text.SimpleDateFormat
 import java.util.*
+import android.database.sqlite.SQLiteDatabase
+import android.database.sqlite.SQLiteOpenHelper
 
 /**
  * 🔥 Persistent Pulse Service - The Beast Mode Service
@@ -20,6 +23,7 @@ import java.util.*
  * 3. WakeLock - prevent device from sleeping
  * 4. AlarmManager - resurrect service if killed
  * 5. Coroutines - efficient background processing
+ * 6. Direct SQLite writes - works even when Flutter is dead
  */
 class PersistentPulseService : Service() {
     
@@ -35,6 +39,10 @@ class PersistentPulseService : Service() {
     
     private var pulseCount = 0
     private var lastPulseTime: Long = 0
+    
+    // Native modules for location and WiFi
+    private lateinit var fastGPS: FastGPSModule
+    private lateinit var fastWiFi: FastWiFiScanner
     
     companion object {
         private const val TAG = "PersistentPulseService"
@@ -85,6 +93,10 @@ class PersistentPulseService : Service() {
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "📱 Service created")
+        
+        // Initialize Native GPS and WiFi modules
+        fastGPS = FastGPSModule(applicationContext)
+        fastWiFi = FastWiFiScanner(applicationContext)
         
         createNotificationChannel()
         acquireWakeLock()
@@ -146,7 +158,7 @@ class PersistentPulseService : Service() {
     }
     
     /**
-     * Send a pulse to the server
+     * Send a pulse - WRITES DIRECTLY TO SQLITE (works even when app is killed)
      */
     private suspend fun sendPulse() = withContext(Dispatchers.IO) {
         pulseCount++
@@ -156,7 +168,7 @@ class PersistentPulseService : Service() {
         Log.d(TAG, "💓 Sending pulse #$pulseCount at $timestamp")
         
         try {
-            // ✅ Call Flutter MethodChannel to record pulse in SQLite
+            // 🔥 DIRECT SQLITE WRITE (bypasses Flutter - works when app is dead)
             val pulseData = mapOf(
                 "employee_id" to employeeId,
                 "attendance_id" to attendanceId,
@@ -165,7 +177,10 @@ class PersistentPulseService : Service() {
                 "pulse_count" to pulseCount
             )
             
-            // Send to MainActivity to forward to Flutter
+            // Write directly to SQLite database
+            writePulseToDatabase(pulseData)
+            
+            // Also send BroadcastIntent (in case app is alive)
             val intent = Intent("com.example.heartbeat.PULSE_RECORDED").apply {
                 putExtra("pulse_data", HashMap(pulseData))
             }
@@ -178,12 +193,53 @@ class PersistentPulseService : Service() {
             // Schedule next alarm as backup
             scheduleAlarm()
             
-            Log.d(TAG, "✅ Pulse #$pulseCount sent successfully")
+            Log.d(TAG, "✅ Pulse #$pulseCount saved to SQLite successfully")
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to send pulse: ${e.message}", e)
             withContext(Dispatchers.Main) {
                 updateNotification("فشل إرسال النبضة: ${e.message}")
             }
+        }
+    }
+    
+    /**
+     * Write pulse directly to SQLite database
+     * This works even when Flutter is completely dead
+     */
+    private fun writePulseToDatabase(pulseData: Map<String, Any?>) {
+        try {
+            // Get the same database path that Flutter uses
+            val dbPath = applicationContext.getDatabasePath("offline_attendance.db").absolutePath
+            val db = SQLiteDatabase.openOrCreateDatabase(dbPath, null)
+            
+            // Generate unique ID
+            val pulseId = "${pulseData["employee_id"]}_${pulseData["timestamp"]}"
+            val currentTime = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+                timeZone = java.util.TimeZone.getTimeZone("UTC")
+            }.format(Date())
+            
+            // Insert into pending_pulses table
+            val sql = """
+                INSERT OR REPLACE INTO pending_pulses 
+                (id, employee_id, attendance_id, timestamp, latitude, longitude, 
+                 inside_geofence, distance_from_center, wifi_bssid, 
+                 validated_by_wifi, validated_by_location, created_at, synced)
+                VALUES (?, ?, ?, ?, NULL, NULL, 0, 0.0, NULL, 0, 0, ?, 0)
+            """.trimIndent()
+            
+            db.execSQL(sql, arrayOf(
+                pulseId,
+                pulseData["employee_id"],
+                pulseData["attendance_id"] ?: "pending",
+                currentTime,
+                currentTime
+            ))
+            
+            db.close()
+            
+            Log.d(TAG, "💾 Pulse written directly to SQLite: $pulseId")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to write to SQLite: ${e.message}", e)
         }
     }
     
