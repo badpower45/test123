@@ -12,6 +12,7 @@ import java.text.SimpleDateFormat
 import java.util.*
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import android.media.MediaPlayer
 
 /**
  * 🔥 Persistent Pulse Service - The Beast Mode Service
@@ -24,12 +25,16 @@ import android.database.sqlite.SQLiteOpenHelper
  * 4. AlarmManager - resurrect service if killed
  * 5. Coroutines - efficient background processing
  * 6. Direct SQLite writes - works even when Flutter is dead
+ * 7. 🎵 Sticky Audio - Silent MediaPlayer prevents Deep Sleep (Samsung/Realme killer)
  */
 class PersistentPulseService : Service() {
     
     private var wakeLock: PowerManager.WakeLock? = null
     private val serviceScope = CoroutineScope(Dispatchers.Default + Job())
     private var pulseJob: Job? = null
+    
+    // 🎵 NEW: Silent audio player for preventing Deep Sleep
+    private lateinit var mediaPlayer: MediaPlayer
     
     // Service parameters
     private var employeeId: String? = null
@@ -94,6 +99,17 @@ class PersistentPulseService : Service() {
         super.onCreate()
         Log.d(TAG, "📱 Service created")
         
+        // 🎵 Initialize Silent Media Player (prevents Deep Sleep on Samsung/Realme)
+        try {
+            mediaPlayer = MediaPlayer.create(this, R.raw.silent)
+            mediaPlayer.isLooping = true // يشتغل للأبد في دائرة
+            mediaPlayer.setVolume(0f, 0f) // صامت تماماً - مش هيسمع حاجة
+            Log.d(TAG, "🎵 Silent MediaPlayer initialized")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to initialize MediaPlayer: ${e.message}")
+            // Create fallback - not critical if it fails
+        }
+        
         // Initialize Native GPS and WiFi modules
         fastGPS = FastGPSModule(applicationContext)
         fastWiFi = FastWiFiScanner(applicationContext)
@@ -123,6 +139,16 @@ class PersistentPulseService : Service() {
         // Start foreground service with notification
         val notification = buildNotification("جاري بدء التتبع...")
         startForeground(NOTIFICATION_ID, notification)
+        
+        // 🎵 Start silent audio playback (prevents Deep Sleep)
+        try {
+            if (::mediaPlayer.isInitialized && !mediaPlayer.isPlaying) {
+                mediaPlayer.start()
+                Log.d(TAG, "🎵 Silent audio started - Deep Sleep prevention activated")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to start MediaPlayer: ${e.message}")
+        }
         
         // Start pulse timer
         startPulseTimer()
@@ -388,6 +414,19 @@ class PersistentPulseService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "💀 Service destroyed")
+        
+        // 🎵 Stop and release MediaPlayer
+        try {
+            if (::mediaPlayer.isInitialized) {
+                if (mediaPlayer.isPlaying) {
+                    mediaPlayer.stop()
+                }
+                mediaPlayer.release()
+                Log.d(TAG, "🎵 MediaPlayer stopped and released")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error releasing MediaPlayer: ${e.message}")
+        }
         
         // Cancel coroutines
         pulseJob?.cancel()

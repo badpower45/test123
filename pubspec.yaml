@@ -43,6 +43,7 @@ dependencies:
   hive_flutter: ^1.1.0
   path_provider: ^2.1.4
   permission_handler: ^11.3.1
+  optimize_battery: ^0.0.4  # 🔋 Battery optimization control for Hard Permission system
   supabase_flutter: ^2.10.3
   google_fonts: ^6.2.1
   universal_io: ^2.2.2

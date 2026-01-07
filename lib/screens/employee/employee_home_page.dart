@@ -7,6 +7,7 @@ import 'package:universal_io/io.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:optimize_battery/optimize_battery.dart';
 
 import '../../constants/restaurant_config.dart';
 import '../../models/employee.dart';
@@ -1500,11 +1501,180 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
     return result ?? false;
   }
 
+  /// 🔒 Hard Permission Check - نظام الأمر الواقع
+  /// يفحص جميع الصلاحيات الضرورية قبل السماح بتسجيل الحضور
+  /// يمنع الحضور إذا لم تكن جميع الصلاحيات مفعلة
+  Future<bool> checkHardPermissions() async {
+    if (kIsWeb) return true; // Web doesn't need these checks
+    
+    final List<String> missingPermissions = [];
+    
+    try {
+      // 1. فحص تحسين البطارية (لأجهزة سامسونج وريلمي)
+      if (Platform.isAndroid) {
+        bool isOptimized = false;
+        try {
+          isOptimized = await OptimizeBattery.isIgnoringBatteryOptimizations();
+        } catch (e) {
+          AppLogger.instance.log('Failed to check battery optimization: $e', 
+            level: AppLogger.warning, tag: 'HardPermission');
+          // If check fails, don't block - just log
+        }
+        
+        if (!isOptimized) {
+          missingPermissions.add('🔋 يجب تعطيل "تحسين البطارية" لضمان تسجيل نبضاتك بدقة');
+        }
+      }
+      
+      // 2. فحص إذن الموقع (Always)
+      final locationStatus = await Geolocator.checkPermission();
+      if (locationStatus != LocationPermission.always && 
+          locationStatus != LocationPermission.whileInUse) {
+        missingPermissions.add('📍 يجب ضبط إذن الموقع على "السماح طوال الوقت" لتجنب الانصراف التلقائي');
+      }
+      
+      // 3. فحص GPS مفعل
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        missingPermissions.add('🛰️ يجب تفعيل خدمات الموقع (GPS) على جهازك');
+      }
+      
+      // إذا كانت هناك صلاحيات ناقصة، أظهر dialog
+      if (missingPermissions.isNotEmpty && mounted) {
+        await _showPermissionDialog(missingPermissions);
+        return false;
+      }
+      
+      return true;
+    } catch (e) {
+      AppLogger.instance.log('Error checking hard permissions: $e', 
+        level: AppLogger.error, tag: 'HardPermission', error: e);
+      // On error, allow check-in but log the issue
+      return true;
+    }
+  }
+  
+  /// عرض dialog للصلاحيات الناقصة
+  Future<void> _showPermissionDialog(List<String> missingPermissions) async {
+    return showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.orange[700], size: 32),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Text(
+                '⚠️ صلاحيات مطلوبة',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'لا يمكن تسجيل الحضور بدون تفعيل هذه الصلاحيات:',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
+                ),
+              ),
+              const SizedBox(height: 15),
+              ...missingPermissions.map((permission) => Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.close, color: Colors.red, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        permission,
+                        style: const TextStyle(fontSize: 14, height: 1.4),
+                      ),
+                    ),
+                  ],
+                ),
+              )),
+              const SizedBox(height: 15),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.orange[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.orange[200]!),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline, color: Colors.orange[700], size: 20),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Text(
+                        'هذه الصلاحيات ضرورية لضمان تسجيل حضورك بدقة ومنع الانصراف التلقائي',
+                        style: TextStyle(fontSize: 12, color: Colors.black87),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('حسناً', style: TextStyle(fontSize: 16)),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              // فتح الإعدادات للمستخدم
+              await _guideUserToSettings();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.orange[700],
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('فتح الإعدادات'),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  /// توجيه المستخدم للإعدادات
+  Future<void> _guideUserToSettings() async {
+    if (!Platform.isAndroid) return;
+    
+    try {
+      // محاولة فتح صفحة تحسين البطارية مباشرة
+      await OptimizeBattery.stopOptimizingBatteryUsage();
+    } catch (e) {
+      // إذا فشل، افتح إعدادات التطبيق العامة
+      await openAppSettings();
+    }
+  }
+
   Future<void> _handleCheckIn() async {
     setState(() => _isLoading = true);
 
     try {
       AppLogger.instance.log('Starting check-in process for employee: ${widget.employeeId}', tag: 'CheckIn');
+      
+      // 🔒 NEW: Hard Permission Check - يجب أن تمر جميع الفحوصات
+      if (!kIsWeb && Platform.isAndroid) {
+        final hasAllPermissions = await checkHardPermissions();
+        if (!hasAllPermissions) {
+          setState(() => _isLoading = false);
+          return; // توقف هنا - مش هنكمل بدون الصلاحيات
+        }
+      }
       
       // ✅ CRITICAL: Request Location Permission FIRST (Android/iOS)
       if (!kIsWeb) {
