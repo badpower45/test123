@@ -42,6 +42,11 @@ class PersistentPulseService : Service() {
     private var branchId: String? = null
     private var intervalMinutes: Int = 5
     
+    // Branch location for geofence check
+    private var branchLatitude: Double = 0.0
+    private var branchLongitude: Double = 0.0
+    private var branchRadius: Double = 100.0
+    
     private var pulseCount = 0
     private var lastPulseTime: Long = 0
     
@@ -60,6 +65,9 @@ class PersistentPulseService : Service() {
         private const val EXTRA_ATTENDANCE_ID = "attendanceId"
         private const val EXTRA_BRANCH_ID = "branchId"
         private const val EXTRA_INTERVAL = "interval"
+        private const val EXTRA_BRANCH_LAT = "branchLatitude"
+        private const val EXTRA_BRANCH_LNG = "branchLongitude"
+        private const val EXTRA_BRANCH_RADIUS = "branchRadius"
         
         /**
          * Start the persistent pulse service
@@ -70,6 +78,9 @@ class PersistentPulseService : Service() {
                 putExtra(EXTRA_ATTENDANCE_ID, params["attendanceId"] as? String)
                 putExtra(EXTRA_BRANCH_ID, params["branchId"] as? String)
                 putExtra(EXTRA_INTERVAL, params["interval"] as? Int ?: 5)
+                putExtra(EXTRA_BRANCH_LAT, params["branchLatitude"] as? Double ?: 0.0)
+                putExtra(EXTRA_BRANCH_LNG, params["branchLongitude"] as? Double ?: 0.0)
+                putExtra(EXTRA_BRANCH_RADIUS, params["branchRadius"] as? Double ?: 100.0)
             }
             
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -126,8 +137,12 @@ class PersistentPulseService : Service() {
         attendanceId = intent?.getStringExtra(EXTRA_ATTENDANCE_ID)
         branchId = intent?.getStringExtra(EXTRA_BRANCH_ID)
         intervalMinutes = intent?.getIntExtra(EXTRA_INTERVAL, 5) ?: 5
+        branchLatitude = intent?.getDoubleExtra(EXTRA_BRANCH_LAT, 0.0) ?: 0.0
+        branchLongitude = intent?.getDoubleExtra(EXTRA_BRANCH_LNG, 0.0) ?: 0.0
+        branchRadius = intent?.getDoubleExtra(EXTRA_BRANCH_RADIUS, 100.0) ?: 100.0
         
         Log.d(TAG, "📋 Params - Employee: $employeeId, Attendance: $attendanceId, Branch: $branchId, Interval: $intervalMinutes min")
+        Log.d(TAG, "📍 Branch Location: ($branchLatitude, $branchLongitude), Radius: ${branchRadius}m")
         
         // Validate required parameters
         if (employeeId.isNullOrEmpty() || attendanceId.isNullOrEmpty()) {
@@ -194,13 +209,42 @@ class PersistentPulseService : Service() {
         Log.d(TAG, "💓 Sending pulse #$pulseCount at $timestamp")
         
         try {
+            // � Get current location using FastGPS
+            var currentLocation: Location? = null
+            var distance = 0.0
+            var isInsideGeofence = false
+            
+            try {
+                currentLocation = fastGPS.getCurrentLocation()
+                if (currentLocation != null && branchLatitude != 0.0 && branchLongitude != 0.0) {
+                    // Calculate distance to branch
+                    val branchLocation = Location("").apply {
+                        latitude = branchLatitude
+                        longitude = branchLongitude
+                    }
+                    distance = currentLocation.distanceTo(branchLocation).toDouble()
+                    isInsideGeofence = distance <= branchRadius
+                    
+                    Log.d(TAG, "📍 Location: (${currentLocation.latitude}, ${currentLocation.longitude})")
+                    Log.d(TAG, "📏 Distance from branch: ${distance.toInt()}m - ${if (isInsideGeofence) "✅ INSIDE" else "❌ OUTSIDE"}")
+                } else {
+                    Log.w(TAG, "⚠️ Could not get location or branch coordinates not set")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Error getting location: ${e.message}")
+            }
+            
             // 🔥 DIRECT SQLITE WRITE (bypasses Flutter - works when app is dead)
             val pulseData = mapOf(
                 "employee_id" to employeeId,
                 "attendance_id" to attendanceId,
                 "branch_id" to branchId,
                 "timestamp" to System.currentTimeMillis(),
-                "pulse_count" to pulseCount
+                "pulse_count" to pulseCount,
+                "latitude" to currentLocation?.latitude,
+                "longitude" to currentLocation?.longitude,
+                "distance" to distance,
+                "inside_geofence" to isInsideGeofence
             )
             
             // Write directly to SQLite database
@@ -244,13 +288,19 @@ class PersistentPulseService : Service() {
                 timeZone = java.util.TimeZone.getTimeZone("UTC")
             }.format(Date())
             
+            // Extract location data
+            val latitude = pulseData["latitude"] as? Double
+            val longitude = pulseData["longitude"] as? Double
+            val distance = pulseData["distance"] as? Double ?: 0.0
+            val insideGeofence = if (pulseData["inside_geofence"] as? Boolean == true) 1 else 0
+            
             // Insert into pending_pulses table
             val sql = """
                 INSERT OR REPLACE INTO pending_pulses 
                 (id, employee_id, attendance_id, timestamp, latitude, longitude, 
                  inside_geofence, distance_from_center, wifi_bssid, 
                  validated_by_wifi, validated_by_location, created_at, synced)
-                VALUES (?, ?, ?, ?, NULL, NULL, 0, 0.0, NULL, 0, 0, ?, 0)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, 0)
             """.trimIndent()
             
             db.execSQL(sql, arrayOf(
@@ -258,6 +308,11 @@ class PersistentPulseService : Service() {
                 pulseData["employee_id"],
                 pulseData["attendance_id"] ?: "pending",
                 currentTime,
+                latitude,
+                longitude,
+                insideGeofence,
+                distance,
+                if (latitude != null && longitude != null) 1 else 0, // validated_by_location
                 currentTime
             ))
             

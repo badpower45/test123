@@ -15,6 +15,9 @@ class NativePulseService {
     required String attendanceId,
     String? branchId,
     int intervalMinutes = 5,
+    double? branchLatitude,
+    double? branchLongitude,
+    double? branchRadius,
   }) async {
     if (!Platform.isAndroid) {
       print('⚠️ Native pulse service only available on Android');
@@ -26,12 +29,16 @@ class NativePulseService {
       print('   Employee: $employeeId');
       print('   Attendance: $attendanceId');
       print('   Interval: $intervalMinutes min');
+      print('   Branch: ($branchLatitude, $branchLongitude), Radius: ${branchRadius}m');
       
       final result = await _channel.invokeMethod('startPersistentService', {
         'employeeId': employeeId,
         'attendanceId': attendanceId,
         'branchId': branchId ?? '',
         'interval': intervalMinutes,
+        'branchLatitude': branchLatitude ?? 0.0,
+        'branchLongitude': branchLongitude ?? 0.0,
+        'branchRadius': branchRadius ?? 100.0,
       });
       
       if (result == true) {

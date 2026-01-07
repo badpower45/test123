@@ -80,6 +80,9 @@ class MainActivity : FlutterActivity() {
                         val attendanceId = call.argument<String>("attendanceId")
                         val branchId = call.argument<String>("branchId")
                         val interval = call.argument<Int>("interval") ?: 5
+                        val branchLatitude = call.argument<Double>("branchLatitude") ?: 0.0
+                        val branchLongitude = call.argument<Double>("branchLongitude") ?: 0.0
+                        val branchRadius = call.argument<Double>("branchRadius") ?: 100.0
                         
                         if (employeeId.isNullOrEmpty() || attendanceId.isNullOrEmpty()) {
                             result.error("INVALID_PARAMS", "Missing employeeId or attendanceId", null)
@@ -90,7 +93,10 @@ class MainActivity : FlutterActivity() {
                             "employeeId" to employeeId,
                             "attendanceId" to attendanceId,
                             "branchId" to (branchId ?: ""),
-                            "interval" to interval
+                            "interval" to interval,
+                            "branchLatitude" to branchLatitude,
+                            "branchLongitude" to branchLongitude,
+                            "branchRadius" to branchRadius
                         )
                         
                         PersistentPulseService.start(this, params)

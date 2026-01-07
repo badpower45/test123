@@ -133,13 +133,21 @@ class PulseTrackingService extends ChangeNotifier {
     if (!kIsWeb && Platform.isAndroid) {
       try {
         final branchId = (_currentBranchData!['id'] ?? _currentBranchData!['branch_id']) as String?;
+        final branchLat = _currentBranchData!['latitude'] as double?;
+        final branchLng = _currentBranchData!['longitude'] as double?;
+        final branchRad = _currentBranchData!['geofence_radius'] as double?;
+        
         final success = await NativePulseService.startPersistentService(
           employeeId: employeeId,
           attendanceId: attendanceId ?? 'pending',
           branchId: branchId ?? '',
+          branchLatitude: branchLat,
+          branchLongitude: branchLng,
+          branchRadius: branchRad,
         );
         if (success) {
           print('✅ Native Persistent Service started - will survive app closure');
+          print('   📍 Branch geofence configured: ($branchLat, $branchLng), radius: ${branchRad}m');
         } else {
           print('⚠️ Failed to start Native Persistent Service');
         }
