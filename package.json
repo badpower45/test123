@@ -13,7 +13,11 @@
     "start": "node dist/server/index.js",
     "db:generate": "node node_modules/drizzle-kit/bin.cjs generate",
     "db:push": "node node_modules/drizzle-kit/bin.cjs push --force",
-    "db:studio": "node node_modules/drizzle-kit/bin.cjs studio"
+    "db:studio": "node node_modules/drizzle-kit/bin.cjs studio",
+    "test:e2e:build": "flutter build web --release",
+    "test:e2e": "playwright test",
+    "test:e2e:full": "npm run test:e2e:build && npm run test:e2e",
+    "test:e2e:report": "playwright show-report"
   },
   "dependencies": {
     "axios": "^1.13.2",
@@ -28,6 +32,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/node": "^20.19.24",
