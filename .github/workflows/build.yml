@@ -1,4 +1,4 @@
-name: Build iOS & Android
+name: Build Mobile & Desktop
 
 on:
   push:
@@ -62,20 +62,57 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
       
-      - name: Build APK
-        run: flutter build apk --release
+      - name: Build APK (full flavor)
+        run: flutter build apk --release --flavor full
       
-      - name: Build App Bundle
-        run: flutter build appbundle --release
+      - name: Build App Bundle (full flavor)
+        run: flutter build appbundle --release --flavor full
       
       - name: Upload APK
         uses: actions/upload-artifact@v3
         with:
           name: android-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: build/app/outputs/flutter-apk/app-full-release.apk
       
       - name: Upload App Bundle
         uses: actions/upload-artifact@v3
         with:
           name: android-aab
           path: build/app/outputs/bundle/release/app-release.aab
+
+  build-windows-desktop:
+    name: Build Windows Desktop
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Build Windows release
+        run: flutter build windows --release
+
+      - name: Package Windows release (zip)
+        shell: pwsh
+        run: |
+          $source = "build/windows/x64/runner/Release/*"
+          $targetDir = "build/windows/x64/runner"
+          $zipPath = "$targetDir/windows-release.zip"
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+          Compress-Archive -Path $source -DestinationPath $zipPath
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-desktop-release
+          path: build/windows/x64/runner/windows-release.zip
