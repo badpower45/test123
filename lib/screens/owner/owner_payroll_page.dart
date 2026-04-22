@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../services/payroll_service.dart';
+import '../../utils/owner_time_utils.dart';
 import 'owner_branch_payroll_details_page.dart';
 
 class OwnerPayrollPage extends StatefulWidget {
@@ -293,7 +294,7 @@ class _OwnerPayrollPageState extends State<OwnerPayrollPage> {
                                       Builder(builder: (context) {
                                         String paidAtStr = '';
                                         try {
-                                          paidAtStr = DateFormat('dd/MM/yyyy HH:mm').format(DateTime.parse(branch['paid_at']?.toString() ?? ''));
+                                            paidAtStr = OwnerTimeUtils.formatDateTime(branch['paid_at']?.toString());
                                         } catch (e) {
                                           paidAtStr = '-';
                                         }

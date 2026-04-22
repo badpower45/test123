@@ -9,6 +9,8 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import androidx.core.app.ActivityCompat
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 
 /**
  * 🚀 Fast GPS Module
@@ -64,6 +66,15 @@ class FastGPSModule(private val context: Context) {
         Log.d(TAG, "📡 Requesting Network location...")
         tryNetworkProvider(callback)
     }
+
+    suspend fun getCurrentLocation(): Location? =
+        suspendCancellableCoroutine { continuation ->
+            getLocationFast { location ->
+                if (continuation.isActive) {
+                    continuation.resume(location)
+                }
+            }
+        }
     
     /**
      * Try to get location from Network Provider (WiFi/Cell towers)

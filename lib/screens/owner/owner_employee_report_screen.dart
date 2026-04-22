@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
-import '../../utils/time_utils.dart';
+import '../../utils/owner_time_utils.dart';
 import '../../theme/app_colors.dart';
 
 class OwnerEmployeeReportScreen extends StatefulWidget {
@@ -430,6 +430,6 @@ class _OwnerEmployeeReportScreenState extends State<OwnerEmployeeReportScreen> {
   String _formatTime(dynamic time) {
     if (time == null) return '-';
     final timeStr = time.toString();
-    return TimeUtils.formatTimeShort(timeStr);
+    return OwnerTimeUtils.formatTimeShort(timeStr);
   }
 }

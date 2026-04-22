@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 
 import '../config/app_config.dart';
@@ -61,22 +64,26 @@ class _LoginScreenState extends State<LoginScreen> {
       if (connectivityResult.contains(ConnectivityResult.none)) {
         throw Exception('لا يوجد اتصال بالإنترنت. تأكد من اتصالك بالشبكة');
       }
-      
+
       // Authenticate with Supabase
       final employee = await SupabaseAuthService.login(employeeId, pin);
-      
+
       if (employee == null) {
         throw Exception('معرف الموظف أو الرقم السري غير صحيح');
       }
 
       // Handle new employees (without branch) - allow login but show warning
-      if (employee.branch.isEmpty || employee.branch == 'null' || employee.branch == 'غير محدد') {
+      if (employee.branch.isEmpty ||
+          employee.branch == 'null' ||
+          employee.branch == 'غير محدد') {
         print('⚠️ [Login] Employee ${employee.id} has no branch assigned');
         // Allow login but employee won't be able to check in until branch is assigned
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('⚠️ تحذير: الموظف غير مرتبط بفرع. يرجى التواصل مع المدير.'),
+              content: Text(
+                '⚠️ تحذير: الموظف غير مرتبط بفرع. يرجى التواصل مع المدير.',
+              ),
               backgroundColor: Colors.orange,
               duration: Duration(seconds: 5),
             ),
@@ -87,8 +94,9 @@ class _LoginScreenState extends State<LoginScreen> {
       // Register device for single device login
       try {
         final deviceResult = await DeviceService.registerDevice(employee.id);
-        final wasLoggedOut = deviceResult['wasLoggedOutFromOtherDevice'] as bool? ?? false;
-        
+        final wasLoggedOut =
+            deviceResult['wasLoggedOutFromOtherDevice'] as bool? ?? false;
+
         if (wasLoggedOut && mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -111,24 +119,8 @@ class _LoginScreenState extends State<LoginScreen> {
         fullName: employee.fullName,
       );
 
-      // Initialize BLV system for environmental tracking
-      if (employee.branch.isNotEmpty) {
-        try {
-          final blvManager = BLVManager();
-          
-          // Note: We need to fetch branchId from employee.branch name
-          // For now, we'll initialize without baseline (will load later)
-          await blvManager.initialize(
-            baseUrl: AppConfig.apiBaseUrl, // Uses API_BASE_URL from env or localhost:3000
-            authToken: employee.id,
-          );
-          
-          print('✅ [BLV] System initialized for ${employee.branch}');
-        } catch (e) {
-          print('⚠️ [BLV] Failed to initialize: $e');
-          // Continue even if BLV fails - don't block login
-        }
-      }
+      // Run BLV bootstrap in background to keep login path stable.
+      unawaited(_initializeBlvSafely(employee));
 
       if (!mounted) return;
 
@@ -136,7 +128,9 @@ class _LoginScreenState extends State<LoginScreen> {
       print('🔍 NAVIGATION DEBUG - Employee role: ${employee.role}');
       print('🔍 NAVIGATION DEBUG - Checking conditions:');
       print('   - Is owner? ${employee.role == EmployeeRole.owner}');
-      print('   - Is admin/hr? ${employee.role == EmployeeRole.admin || employee.role == EmployeeRole.hr}');
+      print(
+        '   - Is admin/hr? ${employee.role == EmployeeRole.admin || employee.role == EmployeeRole.hr}',
+      );
       print('   - Is manager? ${employee.role == EmployeeRole.manager}');
       print('   - Is staff? ${employee.role == EmployeeRole.staff}');
 
@@ -151,9 +145,12 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ),
         );
-      } else if (employee.role == EmployeeRole.admin || employee.role == EmployeeRole.hr) {
+      } else if (employee.role == EmployeeRole.admin ||
+          employee.role == EmployeeRole.hr) {
         // Admin/HR goes to branch manager dashboard directly
-        print('🔍 NAVIGATION DEBUG - Navigating to BranchManagerScreen (admin/hr)');
+        print(
+          '🔍 NAVIGATION DEBUG - Navigating to BranchManagerScreen (admin/hr)',
+        );
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (_) => BranchManagerScreen(
@@ -164,7 +161,9 @@ class _LoginScreenState extends State<LoginScreen> {
         );
       } else if (employee.role == EmployeeRole.manager) {
         // Manager goes to EMPLOYEE screen (same as staff) + admin button
-        print('🔍 NAVIGATION DEBUG - Navigating to EmployeeMainScreen (manager with admin privileges)');
+        print(
+          '🔍 NAVIGATION DEBUG - Navigating to EmployeeMainScreen (manager with admin privileges)',
+        );
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (_) => EmployeeMainScreen(
@@ -176,13 +175,19 @@ class _LoginScreenState extends State<LoginScreen> {
         );
       } else {
         // Regular employee - check if needs onboarding
-        print('🔍 NAVIGATION DEBUG - Navigating to EmployeeMainScreen (staff/default)');
-        
+        print(
+          '🔍 NAVIGATION DEBUG - Navigating to EmployeeMainScreen (staff/default)',
+        );
+
         // Check if employee needs onboarding
-        final needsOnboarding = await SupabaseAuthService.needsOnboarding(employee.id);
-        
+        final needsOnboarding = await SupabaseAuthService.needsOnboarding(
+          employee.id,
+        );
+
         if (needsOnboarding) {
-          print('🔍 NAVIGATION DEBUG - Employee needs onboarding, showing onboarding flow');
+          print(
+            '🔍 NAVIGATION DEBUG - Employee needs onboarding, showing onboarding flow',
+          );
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(
               builder: (_) => EmployeeOnboardingFlow(
@@ -211,18 +216,21 @@ class _LoginScreenState extends State<LoginScreen> {
       // Better error messages for common errors
       String errorMessage = 'حدث خطأ أثناء تسجيل الدخول';
       final errorStr = e.toString().toLowerCase();
-      
-      if (errorStr.contains('invalid employee') || errorStr.contains('invalid pin')) {
+
+      if (errorStr.contains('invalid employee') ||
+          errorStr.contains('invalid pin')) {
         errorMessage = 'معرف الموظف أو الرقم السري غير صحيح';
-      } else if (errorStr.contains('clientconnection') || 
-                 errorStr.contains('connection closed') ||
-                 errorStr.contains('eof')) {
-        errorMessage = 'فشل الاتصال بالخادم. تأكد من اتصالك بالإنترنت وحاول مرة أخرى';
+      } else if (errorStr.contains('clientconnection') ||
+          errorStr.contains('connection closed') ||
+          errorStr.contains('eof')) {
+        errorMessage =
+            'فشل الاتصال بالخادم. تأكد من اتصالك بالإنترنت وحاول مرة أخرى';
       } else if (errorStr.contains('timeout')) {
         errorMessage = 'انتهت مهلة الاتصال. تأكد من اتصالك بالإنترنت';
       } else if (errorStr.contains('socket') || errorStr.contains('network')) {
         errorMessage = 'مشكلة في الشبكة. تحقق من اتصالك بالإنترنت';
-      } else if (errorStr.contains('handshake') || errorStr.contains('certificate')) {
+      } else if (errorStr.contains('handshake') ||
+          errorStr.contains('certificate')) {
         errorMessage = 'خطأ في الاتصال الآمن. حاول مرة أخرى';
       } else {
         // Keep original message for unknown errors
@@ -251,6 +259,30 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  Future<void> _initializeBlvSafely(Employee employee) async {
+    final branch = employee.branch.trim();
+    if (branch.isEmpty || branch == 'null' || branch == 'غير محدد') {
+      return;
+    }
+
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      print('ℹ️ [BLV] Skipped on iOS to avoid post-login instability');
+      return;
+    }
+
+    try {
+      final blvManager = BLVManager();
+      await blvManager.initialize(
+        baseUrl: AppConfig.apiBaseUrl,
+        authToken: employee.id,
+      );
+
+      print('✅ [BLV] System initialized for ${employee.branch}');
+    } catch (e) {
+      print('⚠️ [BLV] Failed to initialize: $e');
+    }
+  }
+
   InputDecoration _buildInputDecoration(String hint) {
     return InputDecoration(
       hintText: hint,
@@ -267,7 +299,6 @@ class _LoginScreenState extends State<LoginScreen> {
       fillColor: Colors.white.withAlpha((0.12 * 255).round()),
     );
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -289,7 +320,8 @@ class _LoginScreenState extends State<LoginScreen> {
                     return Text(
                       'أولديزز وركرز',
                       textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                      style: Theme.of(context).textTheme.headlineMedium
+                          ?.copyWith(
                             color: AppColors.onPrimary,
                             fontWeight: FontWeight.bold,
                           ),
@@ -331,12 +363,17 @@ class _LoginScreenState extends State<LoginScreen> {
                             width: 20,
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(AppColors.primaryOrange),
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                AppColors.primaryOrange,
+                              ),
                             ),
                           )
                         : const Text(
                             'تسجيل الدخول',
-                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                   ),
                 ),

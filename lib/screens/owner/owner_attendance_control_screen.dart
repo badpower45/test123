@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../models/employee_attendance_status.dart';
 import '../../services/owner_api_service.dart';
 import '../../theme/app_colors.dart';
+import '../../utils/owner_time_utils.dart';
 
 class OwnerAttendanceControlScreen extends StatefulWidget {
   const OwnerAttendanceControlScreen({super.key});
@@ -183,8 +184,7 @@ class _OwnerAttendanceControlScreenState
   }
 
   String _formatTime(DateTime? time) {
-    if (time == null) return '--:--';
-    return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+    return OwnerTimeUtils.formatTimeFromDateTime(time);
   }
 
   @override

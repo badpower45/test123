@@ -18,6 +18,14 @@ class BootReceiver : BroadcastReceiver() {
     
     companion object {
         private const val TAG = "BootReceiver"
+        private const val PERSISTENT_PREFS = "persistent_pulse_service"
+        private const val EXTRA_EMPLOYEE_ID = "employeeId"
+        private const val EXTRA_ATTENDANCE_ID = "attendanceId"
+        private const val EXTRA_BRANCH_ID = "branchId"
+        private const val EXTRA_INTERVAL = "interval"
+        private const val EXTRA_BRANCH_LAT = "branchLatitude"
+        private const val EXTRA_BRANCH_LNG = "branchLongitude"
+        private const val EXTRA_BRANCH_RADIUS = "branchRadius"
     }
     
     override fun onReceive(context: Context, intent: Intent) {
@@ -30,22 +38,41 @@ class BootReceiver : BroadcastReceiver() {
             Intent.ACTION_LOCKED_BOOT_COMPLETED,
             "android.intent.action.QUICKBOOT_POWERON",
             Intent.ACTION_MY_PACKAGE_REPLACED -> {
-                Log.d(TAG, "Device booted or app updated - checking for active attendance")
-                
-                // The actual restart logic is handled by Flutter when the app opens
-                // This receiver just logs the boot event
-                
-                // Check SharedPreferences for active attendance
-                val prefs = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
-                val hasActiveAttendance = prefs.contains("flutter.active_employee_id")
-                
-                if (hasActiveAttendance) {
-                    Log.d(TAG, "Active attendance found - app should auto-resume tracking when opened")
-                    
-                    // Optionally, we could start the MainActivity here to trigger Flutter
-                    // But that might be intrusive, so we just log it
-                    // The FlutterForegroundTask plugin should handle auto-restart if configured
+                Log.d(TAG, "Device booted or app updated - restoring native pulse service if needed")
+
+                val prefs = context.getSharedPreferences(PERSISTENT_PREFS, Context.MODE_PRIVATE)
+                val employeeId = prefs.getString(EXTRA_EMPLOYEE_ID, null)
+                val attendanceId = prefs.getString(EXTRA_ATTENDANCE_ID, null)
+
+                if (employeeId.isNullOrEmpty() || attendanceId.isNullOrEmpty()) {
+                    Log.d(TAG, "No persisted active attendance found, skipping service restore")
+                    return
                 }
+
+                val branchId = prefs.getString(EXTRA_BRANCH_ID, "") ?: ""
+                val interval = prefs.getInt(EXTRA_INTERVAL, 5).coerceAtLeast(1)
+                val branchLatitude = java.lang.Double.longBitsToDouble(
+                    prefs.getLong(EXTRA_BRANCH_LAT, java.lang.Double.doubleToRawLongBits(0.0))
+                )
+                val branchLongitude = java.lang.Double.longBitsToDouble(
+                    prefs.getLong(EXTRA_BRANCH_LNG, java.lang.Double.doubleToRawLongBits(0.0))
+                )
+                val branchRadius = java.lang.Double.longBitsToDouble(
+                    prefs.getLong(EXTRA_BRANCH_RADIUS, java.lang.Double.doubleToRawLongBits(100.0))
+                )
+
+                val params = mapOf(
+                    "employeeId" to employeeId,
+                    "attendanceId" to attendanceId,
+                    "branchId" to branchId,
+                    "interval" to interval,
+                    "branchLatitude" to branchLatitude,
+                    "branchLongitude" to branchLongitude,
+                    "branchRadius" to branchRadius
+                )
+
+                PersistentPulseService.start(context, params)
+                Log.d(TAG, "PersistentPulseService restored after reboot/update")
             }
         }
     }

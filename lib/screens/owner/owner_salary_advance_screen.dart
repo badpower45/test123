@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../services/supabase_requests_service.dart';
 import '../../theme/app_colors.dart';
+import '../../utils/owner_time_utils.dart';
 
 class OwnerSalaryAdvanceScreen extends StatefulWidget {
   const OwnerSalaryAdvanceScreen({super.key, required this.ownerId});
@@ -415,7 +416,7 @@ class _AdvanceRequestCard extends StatelessWidget {
                 const Icon(Icons.access_time, size: 16, color: AppColors.textSecondary),
                 const SizedBox(width: 4),
                 Text(
-                  '${createdAt.day}/${createdAt.month}/${createdAt.year} - ${createdAt.hour}:${createdAt.minute.toString().padLeft(2, '0')}',
+                  OwnerTimeUtils.formatDateTimeFromDateTime(createdAt).replaceFirst(' ', ' - '),
                   style: const TextStyle(
                     fontSize: 12,
                     color: AppColors.textSecondary,

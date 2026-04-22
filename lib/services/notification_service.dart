@@ -258,6 +258,51 @@ class NotificationService {
     );
   }
 
+  /// Silent background heartbeat notification (low priority, no sound).
+  /// Used to indicate background check activity without annoying the user.
+  Future<void> showSilentBackgroundHeartbeat({
+    required bool usedWifi,
+    required double distanceMeters,
+  }) async {
+    await initialize();
+
+    const androidDetails = AndroidNotificationDetails(
+      'background_heartbeat_channel',
+      'متابعة الخلفية الصامتة',
+      channelDescription: 'تنبيه صامت لنبضات الخلفية والتحقق من الموقع/الواي فاي',
+      importance: Importance.min,
+      priority: Priority.min,
+      playSound: false,
+      enableVibration: false,
+      showWhen: false,
+      onlyAlertOnce: true,
+    );
+
+    const iosDetails = DarwinNotificationDetails(
+      presentAlert: false,
+      presentBadge: false,
+      presentSound: false,
+    );
+
+    const details = NotificationDetails(
+      android: androidDetails,
+      iOS: iosDetails,
+    );
+
+    final source = usedWifi ? 'WiFi/BSSID' : 'GPS';
+    final text = usedWifi
+        ? 'تم التحقق في الخلفية عبر الواي فاي.'
+        : 'تم التحقق في الخلفية عبر الموقع (${distanceMeters.round()}م).';
+
+    await _notifications.show(
+      77,
+      'متابعة الحضور تعمل',
+      '$text المصدر: $source',
+      details,
+      payload: 'background_heartbeat',
+    );
+  }
+
   // Cancel specific notification
   Future<void> cancelNotification(int id) async {
     await _notifications.cancel(id);

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/supabase_config.dart';
@@ -5,6 +7,117 @@ import 'supabase_function_client.dart';
 
 class SupabaseAttendanceService {
   static final SupabaseClient _supabase = SupabaseConfig.client;
+  static const String _activeAttendanceSnapshotKey =
+      'device_active_attendance_snapshot_v1';
+
+  static bool _isActiveAttendanceRow(Map<String, dynamic> row) {
+    final status = row['status']?.toString().toLowerCase();
+    final hasCheckout = row['check_out_time'] != null;
+
+    if (hasCheckout) {
+      return false;
+    }
+
+    // Handle legacy and mixed status values from older edge functions.
+    if (status == null || status.isEmpty) {
+      return true;
+    }
+
+    const inactiveStates = <String>{
+      'completed',
+      'checked_out',
+      'inactive',
+      'out',
+    };
+
+    return !inactiveStates.contains(status);
+  }
+
+  /// Persist active attendance in one stable device snapshot so UI restore
+  /// does not depend on multiple loosely-coupled preference keys.
+  static Future<void> cacheActiveAttendanceOnDevice({
+    required String employeeId,
+    required String attendanceId,
+    String? checkInIso,
+    bool isOfflineAttendance = false,
+  }) async {
+    if (attendanceId.isEmpty) {
+      return;
+    }
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final nowUtcIso = DateTime.now().toUtc().toIso8601String();
+      final effectiveCheckInIso =
+          (checkInIso != null && checkInIso.isNotEmpty)
+          ? checkInIso
+          : nowUtcIso;
+
+      await prefs.setString('active_attendance_id', attendanceId);
+      await prefs.setString('active_employee_id', employeeId);
+      await prefs.setBool('is_checked_in', true);
+      await prefs.setBool('is_offline_attendance', isOfflineAttendance);
+      await prefs.setString('cached_checkin_time', effectiveCheckInIso);
+
+      if (isOfflineAttendance) {
+        await prefs.setString('offline_checkin_time', effectiveCheckInIso);
+      } else {
+        await prefs.remove('offline_checkin_time');
+      }
+
+      final snapshot = <String, dynamic>{
+        'employee_id': employeeId,
+        'attendance_id': attendanceId,
+        'check_in_time': effectiveCheckInIso,
+        'is_offline_attendance': isOfflineAttendance,
+        'updated_at': nowUtcIso,
+      };
+      await prefs.setString(_activeAttendanceSnapshotKey, jsonEncode(snapshot));
+      print('✅ Cached device active attendance snapshot: $attendanceId');
+    } catch (e) {
+      print('⚠️ Failed to cache active attendance snapshot: $e');
+    }
+  }
+
+  /// Read the last active attendance snapshot for this device.
+  static Future<Map<String, dynamic>?> getCachedActiveAttendanceOnDevice({
+    String? employeeId,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_activeAttendanceSnapshotKey);
+      if (raw == null || raw.isEmpty) {
+        return null;
+      }
+
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) {
+        await prefs.remove(_activeAttendanceSnapshotKey);
+        return null;
+      }
+
+      final snapshot = Map<String, dynamic>.from(decoded);
+      final snapshotEmployeeId = snapshot['employee_id']?.toString();
+      final snapshotAttendanceId = snapshot['attendance_id']?.toString();
+
+      if (snapshotAttendanceId == null || snapshotAttendanceId.isEmpty) {
+        await prefs.remove(_activeAttendanceSnapshotKey);
+        return null;
+      }
+
+      if (employeeId != null &&
+          snapshotEmployeeId != null &&
+          snapshotEmployeeId.isNotEmpty &&
+          snapshotEmployeeId != employeeId) {
+        return null;
+      }
+
+      return snapshot;
+    } catch (e) {
+      print('⚠️ Failed to read active attendance snapshot: $e');
+      return null;
+    }
+  }
 
   /// Remove cached active attendance references from SharedPreferences
   static Future<void> clearActiveAttendanceCache() async {
@@ -12,6 +125,11 @@ class SupabaseAttendanceService {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('active_attendance_id');
       await prefs.remove('active_employee_id');
+      await prefs.setBool('is_checked_in', false);
+      await prefs.remove('is_offline_attendance');
+      await prefs.remove('offline_checkin_time');
+      await prefs.remove('cached_checkin_time');
+      await prefs.remove(_activeAttendanceSnapshotKey);
       print('🧹 Cleared cached active attendance keys');
     } catch (e) {
       print('⚠️ Failed to clear cached attendance keys: $e');
@@ -98,9 +216,16 @@ class SupabaseAttendanceService {
       print('⚠️ Could not verify active attendance: $e');
       // Continue with check-in attempt (fail-safe)
     }
+
+    final deviceNow = DateTime.now();
+    final deviceNowUtcIso = deviceNow.toUtc().toIso8601String();
+    print(
+      '🕒 Check-in device timestamp: local=${deviceNow.toIso8601String()} utc=$deviceNowUtcIso',
+    );
     
     final payload = {
       'employee_id': employeeId,
+      'timestamp': deviceNowUtcIso,
       if (latitude != null) 'latitude': latitude,
       if (longitude != null) 'longitude': longitude,
       if (wifiBssid != null && wifiBssid.isNotEmpty) 'wifi_bssid': wifiBssid,
@@ -118,9 +243,12 @@ class SupabaseAttendanceService {
         
         // ✅ Save attendance ID locally for offline check
         try {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('active_attendance_id', attendance['id']);
-          await prefs.setString('active_employee_id', employeeId);
+          await cacheActiveAttendanceOnDevice(
+            employeeId: employeeId,
+            attendanceId: attendance['id'].toString(),
+            checkInIso: attendance['check_in_time']?.toString(),
+            isOfflineAttendance: false,
+          );
           print('✅ Saved active attendance ID to SharedPreferences');
         } catch (e) {
           print('⚠️ Failed to save attendance ID: $e');
@@ -137,6 +265,12 @@ class SupabaseAttendanceService {
         final existing = (response ?? {})['attendance'];
         if (existing is Map<String, dynamic>) {
           print('ℹ️ Already checked in earlier today: ${existing['id']}');
+          await cacheActiveAttendanceOnDevice(
+            employeeId: employeeId,
+            attendanceId: existing['id'].toString(),
+            checkInIso: existing['check_in_time']?.toString(),
+            isOfflineAttendance: false,
+          );
           await clearForcedCheckoutNotice();
           await resetGeofenceViolationState();
           return existing;
@@ -145,10 +279,15 @@ class SupabaseAttendanceService {
 
       return null;
     } catch (edgeError) {
+      if (_isAttendanceBusinessConflictError(edgeError)) {
+        print('⛔ Check-in business conflict detected, skipping direct fallback: $edgeError');
+        rethrow;
+      }
+
       print('⚠️ Edge function check-in failed, falling back: $edgeError');
 
       try {
-        final now = DateTime.now();
+        final now = deviceNow;
         final insertPayload = {
           'employee_id': employeeId,
           'check_in_time': now.toUtc().toIso8601String(),
@@ -169,9 +308,12 @@ class SupabaseAttendanceService {
         
         // ✅ Save attendance ID locally
         try {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('active_attendance_id', insertedAttendance['id']);
-          await prefs.setString('active_employee_id', employeeId);
+          await cacheActiveAttendanceOnDevice(
+            employeeId: employeeId,
+            attendanceId: insertedAttendance['id'].toString(),
+            checkInIso: insertedAttendance['check_in_time']?.toString(),
+            isOfflineAttendance: false,
+          );
           print('✅ Saved active attendance ID to SharedPreferences (fallback)');
         } catch (e) {
           print('⚠️ Failed to save attendance ID: $e');
@@ -182,6 +324,7 @@ class SupabaseAttendanceService {
 
         // Save initial pulse (best-effort)
         try {
+          final validationMethod = wifiBssid != null ? 'WIFI' : 'LOCATION';
           await _supabase.from('pulses').insert({
             'employee_id': employeeId,
             'attendance_id': insertedAttendance['id'],
@@ -192,6 +335,8 @@ class SupabaseAttendanceService {
             'branch_id': branchId,
             'distance_from_center': distance,
             if (wifiBssid != null) 'bssid_address': wifiBssid,
+            if (wifiBssid != null) 'wifi_bssid': wifiBssid,
+            'validation_method': validationMethod,
             'status': 'active',
           });
         } catch (pulseError) {
@@ -202,10 +347,26 @@ class SupabaseAttendanceService {
         
         return insertedAttendance as Map<String, dynamic>?;
       } catch (fallbackError) {
+        if (_isAttendanceBusinessConflictError(fallbackError)) {
+          print('⛔ Check-in fallback blocked by business rule: $fallbackError');
+          rethrow;
+        }
+
         print('❌ Fallback check-in error: $fallbackError');
         return null;
       }
     }
+  }
+
+  static bool _isAttendanceBusinessConflictError(Object error) {
+    final msg = error.toString();
+
+    return msg.contains('alreadyCheckedOut') ||
+        msg.contains('alreadyCheckedIn') ||
+        msg.contains('تم تسجيل حضور وانصراف اليوم بالفعل') ||
+        msg.contains('تم تسجيل الحضور مسبقاً') ||
+        msg.contains('attendance_employee_date_unique') ||
+        msg.contains('duplicate key value violates unique constraint');
   }
 
   /// Check-out employee (using Edge Function)
@@ -390,11 +551,54 @@ class SupabaseAttendanceService {
           .from('attendance')
           .select()
           .eq('employee_id', employeeId)
-          .eq('status', 'active')
+          .or('status.eq.active,status.eq.ACTIVE')
           .order('check_in_time', ascending: false)
-          .maybeSingle();
+          .limit(1);
 
-      return response;
+      if (response.isNotEmpty) {
+        return Map<String, dynamic>.from(response.first as Map);
+      }
+
+      // Fallback 1: accept open attendance rows even if status value is inconsistent.
+      final openRows = await _supabase
+          .from('attendance')
+          .select()
+          .eq('employee_id', employeeId)
+          .isFilter('check_out_time', null)
+          .order('check_in_time', ascending: false)
+          .limit(5);
+
+      if (openRows.isNotEmpty) {
+        for (final row in openRows) {
+          final mapped = Map<String, dynamic>.from(row as Map);
+          if (_isActiveAttendanceRow(mapped)) {
+            return mapped;
+          }
+        }
+      }
+
+      // Fallback 2: trust cached active attendance ID when it belongs to this employee.
+      final prefs = await SharedPreferences.getInstance();
+      final cachedEmployeeId = prefs.getString('active_employee_id');
+      final cachedAttendanceId = prefs.getString('active_attendance_id');
+      if (cachedAttendanceId != null && cachedAttendanceId.isNotEmpty) {
+        if (cachedEmployeeId == null || cachedEmployeeId == employeeId) {
+          final cached = await _supabase
+              .from('attendance')
+              .select()
+              .eq('id', cachedAttendanceId)
+              .maybeSingle();
+
+          if (cached != null) {
+            final mapped = Map<String, dynamic>.from(cached as Map);
+            if (_isActiveAttendanceRow(mapped)) {
+              return mapped;
+            }
+          }
+        }
+      }
+
+      return null;
     } catch (e) {
       print('Get active attendance error: $e');
       return null;
@@ -557,6 +761,67 @@ class SupabaseAttendanceService {
       };
     } catch (e) {
       print('❌ Get employee status error: $e');
+
+      // Keep the user in an active state on transient network errors if local cache says so.
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final cachedEmployeeId = prefs.getString('active_employee_id');
+        final cachedAttendanceId = prefs.getString('active_attendance_id');
+        final offlineCheckinTime = prefs.getString('offline_checkin_time');
+        final cachedCheckinTime = prefs.getString('cached_checkin_time');
+        final isCheckedInFlag = prefs.getBool('is_checked_in') ?? false;
+
+        final cacheBelongsToEmployee =
+            cachedEmployeeId == null || cachedEmployeeId == employeeId;
+        final hasCachedActiveId =
+            cacheBelongsToEmployee &&
+            cachedAttendanceId != null &&
+            cachedAttendanceId.isNotEmpty;
+
+        if (hasCachedActiveId) {
+          try {
+            final cachedRow = await _supabase
+                .from('attendance')
+                .select()
+                .eq('id', cachedAttendanceId)
+                .maybeSingle();
+
+            if (cachedRow != null) {
+              final mapped = Map<String, dynamic>.from(cachedRow as Map);
+              if (_isActiveAttendanceRow(mapped)) {
+                return {
+                  'employee': null,
+                  'attendance': mapped,
+                  'break': null,
+                  'isCheckedIn': true,
+                  'isOnBreak': false,
+                };
+              }
+            }
+          } catch (_) {}
+
+          // Last resort synthetic active status if local flags still indicate checked-in.
+          final preferredCheckinTime = offlineCheckinTime ?? cachedCheckinTime;
+
+          if (isCheckedInFlag || preferredCheckinTime != null) {
+            return {
+              'employee': null,
+              'attendance': {
+                'id': cachedAttendanceId,
+                'status': 'active',
+                if (preferredCheckinTime != null)
+                  'check_in_time': preferredCheckinTime,
+              },
+              'break': null,
+              'isCheckedIn': true,
+              'isOnBreak': false,
+            };
+          }
+        }
+      } catch (cacheError) {
+        print('⚠️ Local status fallback failed: $cacheError');
+      }
+
       return {
         'employee': null,
         'attendance': null,

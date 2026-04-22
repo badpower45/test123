@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:supabase/supabase.dart';
 
-import 'package:oldies_workers_app/config/app_config.dart';
+import 'package:at_app/config/app_config.dart';
 
 class _AccountSeed {
   const _AccountSeed({

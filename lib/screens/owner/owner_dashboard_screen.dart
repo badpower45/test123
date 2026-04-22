@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../services/supabase_owner_service.dart';
 import '../../services/supabase_branch_service.dart';
 import '../../theme/app_colors.dart';
+import '../../utils/owner_time_utils.dart';
 import 'owner_leave_requests_screen.dart';
 import 'owner_attendance_requests_screen.dart';
 
@@ -253,7 +254,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
                   Builder(builder: (context) {
                     try {
                       return Text(
-                        DateTime.parse(checkInTime).toLocal().toString().substring(11, 16),
+                        OwnerTimeUtils.formatTimeShort(checkInTime),
                         style: const TextStyle(fontSize: 12),
                       );
                     } catch (e) {

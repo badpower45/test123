@@ -43,7 +43,7 @@ class AttendanceTimerService {
 
   /// Notify all listeners of timer update
   void _notifyListeners() {
-    for (var listener in _listeners) {
+    for (var listener in List<Function(String elapsedTime, double earnings)>.from(_listeners)) {
       try {
         listener(_elapsedTime, _currentEarnings);
       } catch (e) {
@@ -58,17 +58,30 @@ class AttendanceTimerService {
     required DateTime checkInTime,
     required double hourlyRate,
   }) {
+    final normalizedCheckIn = checkInTime.toLocal();
+    final safeCheckInTime = normalizedCheckIn.isAfter(DateTime.now())
+        ? DateTime.now()
+        : normalizedCheckIn;
+
+    // Avoid unnecessary timer restart when state is already identical.
+    if (_timer?.isActive == true &&
+        _checkInTime?.millisecondsSinceEpoch == safeCheckInTime.millisecondsSinceEpoch &&
+        _hourlyRate == hourlyRate) {
+      return;
+    }
+
     print('🚀 PHASE 4: Starting attendance timer service');
-    print('   Check-in time: $checkInTime');
+    print('   Check-in time: $safeCheckInTime');
     print('   Hourly rate: $hourlyRate');
     
-    _checkInTime = checkInTime;
+    _checkInTime = safeCheckInTime;
     _hourlyRate = hourlyRate;
     
     // Calculate initial values
     final duration = DateTime.now().difference(_checkInTime!);
-    _elapsedTime = _formatDuration(duration);
-    _currentEarnings = _computeEarnings(duration);
+    final safeDuration = duration.isNegative ? Duration.zero : duration;
+    _elapsedTime = _formatDuration(safeDuration);
+    _currentEarnings = _computeEarnings(safeDuration);
     
     // Cancel existing timer if any
     _timer?.cancel();
@@ -77,14 +90,15 @@ class AttendanceTimerService {
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (_checkInTime != null) {
         final duration = DateTime.now().difference(_checkInTime!);
-        _elapsedTime = _formatDuration(duration);
-        _currentEarnings = _computeEarnings(duration);
+        final safeDuration = duration.isNegative ? Duration.zero : duration;
+        _elapsedTime = _formatDuration(safeDuration);
+        _currentEarnings = _computeEarnings(safeDuration);
         
         // Notify UI listeners
         _notifyListeners();
         
         // Persist state every minute (for app restart recovery)
-        if (duration.inSeconds % 60 == 0) {
+        if (safeDuration.inSeconds % 60 == 0) {
           _persistState();
         }
       }

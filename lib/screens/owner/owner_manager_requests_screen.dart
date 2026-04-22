@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../theme/app_colors.dart';
 import '../../services/supabase_requests_service.dart';
+import '../../utils/owner_time_utils.dart';
 
 class OwnerManagerRequestsScreen extends StatefulWidget {
   const OwnerManagerRequestsScreen({super.key});
@@ -192,11 +193,17 @@ class _OwnerManagerRequestsScreenState extends State<OwnerManagerRequestsScreen>
       final reqType = row['request_type'] ?? row['requestType'] ?? '-';
       final requestedTime = row['requested_time'] ?? row['requestedTime'];
       final reason = (row['reason'] ?? '').toString();
-      details = 'نوع: $reqType${requestedTime != null ? ' • وقت: $requestedTime' : ''}${reason.isNotEmpty ? ' • سبب: $reason' : ''}';
+      final formattedRequestedTime = requestedTime != null
+          ? OwnerTimeUtils.formatDateTime(requestedTime.toString())
+          : null;
+      details = 'نوع: $reqType${formattedRequestedTime != null && formattedRequestedTime != '-' ? ' • وقت: $formattedRequestedTime' : ''}${reason.isNotEmpty ? ' • سبب: $reason' : ''}';
     } else if (type == 'break') {
       final duration = row['requested_duration_minutes'] ?? row['duration_minutes'] ?? '-';
       final created = row['created_at'] ?? row['createdAt'] ?? '';
-      details = 'مدة: $duration دقيقة${created.toString().isNotEmpty ? ' • طلب: $created' : ''}';
+      final formattedCreated = created.toString().isNotEmpty
+          ? OwnerTimeUtils.formatDateTime(created.toString())
+          : '-';
+      details = 'مدة: $duration دقيقة${formattedCreated != '-' ? ' • طلب: $formattedCreated' : ''}';
     }
     return Card(
       margin: const EdgeInsets.symmetric(vertical:6),

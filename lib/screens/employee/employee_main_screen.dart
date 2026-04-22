@@ -15,7 +15,12 @@ import 'refreshable_tab.dart';
 // import '../../models/employee.dart';
 
 class EmployeeMainScreen extends StatefulWidget {
-  const EmployeeMainScreen({super.key, required this.employeeId, this.role = 'staff', this.branch = ''});
+  const EmployeeMainScreen({
+    super.key,
+    required this.employeeId,
+    this.role = 'staff',
+    this.branch = '',
+  });
 
   static const routeName = '/employee';
 
@@ -44,10 +49,8 @@ class _EmployeeMainScreenState extends State<EmployeeMainScreen> {
       ),
       RefreshableTab(
         key: _tabKeys[1],
-        builder: (context) => RequestsPage(
-          employeeId: widget.employeeId,
-          hideBreakTab: false,
-        ),
+        builder: (context) =>
+            RequestsPage(employeeId: widget.employeeId, hideBreakTab: false),
       ),
       RefreshableTab(
         key: _tabKeys[2],
@@ -95,6 +98,7 @@ class _EmployeeMainScreenState extends State<EmployeeMainScreen> {
                     builder: (_) => ManagerDashboardSimple(
                       managerId: widget.employeeId,
                       branchName: widget.branch,
+                      initialTabIndex: 3,
                     ),
                   ),
                 );
@@ -108,43 +112,65 @@ class _EmployeeMainScreenState extends State<EmployeeMainScreen> {
               // \u2705 PRIORITY 1: Check SharedPreferences for active attendance
               bool hasActiveAttendance = false;
               String? activeAttendanceId;
-              
+
               try {
                 final prefs = await SharedPreferences.getInstance();
                 activeAttendanceId = prefs.getString('active_attendance_id');
-                
-                if (activeAttendanceId != null && activeAttendanceId.isNotEmpty) {
+
+                if (activeAttendanceId != null &&
+                    activeAttendanceId.isNotEmpty) {
                   hasActiveAttendance = true;
-                  print('\u2705 Found active attendance in SharedPreferences: $activeAttendanceId');
+                  print(
+                    '\u2705 Found active attendance in SharedPreferences: $activeAttendanceId',
+                  );
                 }
               } catch (e) {
                 print('\u26a0\ufe0f Failed to check SharedPreferences: $e');
               }
-              
+
               // \u2705 PRIORITY 2: If no local data, try online check (requires internet)
               if (!hasActiveAttendance) {
                 try {
-                  final status = await AttendanceApiService.fetchEmployeeStatus(widget.employeeId);
-                  final isCheckedIn = status['attendance']?['status'] == 'active';
-                  
+                  final status = await AttendanceApiService.fetchEmployeeStatus(
+                    widget.employeeId,
+                  );
+                  final attendance =
+                      status['attendance'] as Map<String, dynamic>?;
+                  final rawStatus = attendance?['status']
+                      ?.toString()
+                      .toLowerCase();
+                  final hasCheckout = attendance?['check_out_time'] != null;
+                  final isCheckedIn =
+                      !hasCheckout &&
+                      rawStatus != 'completed' &&
+                      rawStatus != 'checked_out';
+
                   if (isCheckedIn) {
                     hasActiveAttendance = true;
                     print('\u2705 Found active attendance online');
                   }
                 } catch (e) {
-                  print('\u26a0\ufe0f Failed to check online attendance status: $e');
+                  print(
+                    '\u26a0\ufe0f Failed to check online attendance status: $e',
+                  );
                   // Continue - may be offline
                 }
               }
-              
+
               // \u2705 Block logout if there's active attendance
               if (hasActiveAttendance) {
                 if (!mounted) return;
                 showDialog(
                   context: context,
                   builder: (context) => AlertDialog(
-                    icon: const Icon(Icons.warning_amber, size: 48, color: AppColors.error),
-                    title: const Text('\u0644\u0627 \u064a\u0645\u0643\u0646 \u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u062e\u0631\u0648\u062c'),
+                    icon: const Icon(
+                      Icons.warning_amber,
+                      size: 48,
+                      color: AppColors.error,
+                    ),
+                    title: const Text(
+                      '\u0644\u0627 \u064a\u0645\u0643\u0646 \u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u062e\u0631\u0648\u062c',
+                    ),
                     content: const Text(
                       '\u064a\u062c\u0628 \u0639\u0644\u064a\u0643 \u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u0627\u0646\u0635\u0631\u0627\u0641 \u0623\u0648\u0644\u0627\u064b \u0642\u0628\u0644 \u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u062e\u0631\u0648\u062c \u0645\u0646 \u0627\u0644\u062d\u0633\u0627\u0628.\n\n'
                       '\u0627\u0644\u0631\u062c\u0627\u0621 \u0627\u0644\u0636\u063a\u0637 \u0639\u0644\u0649 \u0632\u0631 "\u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u0627\u0646\u0635\u0631\u0627\u0641" \u0645\u0646 \u0627\u0644\u0635\u0641\u062d\u0629 \u0627\u0644\u0631\u0626\u064a\u0633\u064a\u0629.',
@@ -154,7 +180,10 @@ class _EmployeeMainScreenState extends State<EmployeeMainScreen> {
                     actions: [
                       TextButton(
                         onPressed: () => Navigator.pop(context),
-                        child: const Text('\u062d\u0633\u0646\u0627\u064b', style: TextStyle(fontSize: 16)),
+                        child: const Text(
+                          '\u062d\u0633\u0646\u0627\u064b',
+                          style: TextStyle(fontSize: 16),
+                        ),
                       ),
                     ],
                   ),
@@ -166,8 +195,12 @@ class _EmployeeMainScreenState extends State<EmployeeMainScreen> {
               final confirmed = await showDialog<bool>(
                 context: context,
                 builder: (context) => AlertDialog(
-                  title: const Text('\u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u062e\u0631\u0648\u062c'),
-                  content: const Text('\u0647\u0644 \u0623\u0646\u062a \u0645\u062a\u0623\u0643\u062f \u0645\u0646 \u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u062e\u0631\u0648\u062c\u061f'),
+                  title: const Text(
+                    '\u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u062e\u0631\u0648\u062c',
+                  ),
+                  content: const Text(
+                    '\u0647\u0644 \u0623\u0646\u062a \u0645\u062a\u0623\u0643\u062f \u0645\u0646 \u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u062e\u0631\u0648\u062c\u061f',
+                  ),
                   actions: [
                     TextButton(
                       onPressed: () => Navigator.pop(context, false),
@@ -176,7 +209,9 @@ class _EmployeeMainScreenState extends State<EmployeeMainScreen> {
                     TextButton(
                       onPressed: () => Navigator.pop(context, true),
                       style: TextButton.styleFrom(foregroundColor: Colors.red),
-                      child: const Text('\u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u062e\u0631\u0648\u062c'),
+                      child: const Text(
+                        '\u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u062e\u0631\u0648\u062c',
+                      ),
                     ),
                   ],
                 ),
@@ -194,10 +229,7 @@ class _EmployeeMainScreenState extends State<EmployeeMainScreen> {
           ),
         ],
       ),
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _pages,
-      ),
+      body: IndexedStack(index: _currentIndex, children: _pages),
       floatingActionButton: FloatingActionButton(
         onPressed: () {
           _tabKeys[_currentIndex].currentState?.refresh();
@@ -226,38 +258,44 @@ class _EmployeeMainScreenState extends State<EmployeeMainScreen> {
           backgroundColor: Colors.white,
           selectedItemColor: AppColors.primaryOrange,
           unselectedItemColor: Colors.grey,
-          selectedLabelStyle: GoogleFonts.ibmPlexSansArabic(
+          selectedLabelStyle: GoogleFonts.tajawal(
             fontSize: 12,
             fontWeight: FontWeight.bold,
           ),
-          unselectedLabelStyle: GoogleFonts.ibmPlexSansArabic(
-            fontSize: 12,
-          ),
+          unselectedLabelStyle: GoogleFonts.tajawal(fontSize: 12),
           items: [
             BottomNavigationBarItem(
               icon: Icon(
-                _currentIndex == 0 ? Icons.home : Icons.home_outlined,
+                _currentIndex == 0
+                    ? Icons.space_dashboard_rounded
+                    : Icons.space_dashboard_outlined,
                 size: 28,
               ),
               label: 'الرئيسية',
             ),
             BottomNavigationBarItem(
               icon: Icon(
-                _currentIndex == 1 ? Icons.assignment : Icons.assignment_outlined,
+                _currentIndex == 1
+                    ? Icons.task_alt_rounded
+                    : Icons.playlist_add_check_circle_outlined,
                 size: 28,
               ),
               label: 'الطلبات',
             ),
             BottomNavigationBarItem(
               icon: Icon(
-                _currentIndex == 2 ? Icons.description : Icons.description_outlined,
+                _currentIndex == 2
+                    ? Icons.analytics_rounded
+                    : Icons.analytics_outlined,
                 size: 28,
               ),
               label: 'التقارير',
             ),
             BottomNavigationBarItem(
               icon: Icon(
-                _currentIndex == 3 ? Icons.person : Icons.person_outlined,
+                _currentIndex == 3
+                    ? Icons.account_circle_rounded
+                    : Icons.account_circle_outlined,
                 size: 28,
               ),
               label: 'ملفي',

@@ -16,6 +16,7 @@ import '../../services/supabase_owner_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/wifi_service.dart';
 import '../../theme/app_colors.dart';
+import '../../utils/owner_time_utils.dart';
 import '../login_screen.dart';
 import 'employee_attendance_table_screen.dart';
 import 'owner_set_branch_bssid_screen.dart';
@@ -937,8 +938,7 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
   }
 
   String _formatTime(DateTime? time) {
-    if (time == null) return '--:--';
-    return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+    return OwnerTimeUtils.formatTimeFromDateTime(time);
   }
 
   @override

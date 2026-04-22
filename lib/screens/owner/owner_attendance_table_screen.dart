@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import '../../utils/time_utils.dart';
+import '../../utils/owner_time_utils.dart';
 import '../../services/supabase_owner_service.dart';
 import '../../services/supabase_branch_service.dart';
 import '../../theme/app_colors.dart';
@@ -120,6 +120,16 @@ class _OwnerAttendanceTableScreenState extends State<OwnerAttendanceTableScreen>
     _loadAttendance();
   }
 
+  String _formatDateRangeLabel() {
+    if (_startDate == null || _endDate == null) {
+      return 'اختر الفترة';
+    }
+
+    final start = DateFormat('dd/MM/yyyy').format(_startDate!);
+    final end = DateFormat('dd/MM/yyyy').format(_endDate!);
+    return '$start - $end';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -158,10 +168,9 @@ class _OwnerAttendanceTableScreenState extends State<OwnerAttendanceTableScreen>
                         const SizedBox(width: 12),
                         Expanded(
                           child: Text(
-                            _startDate != null && _endDate != null
-                                ? '${DateFormat('dd/MM/yyyy').format(_startDate!)} - ${DateFormat('dd/MM/yyyy').format(_endDate!)}'
-                                : 'اختر الفترة',
+                            '\u200E${_formatDateRangeLabel()}\u200E',
                             style: const TextStyle(fontSize: 14),
+                            textAlign: TextAlign.center,
                           ),
                         ),
                         const Icon(Icons.arrow_drop_down),
@@ -359,17 +368,11 @@ class _OwnerAttendanceTableScreenState extends State<OwnerAttendanceTableScreen>
   }
 
   String _formatTime(String? value) {
-    // Delegate to centralized utility for consistent Cairo conversion
-    return TimeUtils.formatTimeShort(value);
+    return OwnerTimeUtils.formatTimeShort(value);
   }
 
   String _formatDate(String? value) {
-    if (value == null || value.isEmpty) return '-';
-    try {
-      return DateFormat('dd/MM/yyyy').format(DateTime.parse(value));
-    } catch (e) {
-      return value;
-    }
+    return OwnerTimeUtils.formatDate(value);
   }
 }
 

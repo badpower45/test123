@@ -152,6 +152,9 @@ class BackgroundPulseService {
       }
 
       final geofenceValid = isInside;
+      final validationMethod = wifiValid
+          ? 'WIFI'
+          : 'LOCATION';
 
       // Collect BLV environmental data
       final blvManager = BLVManager();
@@ -208,6 +211,7 @@ class BackgroundPulseService {
             insideGeofence: geofenceValid,
             distanceFromCenter: distance,
             wifiBssid: wifiBssid,
+            validationMethod: validationMethod,
             validatedByWifi: wifiValid,
             validatedByLocation: geofenceValid,
           );
@@ -224,6 +228,7 @@ class BackgroundPulseService {
           insideGeofence: geofenceValid,
           distanceFromCenter: distance,
           wifiBssid: wifiBssid,
+          validationMethod: validationMethod,
           validatedByWifi: wifiValid,
           validatedByLocation: geofenceValid,
         );

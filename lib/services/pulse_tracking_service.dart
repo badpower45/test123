@@ -2,12 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../database/offline_database.dart';
 import 'native_location_service.dart'; // 🚀 Native GPS for faster location
-import 'native_pulse_service.dart'; // 🔥 Native Persistent Service for old devices
-import 'background_pulse_listener.dart'; // 🎧 Listen to native pulses
 import 'offline_data_service.dart';
 import 'notification_service.dart';
 import 'foreground_attendance_service.dart';
@@ -21,7 +18,7 @@ class AutoCheckoutEvent {
   final String reason;
   final double? distance;
   final bool savedOffline;
-  
+
   AutoCheckoutEvent({
     required this.timestamp,
     required this.reason,
@@ -31,7 +28,7 @@ class AutoCheckoutEvent {
 }
 
 /// 🎯 نظام النبضات البسيط والواضح
-/// 
+///
 /// الوظيفة:
 /// 1. نبضة كل 5 دقائق بالضبط ✅
 /// 2. كل نبضة تفحص الموقع: جوا الدائرة = true، برا = false ✅
@@ -41,7 +38,8 @@ class AutoCheckoutEvent {
 /// 6. ✅ NEW: أثناء الاستراحة المعتمدة (ACTIVE break) - النبضات تُسجل true دائماً
 /// 7. ✅ NEW: Stream event للـ UI عند حدوث auto-checkout
 class PulseTrackingService extends ChangeNotifier {
-  static final PulseTrackingService _instance = PulseTrackingService._internal();
+  static final PulseTrackingService _instance =
+      PulseTrackingService._internal();
   factory PulseTrackingService() => _instance;
   PulseTrackingService._internal();
 
@@ -54,20 +52,23 @@ class PulseTrackingService extends ChangeNotifier {
   String? _currentEmployeeId;
   Map<String, dynamic>? _currentBranchData;
   bool _isSendingPulse = false;
-  
+
   // 🎯 تتبع النبضات الـ false
-  List<Map<String, dynamic>> _recentPulses = []; // آخر نبضتين
-  
+  final List<Map<String, dynamic>> _recentPulses = []; // آخر نبضتين
+
   final _offlineService = OfflineDataService();
 
   // نبضة كل 5 دقائق بالضبط
   static const Duration _pulseInterval = Duration(minutes: 5);
+  static const Duration _maxLocationSampleAge = Duration(minutes: 5);
+  static const double _minReliableGpsAccuracyMeters = 120.0;
 
   // 🚨 NEW: Auto-checkout event stream for UI updates
-  final StreamController<AutoCheckoutEvent> _autoCheckoutController = 
+  final StreamController<AutoCheckoutEvent> _autoCheckoutController =
       StreamController<AutoCheckoutEvent>.broadcast();
-  Stream<AutoCheckoutEvent> get onAutoCheckout => _autoCheckoutController.stream;
-  
+  Stream<AutoCheckoutEvent> get onAutoCheckout =>
+      _autoCheckoutController.stream;
+
   // Flag to track if auto-checkout happened
   bool _autoCheckoutTriggered = false;
   bool get autoCheckoutTriggered => _autoCheckoutTriggered;
@@ -76,7 +77,7 @@ class PulseTrackingService extends ChangeNotifier {
   bool get isTracking => _isTracking;
   DateTime? get lastPulseTime => _lastPulseTime;
   int get pulsesCount => _pulsesCount;
-  
+
   /// Start pulse tracking
   Future<void> startTracking(String employeeId, {String? attendanceId}) async {
     if (_isTracking) {
@@ -85,15 +86,7 @@ class PulseTrackingService extends ChangeNotifier {
     }
 
     print('🎯 Starting pulse tracking for employee: $employeeId');
-    
-    // Initialize background pulse listener (for native service)
-    await BackgroundPulseListener.initialize(
-      onPulseRecorded: () {
-        // Update UI when native service records a pulse
-        _refreshPulseCount();
-      },
-    );
-    
+
     // Initialize notification service
     try {
       await NotificationService.instance.initialize();
@@ -101,12 +94,14 @@ class PulseTrackingService extends ChangeNotifier {
     } catch (e) {
       print('⚠️ Failed to initialize notifications: $e');
     }
-    
+
     _currentAttendanceId = attendanceId;
     _currentEmployeeId = employeeId;
-    
+
     // Load branch data
-    final branchData = await _offlineService.getCachedBranchData(employeeId: employeeId);
+    final branchData = await _offlineService.getCachedBranchData(
+      employeeId: employeeId,
+    );
     if (branchData == null) {
       print('Cannot start tracking: Branch data not available');
       return;
@@ -120,41 +115,14 @@ class PulseTrackingService extends ChangeNotifier {
     _currentBranchData = branchData;
     _lastPulseTime = DateTime.now();
     _recentPulses.clear();
-    
+    await _persistTrackingContext();
+
     // ✅ بدل ما نبدأ من صفر، نجيب العدد من قاعدة البيانات
     final stats = await getTrackingStats(employeeId);
     _pulsesCount = stats['total_pulses'] ?? 0;
     print('📊 استئناف تتبع النبضات: عدد النبضات الحالي = $_pulsesCount');
-    
-    notifyListeners();
 
-    // 🔥 START NATIVE PERSISTENT SERVICE (for old devices)
-    // This ensures pulses continue even if app is killed in background
-    if (!kIsWeb && Platform.isAndroid) {
-      try {
-        final branchId = (_currentBranchData!['id'] ?? _currentBranchData!['branch_id']) as String?;
-        final branchLat = _currentBranchData!['latitude'] as double?;
-        final branchLng = _currentBranchData!['longitude'] as double?;
-        final branchRad = _currentBranchData!['geofence_radius'] as double?;
-        
-        final success = await NativePulseService.startPersistentService(
-          employeeId: employeeId,
-          attendanceId: attendanceId ?? 'pending',
-          branchId: branchId ?? '',
-          branchLatitude: branchLat,
-          branchLongitude: branchLng,
-          branchRadius: branchRad,
-        );
-        if (success) {
-          print('✅ Native Persistent Service started - will survive app closure');
-          print('   📍 Branch geofence configured: ($branchLat, $branchLng), radius: ${branchRad}m');
-        } else {
-          print('⚠️ Failed to start Native Persistent Service');
-        }
-      } catch (e) {
-        print('⚠️ Error starting Native Service: $e');
-      }
-    }
+    notifyListeners();
 
     // Send first pulse immediately
     await _sendPulse();
@@ -182,25 +150,18 @@ class PulseTrackingService extends ChangeNotifier {
     _recentPulses.clear();
     _currentBranchData = null;
     _currentEmployeeId = null;
-    
-    // 🔥 STOP NATIVE PERSISTENT SERVICE
-    if (!kIsWeb && Platform.isAndroid) {
-      try {
-        await NativePulseService.stopPersistentService();
-        print('✅ Native Persistent Service stopped');
-      } catch (e) {
-        print('⚠️ Error stopping Native Service: $e');
-      }
-    }
-    
+    await _clearTrackingContext();
+
     // Reset auto-checkout flag when manually stopped (not from auto-checkout)
     if (!fromAutoCheckout) {
       _autoCheckoutTriggered = false;
     }
-    
+
     notifyListeners();
 
-    print('Pulse tracking stopped${fromAutoCheckout ? " (auto-checkout)" : ""}');
+    print(
+      'Pulse tracking stopped${fromAutoCheckout ? " (auto-checkout)" : ""}',
+    );
   }
 
   /// Send a single pulse
@@ -221,19 +182,21 @@ class PulseTrackingService extends ChangeNotifier {
     }
 
     _isSendingPulse = true;
-    
+
     try {
       // ✅ STEP 0: Check if employee is on ACTIVE break
       bool isOnActiveBreak = false;
       try {
         final prefs = await SharedPreferences.getInstance();
         isOnActiveBreak = prefs.getBool('is_break_active') ?? false;
-        
+
         // ✅ Double-check with database if cached value says active
         if (isOnActiveBreak) {
-          final activeBreak = await SupabaseAttendanceService.getActiveBreak(_currentEmployeeId!);
+          final activeBreak = await SupabaseAttendanceService.getActiveBreak(
+            _currentEmployeeId!,
+          );
           isOnActiveBreak = activeBreak != null;
-          
+
           // Update cache if database says different
           if (!isOnActiveBreak) {
             await prefs.setBool('is_break_active', false);
@@ -249,13 +212,22 @@ class PulseTrackingService extends ChangeNotifier {
       final centerLat = _currentBranchData!['latitude'] as double?;
       final centerLng = _currentBranchData!['longitude'] as double?;
 
+      if (centerLat == null || centerLng == null) {
+        print('Invalid branch location data');
+        return;
+      }
+
       // ✅ If on active break, always send TRUE pulse
       if (isOnActiveBreak) {
-        print('☕ Pulse #${_pulsesCount + 1}: TRUE (Active Break - Skipping all validation)');
-        
+        print(
+          '☕ Pulse #${_pulsesCount + 1}: TRUE (Active Break - Skipping all validation)',
+        );
+
         final timestamp = DateTime.now();
-        final branchId = (_currentBranchData!['id'] ?? _currentBranchData!['branch_id']) as String?;
-        
+        final branchId =
+            (_currentBranchData!['id'] ?? _currentBranchData!['branch_id'])
+                as String?;
+
         // Save pulse as TRUE (break override) with branch location
         await _offlineService.saveLocalPulse(
           employeeId: _currentEmployeeId!,
@@ -270,7 +242,7 @@ class PulseTrackingService extends ChangeNotifier {
           validatedByLocation: false,
           branchId: branchId,
         );
-        
+
         // Update pulse data
         final pulseData = {
           'inside_geofence': true,
@@ -278,108 +250,106 @@ class PulseTrackingService extends ChangeNotifier {
           'timestamp': timestamp,
           'validated_by_break': true,
         };
-        
+
         _recentPulses.add(pulseData);
         if (_recentPulses.length > 2) {
           _recentPulses.removeAt(0);
         }
-        
+
         _pulsesCount++;
         _lastPulseTime = timestamp;
-        
+
         // ✅ تحديث العداد من قاعدة البيانات لضمان الدقة
         final updatedStats = await getTrackingStats(_currentEmployeeId!);
         _pulsesCount = updatedStats['total_pulses'] ?? _pulsesCount;
-        
+
         notifyListeners();
-        
+
         return; // Done - break override applied
       }
 
       // centerLat and centerLng already defined above for break override
-      final radius = (_currentBranchData!['geofence_radius'] as num?)?.toDouble() ?? 100.0;
-
-      if (centerLat == null || centerLng == null) {
-        print('Invalid branch location data');
-        return;
-      }
+      final baseRadius =
+          (_currentBranchData!['geofence_radius'] as num?)?.toDouble() ?? 100.0;
+      final extraTolerance =
+          ((_currentBranchData!['distance_from_radius'] as num?)?.toDouble() ??
+                  0.0)
+              .clamp(0.0, 500.0);
+      final radius = baseRadius + extraTolerance;
 
       // ✅ STEP 1: Check Wi-Fi FIRST (Priority)
       String? wifiBssid;
       bool wifiValidated = false;
       final requiredBssids = _extractRequiredBssids(_currentBranchData!);
-      
+
       if (requiredBssids.isNotEmpty) {
         try {
           wifiBssid = await WiFiService.getCurrentWifiBssidValidated();
-          wifiValidated = requiredBssids.contains(wifiBssid);
-          print('📶 Wi-Fi: $wifiBssid (${wifiValidated ? "✅ valid" : "❌ invalid"})');
-          
+          wifiValidated =
+              wifiBssid.isNotEmpty &&
+              requiredBssids.contains(WiFiService.normalizeBssid(wifiBssid));
+          print(
+            '📶 Wi-Fi: $wifiBssid (${wifiValidated ? "✅ valid" : "❌ invalid"})',
+          );
+
           if (wifiValidated) {
-            // ✅ Wi-Fi is valid = TRUE immediately (no GPS check needed)
-            print('✅ Pulse #${_pulsesCount + 1}: TRUE (Valid Wi-Fi) - Skipping GPS check');
-            
             final timestamp = DateTime.now();
-            final branchId = (_currentBranchData!['id'] ?? _currentBranchData!['branch_id']) as String?;
-            
-            // ✅ FIXED: Use branch location when WiFi validated (not null)
-            // Save pulse as TRUE with branch location
-            await _offlineService.saveLocalPulse(
-              employeeId: _currentEmployeeId!,
-              attendanceId: _currentAttendanceId,
+            final branchId =
+                (_currentBranchData!['id'] ?? _currentBranchData!['branch_id'])
+                    as String?;
+
+            await _recordWifiValidatedPulse(
               timestamp: timestamp,
-              latitude: centerLat, // ✅ Use branch center location
-              longitude: centerLng, // ✅ Use branch center location
-              insideGeofence: true,
-              distanceFromCenter: 0.0,
               wifiBssid: wifiBssid,
-              validatedByWifi: true,
-              validatedByLocation: false,
+              centerLat: centerLat,
+              centerLng: centerLng,
               branchId: branchId,
+              reason: 'Valid branch Wi-Fi',
             );
-            
-            // Update pulse data
-            final pulseData = {
-              'inside_geofence': true,
-              'distance': 0.0,
-              'timestamp': timestamp,
-              'validated_by_wifi': true,
-            };
-            
-            _recentPulses.add(pulseData);
-            if (_recentPulses.length > 2) {
-              _recentPulses.removeAt(0);
-            }
-            
-            _pulsesCount++;
-            _lastPulseTime = timestamp;
-            
-            // ✅ تحديث العداد من قاعدة البيانات لضمان الدقة
-            final updatedStats = await getTrackingStats(_currentEmployeeId!);
-            _pulsesCount = updatedStats['total_pulses'] ?? _pulsesCount;
-            
-            notifyListeners();
-            
             return; // Done - no need for GPS
           }
         } catch (e) {
           print('⚠️ Wi-Fi check error: $e');
         }
       }
-      
+
       // ✅ STEP 2: Wi-Fi failed or not available - Check GPS
       print('📍 Wi-Fi not valid - checking GPS location (Native)...');
-      
+
       // Check if location services are enabled (using Native GPS - much faster!)
       final locationEnabled = await NativeLocationService.getCurrentLocation();
-      
+
       if (locationEnabled == null) {
+        final fallbackWifiBssid = await _validateWithFallbackWifi(
+          requiredBssids,
+        );
+        if (fallbackWifiBssid != null) {
+          final timestamp = DateTime.now();
+          final branchId =
+              (_currentBranchData!['id'] ?? _currentBranchData!['branch_id'])
+                  as String?;
+
+          await _recordWifiValidatedPulse(
+            timestamp: timestamp,
+            wifiBssid: fallbackWifiBssid,
+            centerLat: centerLat,
+            centerLng: centerLng,
+            branchId: branchId,
+            reason: 'Fallback branch Wi-Fi after GPS unavailable',
+          );
+          return;
+        }
+
         // GPS disabled or no permission = FALSE pulse
-        print('❌ Pulse #${_pulsesCount + 1}: FALSE (GPS disabled or no permission)');
-        
+        print(
+          '❌ Pulse #${_pulsesCount + 1}: FALSE (GPS disabled or no permission)',
+        );
+
         final timestamp = DateTime.now();
-        final branchId = (_currentBranchData!['id'] ?? _currentBranchData!['branch_id']) as String?;
-        
+        final branchId =
+            (_currentBranchData!['id'] ?? _currentBranchData!['branch_id'])
+                as String?;
+
         await _offlineService.saveLocalPulse(
           employeeId: _currentEmployeeId!,
           attendanceId: _currentAttendanceId,
@@ -393,32 +363,32 @@ class PulseTrackingService extends ChangeNotifier {
           validatedByLocation: false,
           branchId: branchId,
         );
-        
+
         // Update pulse data
         final pulseData = {
           'inside_geofence': false,
           'distance': 0.0,
           'timestamp': timestamp,
         };
-        
+
         _recentPulses.add(pulseData);
         if (_recentPulses.length > 2) {
           _recentPulses.removeAt(0);
         }
-        
+
         _pulsesCount++;
         _lastPulseTime = timestamp;
-        
+
         // ✅ تحديث العداد من قاعدة البيانات لضمان الدقة
         final updatedStats = await getTrackingStats(_currentEmployeeId!);
         _pulsesCount = updatedStats['total_pulses'] ?? _pulsesCount;
-        
+
         // Send warning notification
         await NotificationService.instance.showGeofenceViolation(
           employeeName: 'الموظف',
           message: '⚠️ تحذير: GPS مغلق!\nيجب تفعيل الموقع للتحقق من تواجدك',
         );
-        
+
         // Check for auto-checkout
         await _checkForAutoCheckout();
         notifyListeners();
@@ -441,36 +411,79 @@ class PulseTrackingService extends ChangeNotifier {
       final double distance = result['distance'] as double;
       final double latitude = result['latitude'] as double;
       final double longitude = result['longitude'] as double;
-      final DateTime timestamp = result['timestamp'] is DateTime 
-          ? result['timestamp'] as DateTime 
+        final double gpsAccuracy =
+          (result['accuracy'] as num?)?.toDouble() ?? 999.0;
+      final DateTime timestamp = result['timestamp'] is DateTime
+          ? result['timestamp'] as DateTime
           : DateTime.parse(result['timestamp'] as String);
+      bool effectiveInsideGeofence = isInsideGeofence;
+      double effectiveDistance = distance;
+      double effectiveLatitude = latitude;
+      double effectiveLongitude = longitude;
+      String? effectiveWifiBssid = wifiBssid;
+      bool effectiveWifiValidated = wifiValidated;
+      bool effectiveValidatedByLocation = isInsideGeofence;
+      final bool staleLocation =
+          DateTime.now().difference(timestamp).abs() > _maxLocationSampleAge;
+      final bool weakAccuracy = gpsAccuracy > _minReliableGpsAccuracyMeters;
+
+      // Guardrail: if Wi-Fi is unavailable and GPS sample is unreliable, do not
+      // penalize this pulse to avoid false auto-checkout while user is inside.
+      if (!effectiveInsideGeofence && !wifiValidated && (staleLocation || weakAccuracy)) {
+        effectiveInsideGeofence = true;
+        effectiveDistance = 0.0;
+        effectiveLatitude = centerLat;
+        effectiveLongitude = centerLng;
+        effectiveValidatedByLocation = false;
+        print(
+          '⚠️ Ignoring unreliable GPS sample (accuracy: ${gpsAccuracy.toStringAsFixed(1)}m, stale: $staleLocation)',
+        );
+      }
+
+      if (!effectiveInsideGeofence) {
+        final fallbackWifiBssid = await _validateWithFallbackWifi(
+          requiredBssids,
+        );
+        if (fallbackWifiBssid != null) {
+          effectiveInsideGeofence = true;
+          effectiveDistance = 0.0;
+          effectiveLatitude = centerLat;
+          effectiveLongitude = centerLng;
+          effectiveWifiBssid = fallbackWifiBssid;
+          effectiveWifiValidated = true;
+          effectiveValidatedByLocation = false;
+          print('✅ Branch Wi-Fi fallback corrected false GPS pulse');
+        }
+      }
 
       // Save pulse
-      final branchId = (_currentBranchData!['id'] ?? _currentBranchData!['branch_id']) as String?;
-      
+      final branchId =
+          (_currentBranchData!['id'] ?? _currentBranchData!['branch_id'])
+              as String?;
+
       await _offlineService.saveLocalPulse(
         employeeId: _currentEmployeeId!,
         attendanceId: _currentAttendanceId,
         timestamp: timestamp,
-        latitude: latitude,
-        longitude: longitude,
-        insideGeofence: isInsideGeofence,
-        distanceFromCenter: distance,
-        wifiBssid: wifiBssid,
-        validatedByWifi: wifiValidated,
-        validatedByLocation: isInsideGeofence,
+        latitude: effectiveLatitude,
+        longitude: effectiveLongitude,
+        insideGeofence: effectiveInsideGeofence,
+        distanceFromCenter: effectiveDistance,
+        wifiBssid: effectiveWifiBssid,
+        validatedByWifi: effectiveWifiValidated,
+        validatedByLocation: effectiveValidatedByLocation,
         branchId: branchId,
       );
 
       // Save to recent pulses list (keep last 2)
       final pulseData = {
-        'inside_geofence': isInsideGeofence,
-        'distance': distance,
+        'inside_geofence': effectiveInsideGeofence,
+        'distance': effectiveDistance,
         'timestamp': timestamp,
-        'latitude': latitude,
-        'longitude': longitude,
+        'latitude': effectiveLatitude,
+        'longitude': effectiveLongitude,
       };
-      
+
       _recentPulses.add(pulseData);
       if (_recentPulses.length > 2) {
         _recentPulses.removeAt(0); // Keep only last 2 pulses
@@ -478,24 +491,29 @@ class PulseTrackingService extends ChangeNotifier {
 
       _pulsesCount++;
       _lastPulseTime = timestamp;
-      
+
       // ✅ تحديث العداد من قاعدة البيانات لضمان الدقة
       final updatedStats = await getTrackingStats(_currentEmployeeId!);
       _pulsesCount = updatedStats['total_pulses'] ?? _pulsesCount;
 
       // Print pulse status
-      print('📊 Pulse #$_pulsesCount: ${isInsideGeofence ? "✅ INSIDE" : "❌ OUTSIDE"} geofence (${distance.toStringAsFixed(1)}m)');
+      print(
+        '📊 Pulse #$_pulsesCount: ${effectiveInsideGeofence ? "✅ INSIDE" : "❌ OUTSIDE"} geofence (${effectiveDistance.toStringAsFixed(1)}m)',
+      );
       print('📋 Recent pulses in memory: ${_recentPulses.length}');
 
       // 1. Send warning for EVERY false pulse
-      if (isInsideGeofence == false) {
-        print('⚠️ WARNING: Pulse outside geofence - Distance: ${distance.toStringAsFixed(1)}m!');
+      if (effectiveInsideGeofence == false) {
+        print(
+          '⚠️ WARNING: Pulse outside geofence - Distance: ${effectiveDistance.toStringAsFixed(1)}m!',
+        );
         print('📱 Sending notification to user...');
-        
+
         try {
           await NotificationService.instance.showGeofenceViolation(
             employeeName: 'الموظف',
-            message: '⚠️ تحذير: أنت خارج منطقة العمل!\nالمسافة: ${distance.round()}م\nعد فوراً أو سيتم تسجيل انصراف تلقائي',
+            message:
+                '⚠️ تحذير: أنت خارج منطقة العمل!\nالمسافة: ${effectiveDistance.round()}م\nعد فوراً أو سيتم تسجيل انصراف تلقائي',
           );
           print('✅ Notification sent successfully');
         } catch (e) {
@@ -510,39 +528,48 @@ class PulseTrackingService extends ChangeNotifier {
         final lastTwo = _recentPulses.sublist(_recentPulses.length - 2);
         final firstPulse = lastTwo[0];
         final secondPulse = lastTwo[1];
-        
+
         final firstIsOutside = firstPulse['inside_geofence'] == false;
         final secondIsOutside = secondPulse['inside_geofence'] == false;
 
         if (firstIsOutside && secondIsOutside) {
           print('*** 2 CONSECUTIVE FALSE PULSES DETECTED! ***');
-          print('   - First pulse: ${(firstPulse['distance'] as double).toStringAsFixed(1)}m outside');
-          print('   - Second pulse: ${(secondPulse['distance'] as double).toStringAsFixed(1)}m outside');
+          print(
+            '   - First pulse: ${(firstPulse['distance'] as double).toStringAsFixed(1)}m outside',
+          );
+          print(
+            '   - Second pulse: ${(secondPulse['distance'] as double).toStringAsFixed(1)}m outside',
+          );
           print('*** TRIGGERING AUTO CHECK-OUT ***');
 
           // Send final notification
           await NotificationService.instance.showGeofenceViolation(
             employeeName: 'الموظف',
-            message: '🚨 تم تسجيل انصراف تلقائي!\nنبضتين خارج النطاق (10 دقائق)',
+            message:
+                '🚨 تم تسجيل انصراف تلقائي!\nنبضتين خارج النطاق (10 دقائق)',
           );
 
           // Trigger auto check-out
           await _triggerAutoCheckout(
-            latitude: latitude,
-            longitude: longitude,
-            distance: distance,
-            wifiBssid: wifiBssid,
+            latitude: effectiveLatitude,
+            longitude: effectiveLongitude,
+            distance: effectiveDistance,
+            wifiBssid: effectiveWifiBssid,
           );
-          
+
           return; // Stop system after auto check-out
         }
       }
 
       notifyListeners();
-
     } catch (e) {
       print('Error sending pulse: $e');
-      AppLogger.instance.log('Error sending pulse', level: AppLogger.error, tag: 'PulseTracking', error: e);
+      AppLogger.instance.log(
+        'Error sending pulse',
+        level: AppLogger.error,
+        tag: 'PulseTracking',
+        error: e,
+      );
     } finally {
       _isSendingPulse = false;
     }
@@ -554,14 +581,18 @@ class PulseTrackingService extends ChangeNotifier {
       final lastTwo = _recentPulses.sublist(_recentPulses.length - 2);
       final firstPulse = lastTwo[0];
       final secondPulse = lastTwo[1];
-      
+
       final firstIsOutside = firstPulse['inside_geofence'] == false;
       final secondIsOutside = secondPulse['inside_geofence'] == false;
 
       if (firstIsOutside && secondIsOutside) {
         print('*** 2 CONSECUTIVE FALSE PULSES DETECTED! ***');
-        print('   - First pulse: ${(firstPulse['distance'] as double).toStringAsFixed(1)}m outside');
-        print('   - Second pulse: ${(secondPulse['distance'] as double).toStringAsFixed(1)}m outside');
+        print(
+          '   - First pulse: ${(firstPulse['distance'] as double).toStringAsFixed(1)}m outside',
+        );
+        print(
+          '   - Second pulse: ${(secondPulse['distance'] as double).toStringAsFixed(1)}m outside',
+        );
         print('*** TRIGGERING AUTO CHECK-OUT ***');
 
         // Send final notification
@@ -592,14 +623,15 @@ class PulseTrackingService extends ChangeNotifier {
 
     final timestamp = DateTime.now();
     bool savedOffline = false;
-    
+
     // 🚨 Set flag FIRST to notify UI immediately
     _autoCheckoutTriggered = true;
-    
+
     try {
       // Get attendance_id
-      final attendanceId = _currentAttendanceId ?? await _resolveActiveAttendanceId();
-      
+      final attendanceId =
+          _currentAttendanceId ?? await _resolveActiveAttendanceId();
+
       if (attendanceId == null) {
         print('ERROR: No active attendance record found');
         // Still emit event for UI update even without attendance_id
@@ -611,7 +643,7 @@ class PulseTrackingService extends ChangeNotifier {
 
       // Try check-out via server
       bool success = false;
-      
+
       try {
         success = await SupabaseAttendanceService.checkOut(
           attendanceId: attendanceId,
@@ -631,7 +663,8 @@ class PulseTrackingService extends ChangeNotifier {
             attendanceId: attendanceId,
             latitude: latitude,
             longitude: longitude,
-            note: 'Auto check-out after 2 consecutive pulses outside geofence (${distance.round()}m)',
+            note:
+                'Auto check-out after 2 consecutive pulses outside geofence (${distance.round()}m)',
           );
         } catch (e) {
           print('forceCheckout failed: $e');
@@ -642,14 +675,15 @@ class PulseTrackingService extends ChangeNotifier {
       if (!success) {
         print('Saving check-out locally (offline)...');
         savedOffline = true;
-        
+
         await _offlineService.saveLocalCheckOut(
           employeeId: _currentEmployeeId!,
           timestamp: timestamp,
           latitude: latitude,
           longitude: longitude,
           bssid: wifiBssid,
-          notes: 'Auto check-out after 2 consecutive pulses outside geofence - will sync when online',
+          notes:
+              'Auto check-out after 2 consecutive pulses outside geofence - will sync when online',
         );
 
         // Save to SQLite (mobile)
@@ -662,7 +696,8 @@ class PulseTrackingService extends ChangeNotifier {
               timestamp: timestamp,
               latitude: latitude,
               longitude: longitude,
-              notes: 'Auto check-out after 2 consecutive pulses outside geofence',
+              notes:
+                  'Auto check-out after 2 consecutive pulses outside geofence',
             );
           } catch (e) {
             print('SQLite save failed: $e');
@@ -674,9 +709,7 @@ class PulseTrackingService extends ChangeNotifier {
 
       // ✅ Clear attendance state from SharedPreferences
       try {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.remove('active_attendance_id');
-        await prefs.setBool('is_checked_in', false);
+        await SupabaseAttendanceService.clearActiveAttendanceCache();
         print('✅ Cleared attendance state from SharedPreferences');
       } catch (e) {
         print('⚠️ Failed to clear SharedPreferences: $e');
@@ -699,11 +732,10 @@ class PulseTrackingService extends ChangeNotifier {
 
       // Stop pulse system
       stopTracking(fromAutoCheckout: true);
-      
     } catch (e) {
       print('Auto check-out error: $e');
       savedOffline = true;
-      
+
       // Fallback: save offline
       if (_currentEmployeeId != null && _currentAttendanceId != null) {
         await _offlineService.saveLocalCheckOut(
@@ -715,31 +747,33 @@ class PulseTrackingService extends ChangeNotifier {
           notes: 'Auto check-out (fallback) - error in main processing',
         );
       }
-      
+
       // ✅ Clear attendance state even on error
       try {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.remove('active_attendance_id');
-        await prefs.setBool('is_checked_in', false);
+        await SupabaseAttendanceService.clearActiveAttendanceCache();
       } catch (_) {}
-      
+
       // 🚨 Emit event for UI
       _emitAutoCheckoutEvent(timestamp, distance, savedOffline);
-      
+
       await NotificationService.instance.showOfflineModeNotification();
       stopTracking(fromAutoCheckout: true);
     }
   }
-  
+
   /// 🚨 Helper to emit auto-checkout event
-  void _emitAutoCheckoutEvent(DateTime timestamp, double distance, bool savedOffline) {
+  void _emitAutoCheckoutEvent(
+    DateTime timestamp,
+    double distance,
+    bool savedOffline,
+  ) {
     final event = AutoCheckoutEvent(
       timestamp: timestamp,
       reason: 'نبضتين متتاليتين خارج منطقة العمل (${distance.round()}م)',
       distance: distance,
       savedOffline: savedOffline,
     );
-    
+
     _autoCheckoutController.add(event);
     print('🚨 Auto-checkout event emitted to UI');
   }
@@ -756,7 +790,12 @@ class PulseTrackingService extends ChangeNotifier {
       final storedId = prefs.getString('active_attendance_id');
       if (storedId != null && storedId.isNotEmpty) {
         // Filter out legacy placeholder values (e.g. "pending_local")
-        final isPlaceholder = RegExp(r'(pending|local|temp|dummy)', caseSensitive: false).hasMatch(storedId) || storedId.length < 8;
+        final isPlaceholder =
+            RegExp(
+              r'(pending|local|temp|dummy)',
+              caseSensitive: false,
+            ).hasMatch(storedId) ||
+            storedId.length < 8;
         if (!isPlaceholder) {
           _currentAttendanceId = storedId;
           return storedId;
@@ -765,6 +804,18 @@ class PulseTrackingService extends ChangeNotifier {
           await prefs.remove('active_attendance_id');
         }
       }
+
+      // Fallback to the unified device snapshot if key-value state was partially cleared.
+      final snapshot =
+          await SupabaseAttendanceService.getCachedActiveAttendanceOnDevice(
+            employeeId: _currentEmployeeId,
+          );
+      final snapshotId = snapshot?['attendance_id']?.toString();
+      if (snapshotId != null && snapshotId.isNotEmpty) {
+        _currentAttendanceId = snapshotId;
+        await prefs.setString('active_attendance_id', snapshotId);
+        return snapshotId;
+      }
     } catch (e) {
       print('SharedPreferences read error: $e');
     }
@@ -772,7 +823,10 @@ class PulseTrackingService extends ChangeNotifier {
     // Try getting from Supabase
     if (_currentEmployeeId != null) {
       try {
-        final activeAttendance = await SupabaseAttendanceService.getActiveAttendance(_currentEmployeeId!);
+        final activeAttendance =
+            await SupabaseAttendanceService.getActiveAttendance(
+              _currentEmployeeId!,
+            );
         final fetchedId = activeAttendance?['id'] as String?;
         if (fetchedId != null && fetchedId.isNotEmpty) {
           _currentAttendanceId = fetchedId;
@@ -789,7 +843,8 @@ class PulseTrackingService extends ChangeNotifier {
   /// Extract required BSSIDs from branch data
   List<String> _extractRequiredBssids(Map<String, dynamic> branchData) {
     final Set<String> normalized = <String>{};
-    final dynamic wifiData = branchData['wifi_bssids'] ??
+    final dynamic wifiData =
+        branchData['wifi_bssids'] ??
         branchData['wifi_bssid'] ??
         branchData['bssid'];
 
@@ -836,9 +891,86 @@ class PulseTrackingService extends ChangeNotifier {
     return normalized.toList();
   }
 
+  Future<String?> _validateWithFallbackWifi(List<String> requiredBssids) async {
+    if (requiredBssids.isEmpty) {
+      return null;
+    }
+
+    final fallbackBssid = await WiFiService.tryGetCurrentWifiBssid();
+    if (fallbackBssid == null || fallbackBssid.isEmpty) {
+      return null;
+    }
+
+    return requiredBssids.contains(fallbackBssid) ? fallbackBssid : null;
+  }
+
+  Future<void> _recordWifiValidatedPulse({
+    required DateTime timestamp,
+    required String? wifiBssid,
+    required double centerLat,
+    required double centerLng,
+    required String? branchId,
+    required String reason,
+  }) async {
+    print('✅ Pulse #${_pulsesCount + 1}: TRUE ($reason)');
+
+    await _offlineService.saveLocalPulse(
+      employeeId: _currentEmployeeId!,
+      attendanceId: _currentAttendanceId,
+      timestamp: timestamp,
+      latitude: centerLat,
+      longitude: centerLng,
+      insideGeofence: true,
+      distanceFromCenter: 0.0,
+      wifiBssid: wifiBssid,
+      validatedByWifi: true,
+      validatedByLocation: false,
+      branchId: branchId,
+    );
+
+    _recentPulses.add({
+      'inside_geofence': true,
+      'distance': 0.0,
+      'timestamp': timestamp,
+      'validated_by_wifi': true,
+    });
+    if (_recentPulses.length > 2) {
+      _recentPulses.removeAt(0);
+    }
+
+    _pulsesCount++;
+    _lastPulseTime = timestamp;
+
+    final updatedStats = await getTrackingStats(_currentEmployeeId!);
+    _pulsesCount = updatedStats['total_pulses'] ?? _pulsesCount;
+
+    notifyListeners();
+  }
+
+  Future<void> _persistTrackingContext() async {
+    if (_currentEmployeeId == null || _currentBranchData == null) {
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      'current_branch_data',
+      jsonEncode(_currentBranchData),
+    );
+    await prefs.setBool('pulse_tracking_active', true);
+  }
+
+  Future<void> _clearTrackingContext() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('current_branch_data');
+    await prefs.setBool('pulse_tracking_active', false);
+  }
+
   /// Send manual pulse (for testing)
   Future<void> sendManualPulse(String employeeId) async {
-    final branchData = await _offlineService.getCachedBranchData(employeeId: employeeId);
+    final branchData = await _offlineService.getCachedBranchData(
+      employeeId: employeeId,
+    );
     if (branchData == null) {
       print('Cannot send pulse: Branch data not available');
       return;
@@ -855,7 +987,7 @@ class PulseTrackingService extends ChangeNotifier {
     final today = DateTime.now();
     final startOfDay = DateTime(today.year, today.month, today.day);
     final endOfDay = startOfDay.add(const Duration(days: 1));
-    
+
     // 1. النبضات المزامنة من Hive
     final syncedPulses = await _offlineService.getPulsesForDate(
       employeeId: employeeId,
@@ -868,20 +1000,23 @@ class PulseTrackingService extends ChangeNotifier {
       try {
         final db = OfflineDatabase.instance;
         final allPending = await db.getPendingPulses();
-        
+
         // فلترة النبضات الخاصة بالموظف واليوم الحالي
         pendingPulses = allPending.where((p) {
           if (p['employee_id'] != employeeId) return false;
-          
+
           try {
             final timestamp = DateTime.parse(p['timestamp']?.toString() ?? '');
-            return timestamp.isAfter(startOfDay) && timestamp.isBefore(endOfDay);
+            return timestamp.isAfter(startOfDay) &&
+                timestamp.isBefore(endOfDay);
           } catch (e) {
             return false;
           }
         }).toList();
-        
-        print('📊 نبضات مزامنة (Hive): ${syncedPulses.length}, معلقة (SQLite): ${pendingPulses.length}');
+
+        print(
+          '📊 نبضات مزامنة (Hive): ${syncedPulses.length}, معلقة (SQLite): ${pendingPulses.length}',
+        );
       } catch (e) {
         print('⚠️ خطأ في قراءة النبضات المعلقة: $e');
       }
@@ -899,10 +1034,11 @@ class PulseTrackingService extends ChangeNotifier {
         outsideCount++;
       }
     }
-    
+
     // من SQLite
     for (var pulse in pendingPulses) {
-      if (pulse['inside_geofence'] == 1) { // SQLite بيخزن int مش bool
+      if (pulse['inside_geofence'] == 1) {
+        // SQLite بيخزن int مش bool
         insideCount++;
       } else {
         outsideCount++;
@@ -923,25 +1059,10 @@ class PulseTrackingService extends ChangeNotifier {
       'last_pulse': _lastPulseTime?.toIso8601String(),
     };
   }
-  
-  /// Refresh pulse count from database (called when native service records a pulse)
-  Future<void> _refreshPulseCount() async {
-    if (_currentEmployeeId == null) return;
-    
-    try {
-      final stats = await getTrackingStats(_currentEmployeeId!);
-      _pulsesCount = stats['total_pulses'] ?? 0;
-      print('🔄 Pulse count refreshed: $_pulsesCount');
-      notifyListeners();
-    } catch (e) {
-      print('⚠️ Error refreshing pulse count: $e');
-    }
-  }
 
   @override
   void dispose() {
     stopTracking();
-    BackgroundPulseListener.dispose();
     super.dispose();
   }
 }

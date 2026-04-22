@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../services/payroll_service.dart';
+import '../../utils/owner_time_utils.dart';
 
 class OwnerEmployeePayrollReportPage extends StatefulWidget {
   final String employeeId;
@@ -223,10 +224,12 @@ class _OwnerEmployeePayrollReportPageState extends State<OwnerEmployeePayrollRep
                             } catch (e) {
                               date = DateTime.now();
                             }
-                            String checkIn = day['check_in_time'] as String? ?? '--';
-                            String checkOut = day['check_out_time'] as String? ?? '--';
-                            if (checkIn.isEmpty || checkIn == '-' || checkIn == 'null') checkIn = '--';
-                            if (checkOut.isEmpty || checkOut == '-' || checkOut == 'null') checkOut = '--';
+                            final checkIn = _formatAttendanceTime(
+                              day['check_in_time'],
+                            );
+                            final checkOut = _formatAttendanceTime(
+                              day['check_out_time'],
+                            );
                             final hours = (day['total_hours'] as num?)?.toDouble() ?? 0;
                             final dailySalary = (day['daily_salary'] as num?)?.toDouble() ?? 0;
                             final advance = (day['advance_amount'] as num?)?.toDouble() ?? 0;
@@ -444,5 +447,17 @@ class _OwnerEmployeePayrollReportPageState extends State<OwnerEmployeePayrollRep
         ],
       ),
     );
+  }
+
+  String _formatAttendanceTime(dynamic value) {
+    if (value == null) return '--';
+    final raw = value.toString().trim();
+    if (raw.isEmpty || raw == '-' || raw == '--' || raw == 'null') {
+      return '--';
+    }
+
+    final formatted = OwnerTimeUtils.formatTimeShort(raw);
+    if (formatted == '-') return raw;
+    return formatted;
   }
 }

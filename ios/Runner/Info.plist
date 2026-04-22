@@ -60,6 +60,7 @@
 	</array>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
+		<string>com.oldies.attendance.full.pulse.periodic</string>
 		<string>com.oldies.workers.geofence</string>
 		<string>com.oldies.workers.sync</string>
 	</array>

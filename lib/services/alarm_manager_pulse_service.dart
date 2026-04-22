@@ -5,7 +5,6 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_plus/device_info_plus.dart';
-import 'pulse_tracking_service.dart';
 import 'app_logger.dart';
 
 /// Backup pulse mechanism using Android AlarmManager
@@ -120,6 +119,10 @@ class AlarmManagerPulseService {
         _alarmInterval,
         _alarmId,
         alarmCallback,
+        wakeup: true,
+        allowWhileIdle: true,
+        exact: true,
+        rescheduleOnReboot: true,
       );
 
       if (success) {

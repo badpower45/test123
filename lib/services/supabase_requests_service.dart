@@ -1,8 +1,21 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:meta/meta.dart';
 import '../config/supabase_config.dart';
+
+typedef LeaveRequestInsertHandler = Future<Map<String, dynamic>?> Function(
+  Map<String, dynamic> payload,
+);
 
 class SupabaseRequestsService {
   static final SupabaseClient _supabase = SupabaseConfig.client;
+  static LeaveRequestInsertHandler? _leaveRequestInsertHandler;
+
+  @visibleForTesting
+  static void setLeaveRequestInsertHandlerForTesting(
+    LeaveRequestInsertHandler? handler,
+  ) {
+    _leaveRequestInsertHandler = handler;
+  }
 
   // ==================== ATTENDANCE REQUESTS ====================
 
@@ -218,16 +231,23 @@ class SupabaseRequestsService {
     required String reason,
   }) async {
     try {
+      final payload = {
+        'employee_id': employeeId,
+        'leave_type': leaveType,
+        'start_date': startDate.toIso8601String().split('T')[0],
+        'end_date': endDate.toIso8601String().split('T')[0],
+        'reason': reason,
+        'status': 'pending',
+      };
+
+      final handler = _leaveRequestInsertHandler;
+      if (handler != null) {
+        return await handler(payload);
+      }
+
       final response = await _supabase
           .from('leave_requests')
-          .insert({
-            'employee_id': employeeId,
-            'leave_type': leaveType,
-            'start_date': startDate.toIso8601String().split('T')[0],
-            'end_date': endDate.toIso8601String().split('T')[0],
-            'reason': reason,
-            'status': 'pending',
-          })
+          .insert(payload)
           .select()
           .single();
 

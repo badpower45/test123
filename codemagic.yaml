@@ -8,11 +8,11 @@ workflows:
     environment:
       ios_signing:
         distribution_type: app_store
-        bundle_identifier: com.oldies.attendance
+        bundle_identifier: com.oldies.attendance.full
       vars:
         XCODE_WORKSPACE: "ios/Runner.xcworkspace"
         XCODE_SCHEME: "Runner"
-        BUNDLE_ID: "com.oldies.attendance"
+        BUNDLE_ID: "com.oldies.attendance.full"
         APP_STORE_ID: YOUR_APP_STORE_ID # هنا حط الـ App Store ID بتاعك
       flutter: stable
       xcode: latest
@@ -74,10 +74,10 @@ workflows:
           flutter analyze
       - name: Build APK with Flutter
         script: |
-          flutter build apk --release --build-name=1.0.$BUILD_NUMBER
+          flutter build apk --release --flavor full --build-name=1.0.$BUILD_NUMBER
       - name: Build AAB with Flutter
         script: |
-          flutter build appbundle --release --build-name=1.0.$BUILD_NUMBER
+          flutter build appbundle --release --flavor full --build-name=1.0.$BUILD_NUMBER
     artifacts:
       - build/**/outputs/**/*.apk
       - build/**/outputs/**/*.aab

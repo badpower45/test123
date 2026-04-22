@@ -278,6 +278,8 @@ class SupabaseBranchService {
           .from('attendance')
           .select('*, employees!inner(id, full_name, branch, role)')
           .eq('date', today)
+          .eq('status', 'active')
+          .eq('employees.is_active', true)
           .isFilter('check_out_time', null); // Still checked in
       
       if (branchName != null) {

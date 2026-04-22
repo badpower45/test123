@@ -10,6 +10,7 @@ type PulseInput = {
   latitude?: number;
   longitude?: number;
   wifi_bssid?: string;
+  validation_method?: string;
   inside_geofence?: boolean;
   timestamp?: string | number;
   status?: string;
@@ -48,20 +49,78 @@ function toNumber(value: unknown): number | null {
   return null;
 }
 
+function getCairoOffsetMinutes(referenceUtc: Date): number {
+  const timezonePart = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Africa/Cairo',
+    timeZoneName: 'shortOffset',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).formatToParts(referenceUtc).find((part) => part.type === 'timeZoneName')?.value ?? 'GMT+2';
+
+  const match = timezonePart.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/i);
+  if (!match) {
+    return 120;
+  }
+
+  const sign = match[1] === '-' ? -1 : 1;
+  const hours = Number(match[2] ?? '0');
+  const minutes = Number(match[3] ?? '0');
+
+  return sign * ((hours * 60) + minutes);
+}
+
+function parseNaiveCairoTimestamp(input: string): Date | null {
+  const match = input.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/,
+  );
+
+  if (!match) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6] ?? '0');
+  const millisecond = Number((match[7] ?? '').padEnd(3, '0') || '0');
+
+  if (
+    !Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day) ||
+    !Number.isInteger(hour) || !Number.isInteger(minute) || !Number.isInteger(second) ||
+    month < 1 || month > 12 || day < 1 || day > 31 ||
+    hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59
+  ) {
+    return null;
+  }
+
+  const utcGuessMs = Date.UTC(year, month - 1, day, hour, minute, second, millisecond);
+  const offsetMinutes = getCairoOffsetMinutes(new Date(utcGuessMs));
+  const corrected = new Date(utcGuessMs - (offsetMinutes * 60 * 1000));
+
+  return Number.isNaN(corrected.getTime()) ? null : corrected;
+}
+
 function resolveIsoTimestamp(input?: unknown): string {
   if (input instanceof Date) {
     if (!Number.isNaN(input.getTime())) {
       return input.toISOString();
     }
   } else if (typeof input === 'number') {
-    const fromNumber = new Date(input);
+    const normalized = input < 1e12 ? input * 1000 : input;
+    const fromNumber = new Date(normalized);
     if (!Number.isNaN(fromNumber.getTime())) {
       return fromNumber.toISOString();
     }
   } else if (typeof input === 'string') {
     const trimmed = input.trim();
     if (trimmed) {
-      const fromString = new Date(trimmed);
+      const normalized = trimmed.replace(' ', 'T');
+      const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized);
+      const fromString = hasTimezone
+        ? new Date(normalized)
+        : (parseNaiveCairoTimestamp(normalized) ?? new Date(normalized));
       if (!Number.isNaN(fromString.getTime())) {
         return fromString.toISOString();
       }
@@ -352,6 +411,14 @@ serve(async (req: Request) => {
 
       const timestamp = resolveIsoTimestamp(item.timestamp);
 
+      const validationMethod = (item.validation_method?.toString().trim())
+        ? item.validation_method!.toString().trim().toUpperCase()
+        : (wifiValid
+            ? 'WIFI'
+            : (latitude !== undefined && longitude !== undefined
+                ? 'LOCATION'
+                : 'UNKNOWN'));
+
       const pulsePayload: JsonRecord = {
         employee_id: employeeId,
         branch_id: branchId ?? branch?.id ?? null,
@@ -361,6 +428,8 @@ serve(async (req: Request) => {
       if (attendanceId) (pulsePayload as any).attendance_id = attendanceId;
       if (latitude !== undefined) pulsePayload.latitude = latitude;
       if (longitude !== undefined) pulsePayload.longitude = longitude;
+      if (normalizedBssid) pulsePayload.wifi_bssid = normalizedBssid;
+      pulsePayload.validation_method = validationMethod;
       // Map to actual column name in schema
       (pulsePayload as any).is_within_geofence = isWithinGeofence;
       (pulsePayload as any).inside_geofence = isWithinGeofence;
@@ -394,19 +463,17 @@ serve(async (req: Request) => {
 });
 
 /**
- * 🚀 TIME RECONCILIATION: Auto-close sessions with >10 min pulse gaps
- * 
+ * 🚀 TIME RECONCILIATION: Auto-close only when last pulse is stale
+ *
  * Logic:
  * 1. For each unique employee in uploaded pulses
  * 2. Get their active attendance session
- * 3. Get ALL pulses for that session (sorted by time)
- * 4. Check for gaps > 10 minutes between consecutive pulses
- * 5. If gap found: close session at timestamp of last pulse before gap
- * 
- * This prevents employees from:
- * - Checking in at work
- * - Going home and keeping phone off for hours
- * - Coming back online and pretending they worked all day
+ * 3. Get latest pulse timestamp for that session
+ * 4. If (now - latestPulse) > 10 minutes, close at latestPulse
+ *
+ * NOTE:
+ * We intentionally ignore historical internal gaps to avoid false closures when
+ * connectivity resumes later in the same session.
  */
 async function reconcileAttendanceSessions(
   supabase: any,
@@ -437,6 +504,7 @@ async function reconcileAttendanceSessions(
 
       checkedCount++;
       const attendanceId = activeAttendance.id;
+      const checkInTime = new Date(activeAttendance.check_in_time);
 
       // Get ALL pulses for this session, sorted by time
       const { data: pulses } = await supabase
@@ -445,58 +513,52 @@ async function reconcileAttendanceSessions(
         .eq('attendance_id', attendanceId)
         .order('timestamp', { ascending: true });
 
-      if (!pulses || pulses.length < 2) continue;
+      if (!pulses || pulses.length === 0) continue;
 
-      // Check for time gaps > 10 minutes (600,000 ms)
       const MAX_GAP_MS = 10 * 60 * 1000;
-      let lastValidPulseTime: Date | null = null;
-      let gapDetected = false;
+      const latestPulse = pulses[pulses.length - 1];
+      const latestPulseTime = new Date(latestPulse.timestamp);
 
-      for (let i = 0; i < pulses.length; i++) {
-        const currentPulse = pulses[i];
-        const currentTime = new Date(currentPulse.timestamp);
-
-        if (i === 0) {
-          lastValidPulseTime = currentTime;
-          continue;
-        }
-
-        if (!lastValidPulseTime) continue;
-
-        const gap = currentTime.getTime() - lastValidPulseTime.getTime();
-
-        if (gap > MAX_GAP_MS) {
-          // GAP DETECTED! Close session at lastValidPulseTime
-          console.log(`[Reconciliation] Gap detected for employee ${employeeId}: ${gap / 1000 / 60} minutes`);
-          console.log(`[Reconciliation] Closing session at: ${lastValidPulseTime.toISOString()}`);
-
-          // Close the attendance session
-          const { error: updateError } = await supabase
-            .from('attendance')
-            .update({
-              check_out_time: lastValidPulseTime.toISOString(),
-              status: 'completed',
-              notes: `Auto-closed by Time Reconciliation: ${gap / 1000 / 60} min gap detected`,
-            })
-            .eq('id', attendanceId);
-
-          if (!updateError) {
-            closedCount++;
-            closedSessions.push(attendanceId);
-            console.log(`[Reconciliation] ✅ Session ${attendanceId} auto-closed`);
-          } else {
-            console.error(`[Reconciliation] ❌ Failed to close session ${attendanceId}:`, updateError);
-          }
-
-          gapDetected = true;
-          break; // Stop checking this session
-        }
-
-        lastValidPulseTime = currentTime;
+      if (Number.isNaN(latestPulseTime.getTime())) {
+        console.warn(`[Reconciliation] Invalid latest pulse timestamp for session ${attendanceId}`);
+        continue;
       }
 
-      if (!gapDetected) {
-        console.log(`[Reconciliation] ✅ Session ${attendanceId} has no gaps - OK`);
+      const gapFromNowMs = Date.now() - latestPulseTime.getTime();
+      if (gapFromNowMs <= MAX_GAP_MS) {
+        console.log(`[Reconciliation] ✅ Session ${attendanceId} latest pulse is fresh - OK`);
+        continue;
+      }
+
+      if (!Number.isNaN(checkInTime.getTime()) && latestPulseTime < checkInTime) {
+        console.warn(
+          `[Reconciliation] Skipping auto-close: latest pulse (${latestPulseTime.toISOString()}) before check-in (${checkInTime.toISOString()})`
+        );
+        continue;
+      }
+
+      const closeAt = !Number.isNaN(checkInTime.getTime()) && latestPulseTime < checkInTime
+        ? checkInTime
+        : latestPulseTime;
+
+      console.log(`[Reconciliation] Stale session detected for employee ${employeeId}: ${gapFromNowMs / 1000 / 60} min since latest pulse`);
+      console.log(`[Reconciliation] Closing session at latest pulse: ${closeAt.toISOString()}`);
+
+      const { error: updateError } = await supabase
+        .from('attendance')
+        .update({
+          check_out_time: closeAt.toISOString(),
+          status: 'completed',
+          notes: `Auto-closed by Time Reconciliation: ${gapFromNowMs / 1000 / 60} min stale since latest pulse`,
+        })
+        .eq('id', attendanceId);
+
+      if (!updateError) {
+        closedCount++;
+        closedSessions.push(attendanceId);
+        console.log(`[Reconciliation] ✅ Session ${attendanceId} auto-closed`);
+      } else {
+        console.error(`[Reconciliation] ❌ Failed to close session ${attendanceId}:`, updateError);
       }
 
     } catch (err) {

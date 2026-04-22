@@ -42,15 +42,27 @@ class _ManagerMainScreenState extends State<ManagerMainScreen> {
       _pages = [
         RefreshableTab(
           key: _tabKeys[0],
-          builder: (context) => _safeBuildPage(() => ManagerHomePage(managerId: widget.managerId), 'الرئيسية'),
+          builder: (context) => _safeBuildPage(
+            () => ManagerHomePage(managerId: widget.managerId),
+            'الرئيسية',
+          ),
         ),
         RefreshableTab(
           key: _tabKeys[1],
-          builder: (context) => _safeBuildPage(() => ManagerReportPage(managerId: widget.managerId, branch: widget.branch), 'التقارير'),
+          builder: (context) => _safeBuildPage(
+            () => ManagerReportPage(
+              managerId: widget.managerId,
+              branch: widget.branch,
+            ),
+            'التقارير',
+          ),
         ),
         RefreshableTab(
           key: _tabKeys[2],
-          builder: (context) => _safeBuildPage(() => ManagerProfilePage(managerId: widget.managerId), 'الملف الشخصي'),
+          builder: (context) => _safeBuildPage(
+            () => ManagerProfilePage(managerId: widget.managerId),
+            'الملف الشخصي',
+          ),
         ),
       ];
       _loadUnresolvedFlagsCount();
@@ -59,10 +71,13 @@ class _ManagerMainScreenState extends State<ManagerMainScreen> {
       print('Stack trace: $stackTrace');
       // Initialize with error pages
       _tabKeys = List.generate(3, (_) => GlobalKey<RefreshableTabState>());
-      _pages = List.generate(3, (index) => RefreshableTab(
-        key: _tabKeys[index],
-        builder: (context) => _buildErrorPage('حدث خطأ في تحميل الصفحة'),
-      ));
+      _pages = List.generate(
+        3,
+        (index) => RefreshableTab(
+          key: _tabKeys[index],
+          builder: (context) => _buildErrorPage('حدث خطأ في تحميل الصفحة'),
+        ),
+      );
     }
   }
 
@@ -88,7 +103,11 @@ class _ManagerMainScreenState extends State<ManagerMainScreen> {
               const SizedBox(height: 16),
               Text(
                 message,
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.error),
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.error,
+                ),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
@@ -96,19 +115,34 @@ class _ManagerMainScreenState extends State<ManagerMainScreen> {
                 onPressed: () {
                   // Try to rebuild pages
                   setState(() {
-                    _tabKeys = List.generate(3, (_) => GlobalKey<RefreshableTabState>());
+                    _tabKeys = List.generate(
+                      3,
+                      (_) => GlobalKey<RefreshableTabState>(),
+                    );
                     _pages = [
                       RefreshableTab(
                         key: _tabKeys[0],
-                        builder: (context) => _safeBuildPage(() => ManagerHomePage(managerId: widget.managerId), 'الرئيسية'),
+                        builder: (context) => _safeBuildPage(
+                          () => ManagerHomePage(managerId: widget.managerId),
+                          'الرئيسية',
+                        ),
                       ),
                       RefreshableTab(
                         key: _tabKeys[1],
-                        builder: (context) => _safeBuildPage(() => ManagerReportPage(managerId: widget.managerId, branch: widget.branch), 'التقارير'),
+                        builder: (context) => _safeBuildPage(
+                          () => ManagerReportPage(
+                            managerId: widget.managerId,
+                            branch: widget.branch,
+                          ),
+                          'التقارير',
+                        ),
                       ),
                       RefreshableTab(
                         key: _tabKeys[2],
-                        builder: (context) => _safeBuildPage(() => ManagerProfilePage(managerId: widget.managerId), 'الملف الشخصي'),
+                        builder: (context) => _safeBuildPage(
+                          () => ManagerProfilePage(managerId: widget.managerId),
+                          'الملف الشخصي',
+                        ),
                       ),
                     ];
                   });
@@ -118,7 +152,10 @@ class _ManagerMainScreenState extends State<ManagerMainScreen> {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primaryOrange,
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 12,
+                  ),
                 ),
               ),
             ],
@@ -174,13 +211,24 @@ class _ManagerMainScreenState extends State<ManagerMainScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.dashboard_customize),
-            tooltip: 'لوحة المدير (جديدة)',
+            tooltip: 'جدول الحضور اليومي',
             onPressed: () {
+              final branchName = widget.branch.trim();
+              if (branchName.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('لا يوجد فرع مرتبط بحسابك حالياً'),
+                    backgroundColor: AppColors.error,
+                  ),
+                );
+                return;
+              }
               Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (_) => ManagerDashboardSimple(
                     managerId: widget.managerId,
-                    branchName: widget.branch,
+                    branchName: branchName,
+                    initialTabIndex: 3,
                   ),
                 ),
               );
@@ -192,16 +240,31 @@ class _ManagerMainScreenState extends State<ManagerMainScreen> {
             onPressed: () async {
               // التحقق من حالة الحضور أولاً
               try {
-                final status = await AttendanceApiService.fetchEmployeeStatus(widget.managerId);
-                final isCheckedIn = status['attendance']?['status'] == 'active';
-                
+                final status = await AttendanceApiService.fetchEmployeeStatus(
+                  widget.managerId,
+                );
+                final attendance =
+                    status['attendance'] as Map<String, dynamic>?;
+                final rawStatus = attendance?['status']
+                    ?.toString()
+                    .toLowerCase();
+                final hasCheckout = attendance?['check_out_time'] != null;
+                final isCheckedIn =
+                    !hasCheckout &&
+                    rawStatus != 'completed' &&
+                    rawStatus != 'checked_out';
+
                 if (isCheckedIn) {
                   // منع تسجيل الخروج إذا كان مسجل حضور
                   if (!mounted) return;
                   showDialog(
                     context: context,
                     builder: (context) => AlertDialog(
-                      icon: const Icon(Icons.warning_amber, size: 48, color: AppColors.error),
+                      icon: const Icon(
+                        Icons.warning_amber,
+                        size: 48,
+                        color: AppColors.error,
+                      ),
                       title: const Text('لا يمكن تسجيل الخروج'),
                       content: const Text(
                         'يجب عليك تسجيل الانصراف أولاً قبل تسجيل الخروج من الحساب.\n\n'
@@ -212,7 +275,10 @@ class _ManagerMainScreenState extends State<ManagerMainScreen> {
                       actions: [
                         TextButton(
                           onPressed: () => Navigator.pop(context),
-                          child: const Text('حسناً', style: TextStyle(fontSize: 16)),
+                          child: const Text(
+                            'حسناً',
+                            style: TextStyle(fontSize: 16),
+                          ),
                         ),
                       ],
                     ),
@@ -256,12 +322,9 @@ class _ManagerMainScreenState extends State<ManagerMainScreen> {
           ),
         ],
       ),
-      body: _pages.isEmpty 
+      body: _pages.isEmpty
           ? const Center(child: CircularProgressIndicator())
-          : IndexedStack(
-              index: _currentIndex,
-              children: _pages,
-            ),
+          : IndexedStack(index: _currentIndex, children: _pages),
       floatingActionButton: FloatingActionButton(
         onPressed: () {
           _tabKeys[_currentIndex].currentState?.refresh();
@@ -290,33 +353,22 @@ class _ManagerMainScreenState extends State<ManagerMainScreen> {
           backgroundColor: Colors.white,
           selectedItemColor: AppColors.primaryOrange,
           unselectedItemColor: Colors.grey,
-          selectedLabelStyle: GoogleFonts.ibmPlexSansArabic(
+          selectedLabelStyle: GoogleFonts.tajawal(
             fontSize: 12,
             fontWeight: FontWeight.bold,
           ),
-          unselectedLabelStyle: GoogleFonts.ibmPlexSansArabic(
-            fontSize: 12,
-          ),
+          unselectedLabelStyle: GoogleFonts.tajawal(fontSize: 12),
           items: const [
             BottomNavigationBarItem(
-              icon: Icon(
-                Icons.home,
-                size: 28,
-              ),
+              icon: Icon(Icons.space_dashboard_rounded, size: 28),
               label: 'الرئيسية',
             ),
             BottomNavigationBarItem(
-              icon: Icon(
-                Icons.description,
-                size: 28,
-              ),
+              icon: Icon(Icons.analytics_rounded, size: 28),
               label: 'التقارير',
             ),
             BottomNavigationBarItem(
-              icon: Icon(
-                Icons.person,
-                size: 28,
-              ),
+              icon: Icon(Icons.account_circle_rounded, size: 28),
               label: 'ملفي',
             ),
           ],

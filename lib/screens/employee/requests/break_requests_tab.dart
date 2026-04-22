@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../models/break.dart';
 import '../../../models/shift_status.dart';
@@ -52,6 +51,7 @@ class _BreakRequestsTabState extends State<BreakRequestsTab> {
     super.didUpdateWidget(oldWidget);
     if (widget.shiftStatus != oldWidget.shiftStatus) {
       _currentShiftStatus = widget.shiftStatus;
+      _isShiftActive = widget.shiftStatus?.hasActiveShift ?? _isShiftActive;
     }
   }
 
@@ -110,7 +110,10 @@ class _BreakRequestsTabState extends State<BreakRequestsTab> {
       if (!mounted) {
         return;
       }
-      setState(() => _currentShiftStatus = status);
+      setState(() {
+        _currentShiftStatus = status;
+        _isShiftActive = status.hasActiveShift;
+      });
     } catch (_) {
       // Ignore shift status errors silently.
     }
@@ -181,21 +184,7 @@ class _BreakRequestsTabState extends State<BreakRequestsTab> {
   }
 
   Future<void> _handleStartBreak(String breakId) async {
-    // ✅ Check for active attendance first
-    bool hasActiveAttendance = false;
-    
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final activeAttendanceId = prefs.getString('active_attendance_id');
-      
-      if (activeAttendanceId != null && activeAttendanceId.isNotEmpty) {
-        hasActiveAttendance = true;
-      }
-    } catch (e) {
-      print('⚠️ Failed to check SharedPreferences: $e');
-    }
-    
-    // ✅ If no active attendance, block break start
+    final hasActiveAttendance = await RequestsApiService.checkActiveShift(widget.employeeId);
     if (!hasActiveAttendance) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -306,6 +295,7 @@ class _BreakRequestsTabState extends State<BreakRequestsTab> {
   Widget build(BuildContext context) {
   final shiftStatusKnown = !widget.isShiftStatusLoading && _currentShiftStatus != null;
   final hasActiveShift = shiftStatusKnown ? _currentShiftStatus!.hasActiveShift : true;
+  final canRequestBreak = !_isLoadingStatus && (_isShiftActive || hasActiveShift);
     Break? activeBreak;
     for (final item in _breaks) {
       if (item.status == BreakStatus.active) {
@@ -326,7 +316,7 @@ class _BreakRequestsTabState extends State<BreakRequestsTab> {
         physics: const AlwaysScrollableScrollPhysics(),
         children: [
           ElevatedButton.icon(
-            onPressed: (_isShiftActive && !_isLoadingStatus) ? _openBreakRequestSheet : null,
+            onPressed: canRequestBreak ? _openBreakRequestSheet : null,
             icon: const Icon(Icons.add),
             label: _isLoadingStatus
                 ? const SizedBox(

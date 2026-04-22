@@ -31,10 +31,12 @@ class AttendanceApiService {
     String? wifiBssid,
   }) async {
     try {
+      final nowUtcIso = DateTime.now().toUtc().toIso8601String();
       final response = await SupabaseFunctionClient.post('attendance-check-in', {
         'employee_id': employeeId,
         'latitude': latitude,
         'longitude': longitude,
+        'timestamp': nowUtcIso,
         if (wifiBssid != null) 'wifi_bssid': wifiBssid,
       });
       return response ?? {};
@@ -57,10 +59,12 @@ class AttendanceApiService {
     String? wifiBssid,
   }) async {
     try {
+      final nowUtcIso = DateTime.now().toUtc().toIso8601String();
       final response = await SupabaseFunctionClient.post('attendance-check-out', {
         'employee_id': employeeId,
         'latitude': latitude,
         'longitude': longitude,
+        'timestamp': nowUtcIso,
         if (wifiBssid != null) 'wifi_bssid': wifiBssid,
       });
       return response ?? {};

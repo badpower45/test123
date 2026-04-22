@@ -13,6 +13,23 @@ type PendingResponse = {
   break_requests: any[]
 }
 
+async function getManagerBranchScope(supabaseClient: any, managerId: string) {
+  const { data, error } = await supabaseClient
+    .from('employees')
+    .select('id, branch_id, branch')
+    .eq('id', managerId)
+    .maybeSingle()
+
+  if (error || !data) {
+    return { branchId: null as string | null, branchName: null as string | null }
+  }
+
+  return {
+    branchId: (data.branch_id as string | null) ?? null,
+    branchName: (data.branch as string | null) ?? null,
+  }
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -73,12 +90,73 @@ serve(async (req) => {
       .order('created_at', { ascending: false })
 
     // Pending breaks assigned to manager (after adding assigned_manager_id column)
-    const { data: breaks, error: brErr } = await supabaseClient
+    const { data: assignedBreaks, error: brErr } = await supabaseClient
       .from('breaks')
       .select(`*, employees:employees!breaks_employee_id_fkey(id, full_name, branch, role)`) 
-      .eq('status', 'PENDING')
+      .in('status', ['PENDING', 'pending'])
       .eq('assigned_manager_id', managerId)
       .order('created_at', { ascending: false })
+
+    // Fallback for old records created without assigned_manager_id:
+    // fetch pending breaks for manager branch employees, then backfill assignment.
+    let fallbackBreaks: any[] = []
+    try {
+      const managerScope = await getManagerBranchScope(supabaseClient, managerId)
+
+      if (managerScope.branchId || managerScope.branchName || ownBranch) {
+        let employeesQuery = supabaseClient
+          .from('employees')
+          .select('id')
+          .eq('is_active', true)
+
+        if (managerScope.branchId) {
+          employeesQuery = employeesQuery.eq('branch_id', managerScope.branchId)
+        } else {
+          employeesQuery = employeesQuery.eq('branch', managerScope.branchName ?? ownBranch)
+        }
+
+        const { data: branchEmployees, error: branchEmployeesError } = await employeesQuery
+        if (!branchEmployeesError && Array.isArray(branchEmployees) && branchEmployees.length > 0) {
+          const employeeIds = branchEmployees.map((row: any) => row.id).filter(Boolean)
+
+          if (employeeIds.length > 0) {
+            const { data: unassignedBreaks, error: unassignedErr } = await supabaseClient
+              .from('breaks')
+              .select(`*, employees:employees!breaks_employee_id_fkey(id, full_name, branch, role)`)
+              .in('status', ['PENDING', 'pending'])
+              .in('employee_id', employeeIds)
+              .is('assigned_manager_id', null)
+              .order('created_at', { ascending: false })
+
+            if (!unassignedErr && Array.isArray(unassignedBreaks) && unassignedBreaks.isNotEmpty) {
+              fallbackBreaks = unassignedBreaks
+
+              // Best-effort backfill so next fetch/realtime works with manager filter directly.
+              const fallbackIds = unassignedBreaks.map((row: any) => row.id).filter(Boolean)
+              if (fallbackIds.length > 0) {
+                await supabaseClient
+                  .from('breaks')
+                  .update({ assigned_manager_id: managerId })
+                  .in('id', fallbackIds)
+              }
+            }
+          }
+        }
+      }
+    } catch (fallbackError) {
+      console.error('Break fallback assignment failed:', fallbackError)
+    }
+
+    const allBreaksMap = new Map<string, any>()
+    for (const item of assignedBreaks || []) {
+      if (item?.id) allBreaksMap.set(item.id, item)
+    }
+    for (const item of fallbackBreaks || []) {
+      if (item?.id && !allBreaksMap.has(item.id)) {
+        allBreaksMap.set(item.id, item)
+      }
+    }
+    const mergedBreaks = Array.from(allBreaksMap.values())
 
     if (leaveErr || advErr || attErr || brErr) {
       console.error('Errors:', { leaveErr, advErr, attErr, brErr })
@@ -88,7 +166,7 @@ serve(async (req) => {
       leave_requests: leaves || [],
       salary_advances: advances || [],
       attendance_requests: attendance || [],
-      break_requests: breaks || [],
+      break_requests: mergedBreaks,
     }
 
     return new Response(JSON.stringify(payload), {

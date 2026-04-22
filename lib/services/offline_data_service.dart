@@ -4,6 +4,7 @@ import 'package:hive/hive.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import '../database/offline_database.dart';
+import 'pulse_deduplication_service.dart';
 import 'supabase_function_client.dart';
 
 /// Service for managing offline data storage and sync
@@ -12,30 +13,95 @@ class OfflineDataService {
   static const String _branchDataBox = 'branch_data';
   static const String _attendanceBox = 'local_attendance';
   static const String _pulsesBox = 'local_pulses';
-  
+  static const Duration _branchCacheMaxAge = Duration(hours: 24);
+
   final _supabase = Supabase.instance.client;
-  
+
   // Helper: Get employee-specific key for branch data
   String _getBranchDataKey(String employeeId) => 'branch_$employeeId';
+
+  bool _isFreshBranchCache(Map<String, dynamic> cached) {
+    final raw = cached['downloaded_at'];
+    if (raw == null || raw.toString().isEmpty) {
+      return false;
+    }
+
+    try {
+      final downloadedAt = DateTime.parse(raw.toString());
+      return DateTime.now().difference(downloadedAt) < _branchCacheMaxAge;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool _isSameRequestedBranch(
+    Map<String, dynamic> cached,
+    String employeeBranch, {
+    String? branchId,
+  }) {
+    final cachedBranchId = (cached['id'] ?? cached['branch_id'])?.toString();
+    final cachedBranchName = (cached['name'] ?? cached['branch_name'])
+        ?.toString()
+        .trim();
+    final normalizedRequestedName = employeeBranch.trim();
+
+    if (branchId != null && branchId.isNotEmpty) {
+      return cachedBranchId == branchId;
+    }
+
+    if (cachedBranchName == null || normalizedRequestedName.isEmpty) {
+      return false;
+    }
+
+    return cachedBranchName.toLowerCase() ==
+        normalizedRequestedName.toLowerCase();
+  }
 
   // ==========================================
   // 1. Download Branch Data from Supabase
   // ==========================================
-  
+
   /// Download branch data for the employee's assigned branch
-  Future<Map<String, dynamic>?> downloadBranchData(String employeeBranch, {String? employeeId}) async {
+  Future<Map<String, dynamic>?> downloadBranchData(
+    String employeeBranch, {
+    String? branchId,
+    String? employeeId,
+  }) async {
     try {
-      print('📥 Downloading branch data for: $employeeBranch (Employee: $employeeId)');
-      
+      print(
+        '📥 Downloading branch data for: $employeeBranch (Branch ID: $branchId, Employee: $employeeId)',
+      );
+
+      // Reuse cached coordinates for same branch while cache is still fresh.
+      final cachedBranchData = await getCachedBranchData(
+        employeeId: employeeId,
+      );
+      if (cachedBranchData != null &&
+          _isSameRequestedBranch(
+            cachedBranchData,
+            employeeBranch,
+            branchId: branchId,
+          ) &&
+          _isFreshBranchCache(cachedBranchData)) {
+        print(
+          '✅ Reusing cached branch data (same branch, fresh cache): ${cachedBranchData['name'] ?? cachedBranchData['branch_name']}',
+        );
+        return cachedBranchData;
+      }
+
       // Get branch info from Supabase (correct column names)
-      final response = await _supabase
+      final branchQuery = _supabase
           .from('branches')
-          .select('id, name, latitude, longitude, wifi_bssid, geofence_radius, distance_from_radius, created_at')
-          .eq('name', employeeBranch)
-          .maybeSingle();
-      
+          .select(
+            'id, name, latitude, longitude, wifi_bssid, geofence_radius, distance_from_radius, created_at',
+          );
+
+      final response = (branchId != null && branchId.isNotEmpty)
+          ? await branchQuery.eq('id', branchId).maybeSingle()
+          : await branchQuery.eq('name', employeeBranch).maybeSingle();
+
       if (response == null) {
-        print('❌ No branch found with name: $employeeBranch');
+        print('❌ No branch found (name: $employeeBranch, id: $branchId)');
         return null;
       }
 
@@ -46,14 +112,16 @@ class OfflineDataService {
       final longitude = response['longitude']?.toDouble();
 
       // Get geofence_radius (can be different field names)
-      final geofenceRadius = (response['geofence_radius'] ?? 
-                             response['geofenceRadius'] ?? 
-                             100.0).toDouble();
-      
+      final geofenceRadius =
+          (response['geofence_radius'] ?? response['geofenceRadius'] ?? 100.0)
+              .toDouble();
+
       // Get distance_from_radius (additional pulse tolerance)
-      final distanceFromRadius = (response['distance_from_radius'] ?? 
-                                 response['distanceFromRadius'] ?? 
-                                 100.0).toDouble();
+      final distanceFromRadius =
+          (response['distance_from_radius'] ??
+                  response['distanceFromRadius'] ??
+                  100.0)
+              .toDouble();
 
       Map<String, dynamic>? employeeInfo;
       double? hourlyRate;
@@ -77,8 +145,7 @@ class OfflineDataService {
         }
       }
 
-      final dynamic wifiSource =
-          response['wifi_bssids'] ?? response['wifi_bssid'];
+      final dynamic wifiSource = response['wifi_bssid'];
       final List<String> wifiBssids = [];
 
       if (wifiSource is List) {
@@ -126,7 +193,8 @@ class OfflineDataService {
         'name': response['name'],
         'latitude': latitude,
         'longitude': longitude,
-        'bssid': response['wifi_bssid'], // Map wifi_bssid to bssid for consistency
+        'bssid':
+            response['wifi_bssid'], // Map wifi_bssid to bssid for consistency
         'wifi_bssids': distinctWifiBssids,
         'geofence_radius': geofenceRadius,
         'distance_from_radius': distanceFromRadius,
@@ -144,10 +212,12 @@ class OfflineDataService {
       } else {
         box = await Hive.openBox(_branchDataBox);
       }
-      
+
       // Save with employee-specific key
-      final storageKey = employeeId != null ? _getBranchDataKey(employeeId) : 'current_branch';
-  await box.put(storageKey, branchData);
+      final storageKey = employeeId != null
+          ? _getBranchDataKey(employeeId)
+          : 'current_branch';
+      await box.put(storageKey, branchData);
 
       // ✅ Also save to SQLite (for Mobile platform)
       if (!kIsWeb && employeeId != null) {
@@ -165,21 +235,25 @@ class OfflineDataService {
           shiftEndTime: employeeInfo?['shift_end_time'] as String?,
           hourlyRate: hourlyRate,
         );
-        
+
         print('💾 Saved to SQLite database for mobile');
       }
 
       print('✅ تم تنزيل بيانات الفرع');
-      print('📍 Location: ${branchData['latitude']}, ${branchData['longitude']}');
+      print(
+        '📍 Location: ${branchData['latitude']}, ${branchData['longitude']}',
+      );
       if (distinctWifiBssids.isNotEmpty) {
         print('Wi-Fi networks: ${distinctWifiBssids.join(', ')}');
       } else {
         print('Wi-Fi networks: none provided');
       }
-  print('🎯 Geofence Radius: ${branchData['geofence_radius']}m');
-  print('📡 Pulse Distance: ${branchData['distance_from_radius']}m');
-  print('⏰ Shift: ${branchData['shift_start_time']} → ${branchData['shift_end_time']}');
-  print('💵 Hourly Rate: ${branchData['hourly_rate']}');
+      print('🎯 Geofence Radius: ${branchData['geofence_radius']}m');
+      print('📡 Pulse Distance: ${branchData['distance_from_radius']}m');
+      print(
+        '⏰ Shift: ${branchData['shift_start_time']} → ${branchData['shift_end_time']}',
+      );
+      print('💵 Hourly Rate: ${branchData['hourly_rate']}');
 
       return branchData;
     } catch (e) {
@@ -192,9 +266,11 @@ class OfflineDataService {
   // ==========================================
   // 2. Get Cached Branch Data (Offline)
   // ==========================================
-  
+
   /// Get cached branch data from local storage for specific employee
-  Future<Map<String, dynamic>?> getCachedBranchData({String? employeeId}) async {
+  Future<Map<String, dynamic>?> getCachedBranchData({
+    String? employeeId,
+  }) async {
     try {
       // Check if box is already open
       Box? box;
@@ -203,16 +279,18 @@ class OfflineDataService {
       } else {
         box = await Hive.openBox(_branchDataBox);
       }
-      
+
       // Try employee-specific key first
-      final storageKey = employeeId != null ? _getBranchDataKey(employeeId) : 'current_branch';
+      final storageKey = employeeId != null
+          ? _getBranchDataKey(employeeId)
+          : 'current_branch';
       final data = box.get(storageKey);
-      
+
       if (data is Map) {
         print('✅ Found cached branch data for: $employeeId');
         return Map<String, dynamic>.from(data);
       }
-      
+
       // Fallback to old key for backwards compatibility
       if (employeeId != null) {
         final fallbackData = box.get('current_branch');
@@ -221,7 +299,7 @@ class OfflineDataService {
           return Map<String, dynamic>.from(fallbackData);
         }
       }
-      
+
       return null;
     } catch (e) {
       print('❌ Error getting cached branch data: $e');
@@ -234,7 +312,7 @@ class OfflineDataService {
     final data = await getCachedBranchData(employeeId: employeeId);
     return data != null;
   }
-  
+
   /// Clear branch data for specific employee (on logout)
   Future<void> clearBranchDataForEmployee(String employeeId) async {
     try {
@@ -244,7 +322,7 @@ class OfflineDataService {
       } else {
         box = await Hive.openBox(_branchDataBox);
       }
-      
+
       await box.delete(_getBranchDataKey(employeeId));
       print('🗑️ Cleared branch data for employee: $employeeId');
     } catch (e) {
@@ -255,7 +333,7 @@ class OfflineDataService {
   // ==========================================
   // 3. Local Attendance Storage
   // ==========================================
-  
+
   /// Save check-in locally (offline)
   Future<bool> saveLocalCheckIn({
     required String employeeId,
@@ -266,11 +344,11 @@ class OfflineDataService {
   }) async {
     try {
       final box = await Hive.openBox(_attendanceBox);
-      
+
       final checkInData = {
         'employee_id': employeeId,
         'type': 'check_in',
-        'timestamp': timestamp.toIso8601String(),
+        'timestamp': timestamp.toUtc().toIso8601String(),
         'latitude': latitude,
         'longitude': longitude,
         'bssid': bssid,
@@ -304,7 +382,7 @@ class OfflineDataService {
       final checkOutData = {
         'employee_id': employeeId,
         'type': 'check_out',
-        'timestamp': timestamp.toIso8601String(),
+        'timestamp': timestamp.toUtc().toIso8601String(),
         'latitude': latitude,
         'longitude': longitude,
         'bssid': bssid,
@@ -329,17 +407,14 @@ class OfflineDataService {
     try {
       final box = await Hive.openBox(_attendanceBox);
       final List<Map<String, dynamic>> unsynced = [];
-      
+
       for (var key in box.keys) {
         final record = box.get(key);
         if (record is Map && record['synced'] == false) {
-          unsynced.add({
-            'key': key,
-            ...Map<String, dynamic>.from(record),
-          });
+          unsynced.add({'key': key, ...Map<String, dynamic>.from(record)});
         }
       }
-      
+
       await box.close();
       return unsynced;
     } catch (e) {
@@ -367,7 +442,7 @@ class OfflineDataService {
   // ==========================================
   // 4. Local Pulse Storage (Geofence Tracking)
   // ==========================================
-  
+
   /// Save geofence pulse locally AND to Supabase (every 5 minutes)
   Future<bool> saveLocalPulse({
     required String employeeId,
@@ -383,6 +458,21 @@ class OfflineDataService {
     bool validatedByLocation = false,
   }) async {
     try {
+      final validationMethod = validatedByWifi
+          ? 'WIFI'
+          : (validatedByLocation ? 'LOCATION' : 'UNKNOWN');
+
+      if (await PulseDeduplicationService.shouldSkipPulse(
+        employeeId: employeeId,
+        attendanceId: attendanceId,
+        timestamp: timestamp,
+      )) {
+        print(
+          '⏭️ Duplicate pulse skipped before save: $employeeId @ $timestamp',
+        );
+        return true;
+      }
+
       // 1️⃣ Save to Supabase FIRST
       bool savedToSupabase = false;
       try {
@@ -390,8 +480,16 @@ class OfflineDataService {
         String? validAttendanceId = attendanceId;
         if (validAttendanceId != null) {
           final trimmed = validAttendanceId.trim();
-          final isPlaceholder = RegExp(r'(pending|local|temp|dummy)', caseSensitive: false).hasMatch(trimmed) || trimmed.length < 8;
-          final uuidRegex = RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$', caseSensitive: false);
+          final isPlaceholder =
+              RegExp(
+                r'(pending|local|temp|dummy)',
+                caseSensitive: false,
+              ).hasMatch(trimmed) ||
+              trimmed.length < 8;
+          final uuidRegex = RegExp(
+            r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+            caseSensitive: false,
+          );
           if (isPlaceholder || !uuidRegex.hasMatch(trimmed)) {
             validAttendanceId = null; // Strip invalid
           }
@@ -407,6 +505,7 @@ class OfflineDataService {
           'is_within_geofence': insideGeofence,
           'distance_from_center': distanceFromCenter,
           'wifi_bssid': wifiBssid,
+          'validation_method': validationMethod,
           'validated_by_wifi': validatedByWifi,
           'validated_by_location': validatedByLocation,
           'timestamp': timestamp.toUtc().toIso8601String(),
@@ -419,17 +518,19 @@ class OfflineDataService {
         final distanceText = distanceFromCenter != null
             ? '${distanceFromCenter.toStringAsFixed(1)}m'
             : 'n/a';
-        print('✅ Pulse saved via sync-pulses: ${insideGeofence ? "INSIDE" : "OUTSIDE"} geofence ($distanceText)');
+        print(
+          '✅ Pulse saved via sync-pulses: ${insideGeofence ? "INSIDE" : "OUTSIDE"} geofence ($distanceText)',
+        );
       } catch (supabaseError) {
         print('⚠️ Could not save to Supabase (offline?): $supabaseError');
         // Continue to save locally for later sync
       }
-      
+
       // 2️⃣ Save to Hive (for Web) or SQLite (for Mobile)
       if (kIsWeb) {
         // Web: Save to Hive
         final box = await Hive.openBox(_pulsesBox);
-        
+
         final pulseData = {
           'employee_id': employeeId,
           'attendance_id': attendanceId,
@@ -441,6 +542,7 @@ class OfflineDataService {
           'is_within_geofence': insideGeofence,
           'distance_from_center': distanceFromCenter,
           'wifi_bssid': wifiBssid,
+          'validation_method': validationMethod,
           'validated_by_wifi': validatedByWifi,
           'validated_by_location': validatedByLocation,
           'synced': savedToSupabase, // Mark as synced if saved to Supabase
@@ -456,20 +558,32 @@ class OfflineDataService {
           employeeId: employeeId,
           timestamp: timestamp,
           attendanceId: attendanceId,
+          branchId: branchId,
           latitude: latitude,
           longitude: longitude,
           insideGeofence: insideGeofence,
           distanceFromCenter: distanceFromCenter,
           wifiBssid: wifiBssid,
+          validationMethod: validationMethod,
           validatedByWifi: validatedByWifi,
           validatedByLocation: validatedByLocation,
+          synced: savedToSupabase,
         );
       }
 
+      await PulseDeduplicationService.markPulseRecorded(
+        employeeId: employeeId,
+        attendanceId: attendanceId,
+        timestamp: timestamp,
+        source: 'offline_data_service',
+      );
+
       final distanceText = distanceFromCenter != null
-        ? '${distanceFromCenter.toStringAsFixed(1)}m'
-        : 'n/a';
-      print('📍 Pulse saved locally: ${insideGeofence ? "INSIDE" : "OUTSIDE"} geofence ($distanceText)');
+          ? '${distanceFromCenter.toStringAsFixed(1)}m'
+          : 'n/a';
+      print(
+        '📍 Pulse saved locally: ${insideGeofence ? "INSIDE" : "OUTSIDE"} geofence ($distanceText)',
+      );
       return true;
     } catch (e) {
       print('❌ Error saving local pulse: $e');
@@ -485,10 +599,10 @@ class OfflineDataService {
     try {
       final box = await Hive.openBox(_pulsesBox);
       final List<Map<String, dynamic>> pulses = [];
-      
+
       final startOfDay = DateTime(date.year, date.month, date.day);
       final endOfDay = startOfDay.add(const Duration(days: 1));
-      
+
       for (var key in box.keys) {
         final record = box.get(key);
         if (record is Map && record['employee_id'] == employeeId) {
@@ -506,9 +620,9 @@ class OfflineDataService {
           }
         }
       }
-      
+
       await box.close();
-      
+
       // Sort by timestamp - ✅ FIX: Safe parsing in sort
       pulses.sort((a, b) {
         try {
@@ -519,7 +633,7 @@ class OfflineDataService {
           return 0; // Keep original order if parsing fails
         }
       });
-      
+
       return pulses;
     } catch (e) {
       print('❌ Error getting pulses for date: $e');
@@ -533,11 +647,11 @@ class OfflineDataService {
     required DateTime date,
   }) async {
     final pulses = await getPulsesForDate(employeeId: employeeId, date: date);
-    
+
     if (pulses.isEmpty) return 0.0;
 
     double totalMinutes = 0.0;
-    
+
     // Each pulse represents 5 minutes if inside geofence
     for (var pulse in pulses) {
       if (pulse['inside_geofence'] == true) {
@@ -586,7 +700,11 @@ class OfflineDataService {
       final isInside = pulse['inside_geofence'] == true;
       if (isInside) {
         summary['insidePulses'] = (summary['insidePulses'] as int) + 1;
-        insidePulsesByHour.update(hour, (value) => value + 1, ifAbsent: () => 1);
+        insidePulsesByHour.update(
+          hour,
+          (value) => value + 1,
+          ifAbsent: () => 1,
+        );
       } else {
         summary['outsidePulses'] = (summary['outsidePulses'] as int) + 1;
       }
@@ -601,8 +719,7 @@ class OfflineDataService {
       }
     }
 
-    summary['totalInsideMinutes'] =
-        (summary['insidePulses'] as int) * 5.0;
+    summary['totalInsideMinutes'] = (summary['insidePulses'] as int) * 5.0;
 
     final hourlyMinutes = <String, double>{};
     insidePulsesByHour.forEach((hour, pulseCount) {
@@ -619,17 +736,14 @@ class OfflineDataService {
     try {
       final box = await Hive.openBox(_pulsesBox);
       final List<Map<String, dynamic>> unsynced = [];
-      
+
       for (var key in box.keys) {
         final record = box.get(key);
         if (record is Map && record['synced'] == false) {
-          unsynced.add({
-            'key': key,
-            ...Map<String, dynamic>.from(record),
-          });
+          unsynced.add({'key': key, ...Map<String, dynamic>.from(record)});
         }
       }
-      
+
       await box.close();
       return unsynced;
     } catch (e) {
@@ -657,12 +771,12 @@ class OfflineDataService {
   // ==========================================
   // 5. Sync to Supabase
   // ==========================================
-  
+
   /// Sync all local data to Supabase
   Future<Map<String, int>> syncToSupabase() async {
     int syncedAttendance = 0;
     int syncedPulses = 0;
-    
+
     try {
       // Sync attendance records
       final unsyncedAttendance = await getUnsyncedAttendance();
@@ -690,7 +804,7 @@ class OfflineDataService {
               'notes': record['notes'],
             });
           }
-          
+
           await markAttendanceSynced(record['key']);
           syncedAttendance++;
         } catch (e) {
@@ -720,7 +834,7 @@ class OfflineDataService {
           await SupabaseFunctionClient.post('sync-pulses', {
             'pulses': [pulsePayload],
           });
-          
+
           await markPulseSynced(record['key']);
           syncedPulses++;
         } catch (e) {
@@ -729,17 +843,11 @@ class OfflineDataService {
       }
 
       print('✅ تم مزامنة البيانات ورفعها بالكامل');
-      
-      return {
-        'attendance': syncedAttendance,
-        'pulses': syncedPulses,
-      };
+
+      return {'attendance': syncedAttendance, 'pulses': syncedPulses};
     } catch (e) {
       print('❌ Error during sync: $e');
-      return {
-        'attendance': syncedAttendance,
-        'pulses': syncedPulses,
-      };
+      return {'attendance': syncedAttendance, 'pulses': syncedPulses};
     }
   }
 
@@ -751,12 +859,12 @@ class OfflineDataService {
   Future<bool> needsBranchDataRefresh({String? employeeId}) async {
     try {
       final cachedData = await getCachedBranchData(employeeId: employeeId);
-      
+
       if (cachedData == null) {
         print('📥 No cached data found - needs download');
         return true;
       }
-      
+
       // ✅ FIX: Safe downloaded_at parsing
       DateTime downloadedAt;
       try {
@@ -772,15 +880,15 @@ class OfflineDataService {
       }
       final now = DateTime.now();
       final difference = now.difference(downloadedAt);
-      
+
       final needsRefresh = difference.inHours >= 24;
-      
+
       if (needsRefresh) {
         print('🔄 Cache is ${difference.inHours} hours old - needs refresh');
       } else {
         print('✅ Cache is fresh (${difference.inHours} hours old)');
       }
-      
+
       return needsRefresh;
     } catch (e) {
       print('⚠️ Error checking cache age: $e');
@@ -817,7 +925,9 @@ class OfflineDataService {
             .length;
       }
 
-      print('📊 Offline Stats: Branches=$branchCount, Attendance=$attendanceCount, Pulses=$pulsesCount');
+      print(
+        '📊 Offline Stats: Branches=$branchCount, Attendance=$attendanceCount, Pulses=$pulsesCount',
+      );
 
       return {
         'cached_branches': branchCount,
@@ -833,7 +943,7 @@ class OfflineDataService {
       };
     }
   }
-  
+
   /// Clear all local data (logout/reset)
   Future<void> clearAllLocalData() async {
     try {

@@ -7,7 +7,6 @@ import 'offline_data_service.dart';
 import 'supabase_attendance_service.dart';
 
 class AuthService with ChangeNotifier {
-  static late SharedPreferences _prefs;
   static AuthService? _instance;
 
   Employee? _employee;
@@ -28,11 +27,6 @@ class AuthService with ChangeNotifier {
   }
 
   AuthService._() {
-    _initializePrefs();
-  }
-
-  static Future<void> _initializePrefs() async {
-    _prefs = await SharedPreferences.getInstance();
   }
 
   // Save login credentials
@@ -139,8 +133,9 @@ class AuthService with ChangeNotifier {
       final attendance = status['attendance'] as Map<String, dynamic>?;
       
       if (attendance != null) {
-        final attendanceStatus = attendance['status'] as String?;
-        final isActive = attendanceStatus == 'active';
+        final attendanceStatus = attendance['status']?.toString().toLowerCase();
+        final hasCheckout = attendance['check_out_time'] != null;
+        final isActive = !hasCheckout && attendanceStatus != 'completed' && attendanceStatus != 'checked_out';
         print('🔍 [Logout] Attendance status: $attendanceStatus, isActive: $isActive');
         return isActive;
       }

@@ -9,19 +9,27 @@ import '../services/offline_data_service.dart';
 import '../services/sync_service.dart';
 import '../database/offline_database.dart';
 import '../config/supabase_config.dart';
+import '../utils/time_utils.dart';
 import 'manager/manager_absences_page.dart';
-
+import 'manager/manager_dashboard_simple.dart';
+import 'manager/manager_daily_attendance_page.dart';
+import 'manager/manager_penalties_page.dart';
 
 class BranchManagerScreen extends StatefulWidget {
   final String managerId;
   final String branchName;
-  const BranchManagerScreen({super.key, required this.managerId, required this.branchName});
+  const BranchManagerScreen({
+    super.key,
+    required this.managerId,
+    required this.branchName,
+  });
 
   @override
   State<BranchManagerScreen> createState() => _BranchManagerScreenState();
 }
 
-class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTickerProviderStateMixin {
+class _BranchManagerScreenState extends State<BranchManagerScreen>
+    with SingleTickerProviderStateMixin {
   bool _loading = true;
   String? _error;
   Map<String, dynamic>? _requests;
@@ -56,8 +64,10 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
   }
 
   void _setupRealtimeSubscription() {
-    print('🔔 Setting up realtime subscription for manager: ${widget.managerId}');
-    
+    print(
+      '🔔 Setting up realtime subscription for manager: ${widget.managerId}',
+    );
+
     // Subscribe to all request tables for this manager's branch employees
     _requestsChannel = _supabase
         .channel('manager_requests_${widget.managerId}')
@@ -139,12 +149,22 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
   }
 
   Future<void> _fetchData() async {
-    setState(() { _loading = true; _error = null; });
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       // Use the new Edge Function for pending requests aggregation
-      final pendingReqs = await ManagerPendingRequestsService.getAllPendingRequests(widget.managerId);
-      final report = await BranchManagerApiService.getAttendanceReport(widget.branchName);
-      final pulses = await BranchManagerApiService.getBranchPulseSummary(widget.branchName);
+      final pendingReqs =
+          await ManagerPendingRequestsService.getAllPendingRequests(
+            widget.managerId,
+          );
+      final report = await BranchManagerApiService.getAttendanceReport(
+        widget.branchName,
+      );
+      final pulses = await BranchManagerApiService.getBranchPulseSummary(
+        widget.branchName,
+      );
 
       print('🔍 [DEBUG] Manager Pending Requests API response:');
       print(pendingReqs);
@@ -181,13 +201,23 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
         managerId: widget.managerId,
       );
       await _fetchData();
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تم تنفيذ العملية بنجاح')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('تم تنفيذ العملية بنجاح')));
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطأ: ${e.toString()}'), backgroundColor: Colors.red));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('خطأ: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 
-  Future<void> _actOnAbsence(Map<String, dynamic> alert, {required bool applyDeduction}) async {
+  Future<void> _actOnAbsence(
+    Map<String, dynamic> alert, {
+    required bool applyDeduction,
+  }) async {
     try {
       if (applyDeduction) {
         // Apply deduction - use the branch-request-action endpoint
@@ -239,6 +269,61 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
         foregroundColor: Colors.white,
         elevation: 0,
         actions: [
+          PopupMenuButton<String>(
+            tooltip: 'إدارة المدير',
+            onSelected: (value) {
+              if (value == 'penalties') {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => ManagerPenaltiesPage(
+                      managerId: widget.managerId,
+                      branchName: widget.branchName,
+                    ),
+                  ),
+                ).then((_) => _fetchData());
+                return;
+              }
+
+              if (value == 'daily_attendance') {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => ManagerDailyAttendancePage(
+                      managerId: widget.managerId,
+                      branchName: widget.branchName,
+                    ),
+                  ),
+                ).then((_) => _fetchData());
+                return;
+              }
+
+              if (value == 'daily_verification') {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => ManagerDashboardSimple(
+                      managerId: widget.managerId,
+                      branchName: widget.branchName,
+                      initialTabIndex: 3,
+                    ),
+                  ),
+                );
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: 'penalties', child: Text('إدارة الجزاءات')),
+              PopupMenuItem(
+                value: 'daily_attendance',
+                child: Text('جدول الحضور اليومي'),
+              ),
+              PopupMenuItem(
+                value: 'daily_verification',
+                child: Text('التحقق اليومي (الواجهة القديمة)'),
+              ),
+            ],
+            icon: const Icon(Icons.tune),
+          ),
           if (_pendingCount > 0)
             IconButton(
               icon: Badge(
@@ -276,41 +361,47 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
+          ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(
+                    Icons.error_outline,
+                    size: 64,
+                    color: AppColors.error,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(_error!, style: const TextStyle(color: AppColors.error)),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: _fetchData,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primaryOrange,
+                    ),
+                    child: const Text('إعادة المحاولة'),
+                  ),
+                ],
+              ),
+            )
+          : Column(
+              children: [
+                if (_pulseSummary != null) _buildPulseHighlights(),
+                _buildStatisticsCards(),
+                _buildTabBar(),
+                Expanded(
+                  child: TabBarView(
+                    controller: _tabController,
                     children: [
-                      const Icon(Icons.error_outline, size: 64, color: AppColors.error),
-                      const SizedBox(height: 16),
-                      Text(_error!, style: const TextStyle(color: AppColors.error)),
-                      const SizedBox(height: 16),
-                      ElevatedButton(
-                        onPressed: _fetchData,
-                        style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryOrange),
-                        child: const Text('إعادة المحاولة'),
-                      ),
+                      _buildRequestsTab(),
+                      _buildPulseTab(),
+                      _buildAttendanceTab(),
+                      _buildAbsenceTab(),
+                      _buildBreaksTab(),
                     ],
                   ),
-                )
-              : Column(
-                  children: [
-                    if (_pulseSummary != null) _buildPulseHighlights(),
-                    _buildStatisticsCards(),
-                    _buildTabBar(),
-                    Expanded(
-                      child: TabBarView(
-                        controller: _tabController,
-                        children: [
-                          _buildRequestsTab(),
-                          _buildPulseTab(),
-                          _buildAttendanceTab(),
-                          _buildAbsenceTab(),
-                          _buildBreaksTab(),
-                        ],
-                      ),
-                    ),
-                  ],
                 ),
+              ],
+            ),
     );
   }
 
@@ -388,9 +479,15 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
 
   Widget _buildStatisticsCards() {
     if (_requests == null) return const SizedBox();
-    final leave = (_requests!['leaveRequests'] as List? ?? []).where((r) => r['status'] == 'pending').length;
-    final advance = (_requests!['advanceRequests'] as List? ?? []).where((r) => r['status'] == 'pending').length;
-    final attendance = (_requests!['attendanceRequests'] as List? ?? []).where((r) => r['status'] == 'pending').length;
+    final leave = (_requests!['leaveRequests'] as List? ?? [])
+        .where((r) => r['status'] == 'pending')
+        .length;
+    final advance = (_requests!['advanceRequests'] as List? ?? [])
+        .where((r) => r['status'] == 'pending')
+        .length;
+    final attendance = (_requests!['attendanceRequests'] as List? ?? [])
+        .where((r) => r['status'] == 'pending')
+        .length;
     final absence = (_requests!['absenceNotifications'] as List? ?? []).length;
 
     return Container(
@@ -406,10 +503,30 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
             crossAxisSpacing: 12,
             childAspectRatio: 1.5,
             children: [
-              _buildStatCard('طلبات الإجازة', leave.toString(), Icons.beach_access, AppColors.primaryOrange),
-              _buildStatCard('طلبات السلف', advance.toString(), Icons.payments, Colors.green),
-              _buildStatCard('طلبات الحضور', attendance.toString(), Icons.calendar_today, Colors.blue),
-              _buildStatCard('تنبيهات الغياب', absence.toString(), Icons.warning, AppColors.error),
+              _buildStatCard(
+                'طلبات الإجازة',
+                leave.toString(),
+                Icons.beach_access,
+                AppColors.primaryOrange,
+              ),
+              _buildStatCard(
+                'طلبات السلف',
+                advance.toString(),
+                Icons.payments,
+                Colors.green,
+              ),
+              _buildStatCard(
+                'طلبات الحضور',
+                attendance.toString(),
+                Icons.calendar_today,
+                Colors.blue,
+              ),
+              _buildStatCard(
+                'تنبيهات الغياب',
+                absence.toString(),
+                Icons.warning,
+                AppColors.error,
+              ),
             ],
           );
         },
@@ -417,26 +534,33 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
     );
   }
 
-  Widget _buildStatCard(String title, String value, IconData icon, Color color) {
+  Widget _buildStatCard(
+    String title,
+    String value,
+    IconData icon,
+    Color color,
+  ) {
     // Check if this is the absence card
     final isAbsenceCard = title == 'تنبيهات الغياب';
-    
+
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: InkWell(
-        onTap: isAbsenceCard ? () {
-          // Navigate to absences page
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => ManagerAbsencesPage(
-                managerId: widget.managerId,
-                branchId: _branchId ?? '',
-              ),
-            ),
-          ).then((_) => _fetchData()); // Refresh when coming back
-        } : null,
+        onTap: isAbsenceCard
+            ? () {
+                // Navigate to absences page
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => ManagerAbsencesPage(
+                      managerId: widget.managerId,
+                      branchId: _branchId ?? '',
+                    ),
+                  ),
+                ).then((_) => _fetchData()); // Refresh when coming back
+              }
+            : null,
         borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -456,13 +580,22 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
               const SizedBox(height: 4),
               Text(
                 title,
-                style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppColors.textSecondary,
+                ),
                 textAlign: TextAlign.center,
               ),
-              if (isAbsenceCard && int.tryParse(value) != null && int.parse(value) > 0)
+              if (isAbsenceCard &&
+                  int.tryParse(value) != null &&
+                  int.parse(value) > 0)
                 const Padding(
                   padding: EdgeInsets.only(top: 4),
-                  child: Icon(Icons.arrow_forward, size: 16, color: AppColors.textSecondary),
+                  child: Icon(
+                    Icons.arrow_forward,
+                    size: 16,
+                    color: AppColors.textSecondary,
+                  ),
                 ),
             ],
           ),
@@ -497,10 +630,16 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
     }
 
     final numberFormat = NumberFormat('#,##0', 'ar');
-    final currencyFormat = NumberFormat.currency(locale: 'ar', symbol: 'ج.م', decimalDigits: 2);
+    final currencyFormat = NumberFormat.currency(
+      locale: 'ar',
+      symbol: 'ج.م',
+      decimalDigits: 2,
+    );
 
     final totalValid = numberFormat.format(_asNum(summary['totalValidPulses']));
-    final totalEarnings = currencyFormat.format(_asDouble(summary['totalEarnings']));
+    final totalEarnings = currencyFormat.format(
+      _asDouble(summary['totalEarnings']),
+    );
     final activeCount = _asNum(summary['activeEmployeeCount']).toInt();
     final employeeCount = _asNum(summary['employeeCount']).toInt();
 
@@ -545,11 +684,17 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
 
   Widget _buildPulseTab() {
     if (_pulseSummary == null) {
-      return const Center(child: Text('لا توجد بيانات نبضات', style: TextStyle(color: Colors.grey)));
+      return const Center(
+        child: Text(
+          'لا توجد بيانات نبضات',
+          style: TextStyle(color: Colors.grey),
+        ),
+      );
     }
 
     final summary = _pulseSummary!['summary'] as Map<String, dynamic>? ?? {};
-    final employees = (_pulseSummary!['employees'] as List?)
+    final employees =
+        (_pulseSummary!['employees'] as List?)
             ?.whereType<Map<String, dynamic>>()
             .toList() ??
         [];
@@ -564,7 +709,10 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
         if (employees.isEmpty)
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 24),
-            child: Text('لا يوجد نبضات في الفترة المحددة', style: TextStyle(color: Colors.grey)),
+            child: Text(
+              'لا يوجد نبضات في الفترة المحددة',
+              style: TextStyle(color: Colors.grey),
+            ),
           )
         else
           ...employees.map((employee) => _buildPulseEmployeeCard(employee)),
@@ -574,12 +722,22 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
 
   Widget _buildPulseSummaryCard(Map<String, dynamic> summary) {
     final numberFormat = NumberFormat('#,##0', 'ar');
-    final currencyFormat = NumberFormat.currency(locale: 'ar', symbol: 'ج.م', decimalDigits: 2);
+    final currencyFormat = NumberFormat.currency(
+      locale: 'ar',
+      symbol: 'ج.م',
+      decimalDigits: 2,
+    );
 
     final totalPulses = numberFormat.format(_asNum(summary['totalPulses']));
-    final validPulses = numberFormat.format(_asNum(summary['totalValidPulses']));
-    final invalidPulses = numberFormat.format(_asNum(summary['totalInvalidPulses']));
-    final averageEarnings = currencyFormat.format(_asDouble(summary['averageEarningsPerEmployee']));
+    final validPulses = numberFormat.format(
+      _asNum(summary['totalValidPulses']),
+    );
+    final invalidPulses = numberFormat.format(
+      _asNum(summary['totalInvalidPulses']),
+    );
+    final averageEarnings = currencyFormat.format(
+      _asDouble(summary['averageEarningsPerEmployee']),
+    );
 
     return Card(
       elevation: 2,
@@ -626,11 +784,17 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
 
   Widget _buildPulseEmployeeCard(Map<String, dynamic> employee) {
     final numberFormat = NumberFormat('#,##0', 'ar');
-    final currencyFormat = NumberFormat.currency(locale: 'ar', symbol: 'ج.م', decimalDigits: 2);
+    final currencyFormat = NumberFormat.currency(
+      locale: 'ar',
+      symbol: 'ج.م',
+      decimalDigits: 2,
+    );
 
     final fullName = employee['fullName'] as String? ?? 'غير معروف';
     final validPulses = numberFormat.format(_asNum(employee['validPulses']));
-    final invalidPulses = numberFormat.format(_asNum(employee['invalidPulses']));
+    final invalidPulses = numberFormat.format(
+      _asNum(employee['invalidPulses']),
+    );
     final totalPulses = numberFormat.format(_asNum(employee['totalPulses']));
     final earnings = currencyFormat.format(_asDouble(employee['earnings']));
     final isCheckedIn = employee['isCheckedIn'] == true;
@@ -654,18 +818,27 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
                 Expanded(
                   child: Text(
                     fullName,
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Chip(
                   avatar: Icon(
-                    isCheckedIn ? Icons.check_circle : Icons.remove_circle_outline,
+                    isCheckedIn
+                        ? Icons.check_circle
+                        : Icons.remove_circle_outline,
                     size: 18,
                     color: isCheckedIn ? Colors.green : Colors.grey,
                   ),
-                  label: Text(isCheckedIn ? 'متواجد (${checkIn ?? '-'})' : 'غير متواجد'),
-                  backgroundColor: isCheckedIn ? Colors.green.withOpacity(0.12) : Colors.grey.withOpacity(0.12),
+                  label: Text(
+                    isCheckedIn ? 'متواجد (${checkIn ?? '-'})' : 'غير متواجد',
+                  ),
+                  backgroundColor: isCheckedIn
+                      ? Colors.green.withOpacity(0.12)
+                      : Colors.grey.withOpacity(0.12),
                 ),
               ],
             ),
@@ -708,7 +881,10 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
               const SizedBox(height: 12),
               Text(
                 'الفترة: ${firstPulse ?? '—'} → ${lastPulse ?? '—'}',
-                style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppColors.textSecondary,
+                ),
               ),
             ],
           ],
@@ -742,7 +918,10 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
           const SizedBox(height: 4),
           Text(
             title,
-            style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+            style: const TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 12,
+            ),
           ),
         ],
       ),
@@ -776,10 +955,7 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
   Widget _buildRequestsTab() {
     return ListView(
       padding: const EdgeInsets.all(16),
-      children: [
-        _buildSectionTitle('طلبات الموظفين'),
-        _buildRequestsList(),
-      ],
+      children: [_buildSectionTitle('طلبات الموظفين'), _buildRequestsList()],
     );
   }
 
@@ -809,9 +985,17 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
   Widget _buildBreaksTab() {
     if (_requests == null) return const Center(child: Text('لا توجد بيانات'));
     // Try both keys: break_requests (from API) and breakRequests (legacy)
-    final breaks = (_requests!['break_requests'] ?? _requests!['breakRequests']) as List? ?? [];
+    final breaks =
+        (_requests!['break_requests'] ?? _requests!['breakRequests'])
+            as List? ??
+        [];
     if (breaks.isEmpty) {
-      return const Center(child: Text('لا توجد طلبات استراحة', style: TextStyle(color: Colors.grey)));
+      return const Center(
+        child: Text(
+          'لا توجد طلبات استراحة',
+          style: TextStyle(color: Colors.grey),
+        ),
+      );
     }
     return ListView.builder(
       padding: const EdgeInsets.all(16),
@@ -826,8 +1010,11 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
   Widget _buildBreakCard(Map breakReq) {
     // Check status - can be PENDING, pending, or null/empty
     final breakStatus = (breakReq['status'] ?? '').toString();
-    final showActions = breakStatus.isEmpty || breakStatus.toLowerCase() == 'pending' || breakStatus.toUpperCase() == 'PENDING';
-    
+    final showActions =
+        breakStatus.isEmpty ||
+        breakStatus.toLowerCase() == 'pending' ||
+        breakStatus.toUpperCase() == 'PENDING';
+
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 8),
       elevation: 2,
@@ -843,7 +1030,10 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
                 Expanded(
                   child: Text(
                     'الموظف: ${breakReq['employee']?['full_name'] ?? breakReq['employeeName'] ?? breakReq['employeeId'] ?? ''}',
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
                   ),
                 ),
                 Chip(
@@ -853,15 +1043,20 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
               ],
             ),
             const SizedBox(height: 8),
-            Text('مدة الاستراحة: ${breakReq['requestedDurationMinutes'] ?? breakReq['durationMinutes'] ?? breakReq['requested_duration_minutes'] ?? ''} دقيقة'),
-            Text('تاريخ الطلب: ${breakReq['createdAt'] ?? breakReq['created_at'] ?? ''}'),
+            Text(
+              'مدة الاستراحة: ${breakReq['requestedDurationMinutes'] ?? breakReq['durationMinutes'] ?? breakReq['requested_duration_minutes'] ?? ''} دقيقة',
+            ),
+            Text(
+              'تاريخ الطلب: ${breakReq['createdAt'] ?? breakReq['created_at'] ?? ''}',
+            ),
             if (showActions) ...[
               const SizedBox(height: 12),
               Row(
                 children: [
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: () => _reviewBreakRequest(breakReq['id'], 'approve'),
+                      onPressed: () =>
+                          _reviewBreakRequest(breakReq['id'], 'approve'),
                       icon: const Icon(Icons.check),
                       label: const Text('موافقة'),
                       style: ElevatedButton.styleFrom(
@@ -873,7 +1068,8 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
                   const SizedBox(width: 8),
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: () => _reviewBreakRequest(breakReq['id'], 'reject'),
+                      onPressed: () =>
+                          _reviewBreakRequest(breakReq['id'], 'reject'),
                       icon: const Icon(Icons.close),
                       label: const Text('رفض'),
                       style: ElevatedButton.styleFrom(
@@ -885,7 +1081,8 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
                   const SizedBox(width: 8),
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: () => _reviewBreakRequest(breakReq['id'], 'postpone'),
+                      onPressed: () =>
+                          _reviewBreakRequest(breakReq['id'], 'postpone'),
                       icon: const Icon(Icons.access_time),
                       label: const Text('تأجيل'),
                       style: ElevatedButton.styleFrom(
@@ -929,17 +1126,28 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
         managerId: widget.managerId,
       );
       await _fetchData();
-      
-      String actionText = action == 'approve' ? 'الموافقة على' : action == 'reject' ? 'رفض' : 'تأجيل';
+
+      String actionText = action == 'approve'
+          ? 'الموافقة على'
+          : action == 'reject'
+          ? 'رفض'
+          : 'تأجيل';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('تم $actionText طلب الاستراحة'),
-          backgroundColor: action == 'approve' ? AppColors.success : action == 'reject' ? AppColors.error : Colors.orange,
+          backgroundColor: action == 'approve'
+              ? AppColors.success
+              : action == 'reject'
+              ? AppColors.error
+              : Colors.orange,
         ),
       );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('خطأ: ${e.toString()}'), backgroundColor: Colors.red),
+        SnackBar(
+          content: Text('خطأ: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
       );
     }
   }
@@ -963,18 +1171,20 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
 
   Widget _buildRequestsList() {
     if (_requests == null) return const SizedBox();
-    
+
     var leave = _requests!['leaveRequests'] as List? ?? [];
     var advance = _requests!['advanceRequests'] as List? ?? [];
     var attendance = _requests!['attendanceRequests'] as List? ?? [];
-    
+
     // Apply filter
     if (_filterStatus != 'all') {
       leave = leave.where((r) => r['status'] == _filterStatus).toList();
       advance = advance.where((r) => r['status'] == _filterStatus).toList();
-      attendance = attendance.where((r) => r['status'] == _filterStatus).toList();
+      attendance = attendance
+          .where((r) => r['status'] == _filterStatus)
+          .toList();
     }
-    
+
     List<Widget> items = [];
     for (final req in leave) {
       items.add(_buildRequestCard(req, 'leave'));
@@ -985,23 +1195,34 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
     for (final req in attendance) {
       items.add(_buildRequestCard(req, 'attendance'));
     }
-    
+
     if (items.isEmpty) {
       return const Center(
         child: Padding(
           padding: EdgeInsets.all(32),
-          child: Text('لا يوجد طلبات حالياً', style: TextStyle(color: Colors.grey, fontSize: 16)),
+          child: Text(
+            'لا يوجد طلبات حالياً',
+            style: TextStyle(color: Colors.grey, fontSize: 16),
+          ),
         ),
       );
     }
-    
+
     return Column(children: items);
   }
 
   Widget _buildRequestCard(Map req, String type) {
-    final String typeLabel = type == 'leave' ? 'إجازة' : type == 'advance' ? 'سلفة' : 'حضور';
-    final IconData typeIcon = type == 'leave' ? Icons.beach_access : type == 'advance' ? Icons.payments : Icons.calendar_today;
-    
+    final String typeLabel = type == 'leave'
+        ? 'إجازة'
+        : type == 'advance'
+        ? 'سلفة'
+        : 'حضور';
+    final IconData typeIcon = type == 'leave'
+        ? Icons.beach_access
+        : type == 'advance'
+        ? Icons.payments
+        : Icons.calendar_today;
+
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 8),
       elevation: 2,
@@ -1020,34 +1241,73 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
                     const SizedBox(width: 8),
                     Text(
                       'طلب $typeLabel',
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
                     ),
                   ],
                 ),
                 Chip(
                   label: Text(_getStatusLabel(req['status'])),
                   backgroundColor: _getStatusColor(req['status']),
-                  labelStyle: const TextStyle(fontSize: 12, color: Colors.white),
+                  labelStyle: const TextStyle(
+                    fontSize: 12,
+                    color: Colors.white,
+                  ),
                 ),
               ],
             ),
             const Divider(),
-            Text('الموظف: ${req['employeeId'] ?? ''}', style: const TextStyle(fontSize: 14)),
+            Text(
+              'الموظف: ${req['employeeId'] ?? ''}',
+              style: const TextStyle(fontSize: 14),
+            ),
             const SizedBox(height: 4),
             if (type == 'leave') ...[
-              Text('من: ${req['startDate'] ?? ''}', style: const TextStyle(fontSize: 14)),
-              Text('إلى: ${req['endDate'] ?? ''}', style: const TextStyle(fontSize: 14)),
+              Text(
+                'من: ${req['startDate'] ?? ''}',
+                style: const TextStyle(fontSize: 14),
+              ),
+              Text(
+                'إلى: ${req['endDate'] ?? ''}',
+                style: const TextStyle(fontSize: 14),
+              ),
               if (req['reason'] != null && req['reason'].toString().isNotEmpty)
-                Text('السبب: ${req['reason']}', style: const TextStyle(fontSize: 14, fontStyle: FontStyle.italic)),
+                Text(
+                  'السبب: ${req['reason']}',
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
             ],
             if (type == 'advance') ...[
-              Text('المبلغ: ${req['amount'] ?? ''} جنيه', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-              Text('تاريخ الطلب: ${req['requestDate'] ?? ''}', style: const TextStyle(fontSize: 14)),
+              Text(
+                'المبلغ: ${req['amount'] ?? ''} جنيه',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              Text(
+                'تاريخ الطلب: ${req['requestDate'] ?? ''}',
+                style: const TextStyle(fontSize: 14),
+              ),
             ],
             if (type == 'attendance') ...[
-              Text('نوع الطلب: ${req['requestType'] ?? ''}', style: const TextStyle(fontSize: 14)),
+              Text(
+                'نوع الطلب: ${req['requestType'] ?? ''}',
+                style: const TextStyle(fontSize: 14),
+              ),
               if (req['reason'] != null && req['reason'].toString().isNotEmpty)
-                Text('السبب: ${req['reason']}', style: const TextStyle(fontSize: 14, fontStyle: FontStyle.italic)),
+                Text(
+                  'السبب: ${req['reason']}',
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
             ],
             if (req['status'] == 'pending') ...[
               const SizedBox(height: 12),
@@ -1055,14 +1315,17 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
                 children: [
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: () => _actOnRequest(type, req['id'], 'approve'),
+                      onPressed: () =>
+                          _actOnRequest(type, req['id'], 'approve'),
                       icon: const Icon(Icons.check, size: 18),
                       label: const Text('موافقة'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppColors.success,
                         foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(vertical: 12),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                       ),
                     ),
                   ),
@@ -1076,7 +1339,9 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
                         backgroundColor: AppColors.error,
                         foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(vertical: 12),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                       ),
                     ),
                   ),
@@ -1104,20 +1369,25 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
   Widget _buildAttendanceRequests() {
     if (_requests == null) return const SizedBox();
     final attendanceReqs = _requests!['attendanceRequests'] as List? ?? [];
-    
+
     if (attendanceReqs.isEmpty) {
       return const Card(
         child: Padding(
           padding: EdgeInsets.all(24),
           child: Center(
-            child: Text('لا توجد طلبات حضور/انصراف معلقة', style: TextStyle(color: Colors.grey)),
+            child: Text(
+              'لا توجد طلبات حضور/انصراف معلقة',
+              style: TextStyle(color: Colors.grey),
+            ),
           ),
         ),
       );
     }
 
     return Column(
-      children: attendanceReqs.map<Widget>((req) => _buildAttendanceRequestCard(req)).toList(),
+      children: attendanceReqs
+          .map<Widget>((req) => _buildAttendanceRequestCard(req))
+          .toList(),
     );
   }
 
@@ -1144,7 +1414,10 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
                     const SizedBox(width: 8),
                     Text(
                       isCheckIn ? 'طلب حضور' : 'طلب انصراف',
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
                     ),
                   ],
                 ),
@@ -1155,12 +1428,25 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
               ],
             ),
             const Divider(),
-            Text('الموظف: ${req['employeeName'] ?? req['employeeId'] ?? ''}', style: const TextStyle(fontSize: 14)),
+            Text(
+              'الموظف: ${req['employeeName'] ?? req['employeeId'] ?? ''}',
+              style: const TextStyle(fontSize: 14),
+            ),
             const SizedBox(height: 4),
-            Text('الوقت المطلوب: ${req['requestedTime'] ?? ''}', style: const TextStyle(fontSize: 14)),
-            if (req['reason'] != null && req['reason'].toString().isNotEmpty) ...[
+            Text(
+              'الوقت المطلوب: ${req['requestedTime'] ?? ''}',
+              style: const TextStyle(fontSize: 14),
+            ),
+            if (req['reason'] != null &&
+                req['reason'].toString().isNotEmpty) ...[
               const SizedBox(height: 4),
-              Text('السبب: ${req['reason']}', style: const TextStyle(fontSize: 14, fontStyle: FontStyle.italic)),
+              Text(
+                'السبب: ${req['reason']}',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
             ],
             if (req['status'] == 'pending') ...[
               const SizedBox(height: 12),
@@ -1168,7 +1454,8 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
                 children: [
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: () => _reviewAttendanceRequest(req['id'], 'approve'),
+                      onPressed: () =>
+                          _reviewAttendanceRequest(req['id'], 'approve'),
                       icon: const Icon(Icons.check),
                       label: const Text('موافقة'),
                       style: ElevatedButton.styleFrom(
@@ -1180,7 +1467,8 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
                   const SizedBox(width: 12),
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: () => _reviewAttendanceRequest(req['id'], 'reject'),
+                      onPressed: () =>
+                          _reviewAttendanceRequest(req['id'], 'reject'),
                       icon: const Icon(Icons.close),
                       label: const Text('رفض'),
                       style: ElevatedButton.styleFrom(
@@ -1207,11 +1495,18 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
       );
       await _fetchData();
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('تم ${action == 'approve' ? 'الموافقة على' : 'رفض'} طلب الحضور')),
+        SnackBar(
+          content: Text(
+            'تم ${action == 'approve' ? 'الموافقة على' : 'رفض'} طلب الحضور',
+          ),
+        ),
       );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('خطأ: ${e.toString()}'), backgroundColor: Colors.red),
+        SnackBar(
+          content: Text('خطأ: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
       );
     }
   }
@@ -1227,22 +1522,29 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
             children: [
               Icon(Icons.people_outline, size: 64, color: Colors.grey),
               SizedBox(height: 16),
-              Text('لا يوجد حضور اليوم', style: TextStyle(color: Colors.grey, fontSize: 16)),
+              Text(
+                'لا يوجد حضور اليوم',
+                style: TextStyle(color: Colors.grey, fontSize: 16),
+              ),
             ],
           ),
         ),
       );
     }
-    
+
     return Column(
       children: report.map<Widget>((att) {
         final bool isPresent = att['checkInTime'] != null;
         final bool hasCheckedOut = att['checkOutTime'] != null;
-        
+        final checkInText = _formatAttendanceTime(att['checkInTime']);
+        final checkOutText = _formatAttendanceTime(att['checkOutTime']);
+
         return Card(
           margin: const EdgeInsets.symmetric(vertical: 6),
           elevation: 2,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
           child: ListTile(
             leading: CircleAvatar(
               backgroundColor: isPresent ? AppColors.success : AppColors.error,
@@ -1259,24 +1561,40 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const SizedBox(height: 4),
-                Text('دخول: ${att['checkInTime'] ?? 'لم يحضر'}'),
-                Text('خروج: ${att['checkOutTime'] ?? 'لم ينصرف'}'),
+                Text('دخول: $checkInText'),
+                Text('خروج: $checkOutText'),
                 if (att['workHours'] != null)
                   Text(
                     'ساعات العمل: ${att['workHours']}',
-                    style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.primaryOrange),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.primaryOrange,
+                    ),
                   ),
               ],
             ),
             trailing: hasCheckedOut
                 ? const Icon(Icons.done_all, color: AppColors.success)
                 : isPresent
-                    ? const Icon(Icons.access_time, color: Colors.orange)
-                    : null,
+                ? const Icon(Icons.access_time, color: Colors.orange)
+                : null,
           ),
         );
       }).toList(),
     );
+  }
+
+  String _formatAttendanceTime(dynamic value) {
+    if (value == null) return 'لم يحضر';
+
+    final raw = value.toString().trim();
+    if (raw.isEmpty || raw == '-' || raw == '--' || raw == 'null') {
+      return 'لم يحضر';
+    }
+
+    final formatted = TimeUtils.formatTimeShort(raw);
+    if (formatted == '-') return raw;
+    return formatted;
   }
 
   Widget _buildAbsenceAlerts() {
@@ -1290,21 +1608,29 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
             children: [
               Icon(Icons.sentiment_satisfied, size: 64, color: Colors.green),
               SizedBox(height: 16),
-              Text('لا يوجد تنبيهات غياب حالياً', style: TextStyle(color: Colors.grey, fontSize: 16)),
+              Text(
+                'لا يوجد تنبيهات غياب حالياً',
+                style: TextStyle(color: Colors.grey, fontSize: 16),
+              ),
               SizedBox(height: 8),
-              Text('جميع الموظفين ملتزمون', style: TextStyle(color: Colors.green, fontSize: 14)),
+              Text(
+                'جميع الموظفين ملتزمون',
+                style: TextStyle(color: Colors.green, fontSize: 14),
+              ),
             ],
           ),
         ),
       );
     }
-    
+
     return Column(
       children: absence.map<Widget>((alert) {
         return Card(
           margin: const EdgeInsets.symmetric(vertical: 8),
           elevation: 2,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
@@ -1316,22 +1642,36 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
                     const SizedBox(width: 8),
                     const Text(
                       'تنبيه غياب بدون إذن',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: AppColors.error),
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                        color: AppColors.error,
+                      ),
                     ),
                   ],
                 ),
                 const Divider(),
                 Text(
                   'الموظف: ${alert['employee']?['full_name'] ?? alert['employeeId'] ?? ''}',
-                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
                 const SizedBox(height: 4),
-                Text('تاريخ الغياب: ${alert['absenceDate'] ?? ''}', style: const TextStyle(fontSize: 14)),
+                Text(
+                  'تاريخ الغياب: ${alert['absenceDate'] ?? ''}',
+                  style: const TextStyle(fontSize: 14),
+                ),
                 if (alert['deductionAmount'] != null) ...[
                   const SizedBox(height: 4),
                   Text(
                     'مبلغ الخصم: ${alert['deductionAmount']} جنيه',
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppColors.error),
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.error,
+                    ),
                   ),
                 ],
                 const SizedBox(height: 12),
@@ -1339,28 +1679,34 @@ class _BranchManagerScreenState extends State<BranchManagerScreen> with SingleTi
                   children: [
                     Expanded(
                       child: ElevatedButton.icon(
-                        onPressed: () => _actOnAbsence(alert, applyDeduction: true),
+                        onPressed: () =>
+                            _actOnAbsence(alert, applyDeduction: true),
                         icon: const Icon(Icons.check, size: 18),
                         label: const Text('موافق - خصم'),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppColors.error,
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
                         ),
                       ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
                       child: ElevatedButton.icon(
-                        onPressed: () => _actOnAbsence(alert, applyDeduction: false),
+                        onPressed: () =>
+                            _actOnAbsence(alert, applyDeduction: false),
                         icon: const Icon(Icons.close, size: 18),
                         label: const Text('موافق - بدون خصم'),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppColors.success,
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
                         ),
                       ),
                     ),

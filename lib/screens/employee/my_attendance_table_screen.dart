@@ -9,7 +9,8 @@ class MyAttendanceTableScreen extends StatefulWidget {
   const MyAttendanceTableScreen({Key? key}) : super(key: key);
 
   @override
-  State<MyAttendanceTableScreen> createState() => _MyAttendanceTableScreenState();
+  State<MyAttendanceTableScreen> createState() =>
+      _MyAttendanceTableScreenState();
 }
 
 class _MyAttendanceTableScreenState extends State<MyAttendanceTableScreen> {
@@ -33,6 +34,12 @@ class _MyAttendanceTableScreenState extends State<MyAttendanceTableScreen> {
     final now = DateTime.now();
     _startDate = DateTime(now.year, now.month, 1); // First day of month
     _endDate = now; // Today
+  }
+
+  double _asDouble(dynamic value) {
+    if (value is num) return value.toDouble();
+    if (value is String) return double.tryParse(value) ?? 0;
+    return 0;
   }
 
   Future<void> _loadEmployeeId() async {
@@ -136,14 +143,20 @@ class _MyAttendanceTableScreenState extends State<MyAttendanceTableScreen> {
                 InkWell(
                   onTap: _pickDateRange,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 14,
+                    ),
                     decoration: BoxDecoration(
                       border: Border.all(color: Colors.grey.shade300),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Row(
                       children: [
-                        const Icon(Icons.date_range, color: AppColors.primaryOrange),
+                        const Icon(
+                          Icons.date_range,
+                          color: AppColors.primaryOrange,
+                        ),
                         const SizedBox(width: 12),
                         Expanded(
                           child: Text(
@@ -168,107 +181,211 @@ class _MyAttendanceTableScreenState extends State<MyAttendanceTableScreen> {
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _error != null
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.error_outline, size: 56, color: AppColors.error),
-                            const SizedBox(height: 16),
-                            Text('خطأ: $_error'),
-                            const SizedBox(height: 16),
-                            ElevatedButton(
-                              onPressed: _loadAttendance,
-                              child: const Text('إعادة المحاولة'),
-                            ),
-                          ],
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(
+                          Icons.error_outline,
+                          size: 56,
+                          color: AppColors.error,
                         ),
-                      )
-                    : _attendanceRecords.isEmpty
-                        ? const Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(Icons.inbox, size: 56, color: AppColors.textTertiary),
-                                SizedBox(height: 16),
-                                Text(
-                                  'لا توجد سجلات حضور',
-                                  style: TextStyle(fontSize: 16, color: AppColors.textSecondary),
-                                ),
-                              ],
-                            ),
-                          )
-                        : RefreshIndicator(
-                            onRefresh: _loadAttendance,
-                            child: SingleChildScrollView(
-                              scrollDirection: Axis.vertical,
-                              child: SingleChildScrollView(
-                                scrollDirection: Axis.horizontal,
-                                child: DataTable(
-                                  headingRowColor: WidgetStateProperty.all(
-                                    AppColors.primaryOrange.withOpacity(0.1),
-                                  ),
-                                  columns: const [
-                                    DataColumn(label: Text('التاريخ', style: TextStyle(fontWeight: FontWeight.bold))),
-                                    DataColumn(label: Text('وقت الحضور', style: TextStyle(fontWeight: FontWeight.bold))),
-                                    DataColumn(label: Text('وقت الانصراف', style: TextStyle(fontWeight: FontWeight.bold))),
-                                    DataColumn(label: Text('ساعات العمل', style: TextStyle(fontWeight: FontWeight.bold))),
-                                    DataColumn(label: Text('الأجر اليومي', style: TextStyle(fontWeight: FontWeight.bold))),
-                                    DataColumn(label: Text('الحالة', style: TextStyle(fontWeight: FontWeight.bold))),
-                                  ],
-                                  rows: _attendanceRecords.map((record) {
-                                    // ✅ FIX: Safe date parsing
-                                    final rawDate = record['attendance_date'] ?? record['date'];
-                                    String dateFormatted = '-';
-                                    if (rawDate != null && rawDate.toString().isNotEmpty) {
-                                      try {
-                                        dateFormatted = DateFormat('dd/MM/yyyy').format(DateTime.parse(rawDate.toString()));
-                                      } catch (e) {
-                                        dateFormatted = rawDate.toString();
-                                      }
-                                    }
-                                    
-                                    final checkInTime = record['check_in_time'] as String?;
-                                    final checkOutTime = record['check_out_time'] as String?;
-                                    final totalHours = (record['total_hours'] as num?)?.toDouble() ?? 0.0;
-                                    final dailySalary = (record['daily_salary'] as num?)?.toDouble() ?? 0.0;
-
-                                    // ✅ Use TimeUtils - fixes timezone (converts to Cairo time)
-                                    final checkInFormatted = TimeUtils.formatTimeShort(checkInTime);
-                                    final checkOutFormatted = TimeUtils.formatTimeShort(checkOutTime);
-
-                                    final isActive = checkOutTime == null || checkOutTime.toString().isEmpty;
-
-                                    return DataRow(
-                                      cells: [
-                                        DataCell(Text(dateFormatted)),
-                                        DataCell(Text(checkInFormatted)),
-                                        DataCell(Text(checkOutFormatted)),
-                                        DataCell(Text(totalHours.toStringAsFixed(2))),
-                                        DataCell(Text('${dailySalary.toStringAsFixed(2)} ج.م')),
-                                        DataCell(
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                            decoration: BoxDecoration(
-                                              color: isActive ? AppColors.success.withOpacity(0.1) : Colors.grey.withOpacity(0.1),
-                                              borderRadius: BorderRadius.circular(4),
-                                            ),
-                                            child: Text(
-                                              isActive ? 'حاضر' : 'انصرف',
-                                              style: TextStyle(
-                                                color: isActive ? AppColors.success : Colors.grey,
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.w600,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    );
-                                  }).toList(),
-                                ),
+                        const SizedBox(height: 16),
+                        Text('خطأ: $_error'),
+                        const SizedBox(height: 16),
+                        ElevatedButton(
+                          onPressed: _loadAttendance,
+                          child: const Text('إعادة المحاولة'),
+                        ),
+                      ],
+                    ),
+                  )
+                : _attendanceRecords.isEmpty
+                ? const Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.inbox,
+                          size: 56,
+                          color: AppColors.textTertiary,
+                        ),
+                        SizedBox(height: 16),
+                        Text(
+                          'لا توجد سجلات حضور',
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : RefreshIndicator(
+                    onRefresh: _loadAttendance,
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.vertical,
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: DataTable(
+                          headingRowColor: WidgetStateProperty.all(
+                            AppColors.primaryOrange.withOpacity(0.1),
+                          ),
+                          columns: const [
+                            DataColumn(
+                              label: Text(
+                                'التاريخ',
+                                style: TextStyle(fontWeight: FontWeight.bold),
                               ),
                             ),
-                          ),
+                            DataColumn(
+                              label: Text(
+                                'وقت الحضور',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            DataColumn(
+                              label: Text(
+                                'وقت الانصراف',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            DataColumn(
+                              label: Text(
+                                'ساعات العمل',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            DataColumn(
+                              label: Text(
+                                'الأجر اليومي',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            DataColumn(
+                              label: Text(
+                                'الخصم',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            DataColumn(
+                              label: Text(
+                                'الصافي',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            DataColumn(
+                              label: Text(
+                                'الحالة',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ],
+                          rows: _attendanceRecords.map((record) {
+                            // ✅ FIX: Safe date parsing
+                            final rawDate =
+                                record['attendance_date'] ?? record['date'];
+                            String dateFormatted = '-';
+                            if (rawDate != null &&
+                                rawDate.toString().isNotEmpty) {
+                              try {
+                                dateFormatted = DateFormat(
+                                  'dd/MM/yyyy',
+                                ).format(DateTime.parse(rawDate.toString()));
+                              } catch (e) {
+                                dateFormatted = rawDate.toString();
+                              }
+                            }
+
+                            final checkInTime =
+                                record['check_in_time'] as String?;
+                            final checkOutTime =
+                                record['check_out_time'] as String?;
+                            final totalHours =
+                                (record['total_hours'] as num?)?.toDouble() ??
+                                0.0;
+                            final dailySalary = _asDouble(
+                              record['daily_salary'],
+                            );
+                            final deductionAmount = _asDouble(
+                              record['deduction_amount'],
+                            );
+                            final netSalary = (dailySalary - deductionAmount);
+
+                            // ✅ Use TimeUtils - fixes timezone (converts to Cairo time)
+                            final checkInFormatted = TimeUtils.formatTimeShort(
+                              checkInTime,
+                            );
+                            final checkOutFormatted = TimeUtils.formatTimeShort(
+                              checkOutTime,
+                            );
+
+                            final isActive =
+                                checkOutTime == null ||
+                                checkOutTime.toString().isEmpty;
+
+                            return DataRow(
+                              cells: [
+                                DataCell(Text(dateFormatted)),
+                                DataCell(Text(checkInFormatted)),
+                                DataCell(Text(checkOutFormatted)),
+                                DataCell(Text(totalHours.toStringAsFixed(2))),
+                                DataCell(
+                                  Text('${dailySalary.toStringAsFixed(2)} ج.م'),
+                                ),
+                                DataCell(
+                                  deductionAmount > 0
+                                      ? Text(
+                                          '- ${deductionAmount.toStringAsFixed(2)} ج.م',
+                                          style: const TextStyle(
+                                            color: AppColors.error,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        )
+                                      : const Text('0.00 ج.م'),
+                                ),
+                                DataCell(
+                                  Text(
+                                    '${netSalary.toStringAsFixed(2)} ج.م',
+                                    style: TextStyle(
+                                      color: deductionAmount > 0
+                                          ? AppColors.primaryOrange
+                                          : AppColors.success,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                                DataCell(
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 4,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: isActive
+                                          ? AppColors.success.withOpacity(0.1)
+                                          : Colors.grey.withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      isActive ? 'حاضر' : 'انصرف',
+                                      style: TextStyle(
+                                        color: isActive
+                                            ? AppColors.success
+                                            : Colors.grey,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                    ),
+                  ),
           ),
 
           // Summary Section
@@ -277,24 +394,37 @@ class _MyAttendanceTableScreenState extends State<MyAttendanceTableScreen> {
               padding: const EdgeInsets.all(16),
               color: Colors.white,
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
                 children: [
-                  _SummaryItem(
-                    label: 'إجمالي الأيام',
-                    value: '${_attendanceRecords.length}',
-                    icon: Icons.calendar_today,
+                  Expanded(
+                    child: _SummaryItem(
+                      label: 'إجمالي الأيام',
+                      value: '${_attendanceRecords.length}',
+                      icon: Icons.calendar_today,
+                    ),
                   ),
-                  _SummaryItem(
-                    label: 'متوسط الساعات',
-                    value: _calculateAverageHours(),
-                    icon: Icons.access_time,
-                    color: AppColors.primaryOrange,
+                  Expanded(
+                    child: _SummaryItem(
+                      label: 'متوسط الساعات',
+                      value: _calculateAverageHours(),
+                      icon: Icons.access_time,
+                      color: AppColors.primaryOrange,
+                    ),
                   ),
-                  _SummaryItem(
-                    label: 'إجمالي الأجور',
-                    value: _calculateTotalSalary(),
-                    icon: Icons.attach_money,
-                    color: Colors.blueAccent,
+                  Expanded(
+                    child: _SummaryItem(
+                      label: 'إجمالي الخصم',
+                      value: _calculateTotalDeductions(),
+                      icon: Icons.remove_circle,
+                      color: AppColors.error,
+                    ),
+                  ),
+                  Expanded(
+                    child: _SummaryItem(
+                      label: 'صافي الأجور',
+                      value: _calculateNetSalary(),
+                      icon: Icons.account_balance_wallet,
+                      color: Colors.blueAccent,
+                    ),
                   ),
                 ],
               ),
@@ -305,7 +435,9 @@ class _MyAttendanceTableScreenState extends State<MyAttendanceTableScreen> {
   }
 
   String _calculateAverageHours() {
-    final completedRecords = _attendanceRecords.where((r) => r['total_hours'] != null).toList();
+    final completedRecords = _attendanceRecords
+        .where((r) => r['total_hours'] != null)
+        .toList();
     if (completedRecords.isEmpty) return '0';
 
     final totalHours = completedRecords.fold<double>(
@@ -316,13 +448,28 @@ class _MyAttendanceTableScreenState extends State<MyAttendanceTableScreen> {
     return (totalHours / completedRecords.length).toStringAsFixed(1);
   }
 
-  String _calculateTotalSalary() {
-    final totalSalary = _attendanceRecords.fold<double>(
+  String _calculateTotalDeductions() {
+    final totalDeductions = _attendanceRecords.fold<double>(
       0,
-      (sum, r) => sum + ((r['daily_salary'] as num?)?.toDouble() ?? 0),
+      (sum, r) => sum + _asDouble(r['deduction_amount']),
     );
 
-    return totalSalary > 0 ? '${totalSalary.toStringAsFixed(2)} ج.م' : '0';
+    return totalDeductions > 0
+        ? '${totalDeductions.toStringAsFixed(2)} ج.م'
+        : '0';
+  }
+
+  String _calculateNetSalary() {
+    final totalNetSalary = _attendanceRecords.fold<double>(
+      0,
+      (sum, r) =>
+          sum +
+          (_asDouble(r['daily_salary']) - _asDouble(r['deduction_amount'])),
+    );
+
+    return totalNetSalary > 0
+        ? '${totalNetSalary.toStringAsFixed(2)} ج.م'
+        : '0';
   }
 }
 
@@ -348,17 +495,14 @@ class _SummaryItem extends StatelessWidget {
         Text(
           value,
           style: TextStyle(
-            fontSize: 20,
+            fontSize: 15,
             fontWeight: FontWeight.bold,
             color: color ?? AppColors.textPrimary,
           ),
         ),
         Text(
           label,
-          style: const TextStyle(
-            fontSize: 12,
-            color: AppColors.textSecondary,
-          ),
+          style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
         ),
       ],
     );

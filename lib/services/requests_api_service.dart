@@ -55,6 +55,27 @@ class RequestsApiService {
   }
 
   static Future<ShiftStatus> fetchShiftStatus(String employeeId) async {
+    if (apiBaseUrl.trim().isEmpty) {
+      try {
+        final status = await SupabaseAttendanceService.getEmployeeStatus(employeeId);
+        final isCheckedIn = status['isCheckedIn'] == true;
+        final attendance = status['attendance'] as Map<String, dynamic>?;
+        final rawCheckIn = attendance?['check_in_time']?.toString();
+        final checkInAt = rawCheckIn != null ? DateTime.tryParse(rawCheckIn)?.toLocal() : null;
+
+        return ShiftStatus(
+          hasActiveShift: isCheckedIn,
+          status: isCheckedIn ? 'checked_in' : 'inactive',
+          shiftId: attendance?['id']?.toString(),
+          checkInAt: checkInAt,
+          lastActivityAt: checkInAt,
+          canRequestBreak: isCheckedIn,
+        );
+      } catch (_) {
+        return ShiftStatus.inactive();
+      }
+    }
+
     final uri = Uri.parse('$shiftStatusEndpoint/$employeeId');
     final response = await http.get(uri);
     final body = _decodeBody(response.body);
@@ -80,18 +101,53 @@ class RequestsApiService {
       final activeAttendance = await SupabaseAttendanceService.getActiveAttendance(employeeId);
       if (activeAttendance != null) {
         print('✅ Active attendance found in database: ${activeAttendance['id']}');
+
+        // Keep local cache in sync for resilience on flaky devices.
+        try {
+          await SupabaseAttendanceService.cacheActiveAttendanceOnDevice(
+            employeeId: employeeId,
+            attendanceId: activeAttendance['id'].toString(),
+            checkInIso: activeAttendance['check_in_time']?.toString(),
+            isOfflineAttendance: false,
+          );
+        } catch (_) {}
+
         return true;
       }
-      
-      // ✅ Fallback: Check local cache
+
+      // ✅ Fallback 1: local cache (do NOT clear immediately; network/db can be flaky)
       final prefs = await SharedPreferences.getInstance();
       final cachedId = prefs.getString('active_attendance_id');
-      if (cachedId != null && cachedId.isNotEmpty) {
-        // Validate cache against database
-        print('⚠️ Cache has attendance but database does not. Clearing cache.');
-        await prefs.remove('active_attendance_id');
+      final cachedEmployeeId = prefs.getString('active_employee_id');
+      final isCheckedIn = prefs.getBool('is_checked_in') ?? false;
+      final isOfflineAttendance = prefs.getBool('is_offline_attendance') ?? false;
+      final offlineCheckinTime = prefs.getString('offline_checkin_time');
+
+      final cacheBelongsToEmployee =
+          cachedEmployeeId == null || cachedEmployeeId == employeeId;
+      final hasLocalActiveAttendance =
+          cacheBelongsToEmployee &&
+          cachedId != null &&
+          cachedId.isNotEmpty;
+      final hasLocalCheckedInState =
+          isCheckedIn && (isOfflineAttendance || offlineCheckinTime != null);
+
+      if (hasLocalActiveAttendance || hasLocalCheckedInState) {
+        print('✅ Active shift inferred from local cache/state');
+        return true;
       }
-      
+
+      // ✅ Fallback 2: fetch status via Supabase service
+      try {
+        final status = await SupabaseAttendanceService.getEmployeeStatus(employeeId);
+        if (status['isCheckedIn'] == true) {
+          print('✅ Active shift inferred from employee status');
+          return true;
+        }
+      } catch (e) {
+        print('⚠️ Error checking employee status: $e');
+      }
+
       print('❌ No active attendance found for employee: $employeeId');
       return false;
     } catch (e) {

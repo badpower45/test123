@@ -19,7 +19,7 @@
    - **Platform**: iOS
    - **Name**: أولديزز وركرز (Oldies Workers)
    - **Primary Language**: Arabic
-   - **Bundle ID**: `com.oldies.attendance`
+   - **Bundle ID**: `com.oldies.attendance.full`
    - **SKU**: يمكن أن يكون: `oldies-workers-001`
    - **User Access**: Full Access
 
@@ -62,7 +62,7 @@ fastlane match appstore
 
 ```yaml
 # غيّر هذه القيم:
-- BUNDLE_ID: "com.oldies.attendance"
+- BUNDLE_ID: "com.oldies.attendance.full"
 - APP_STORE_ID: "YOUR_APP_ID_HERE"  # من App Store Connect
 - your-email@example.com: "بريدك الإلكتروني"
 ```

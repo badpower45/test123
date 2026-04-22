@@ -5,7 +5,7 @@ Write-Host "🍎 Setting up iOS configuration..." -ForegroundColor Cyan
 # 1. Update Bundle ID in project.pbxproj
 $pbxprojPath = "ios\Runner.xcodeproj\project.pbxproj"
 $content = Get-Content $pbxprojPath -Raw
-$content = $content -replace 'com\.example\.heartbeat', 'com.oldies.attendance'
+$content = $content -replace 'com\.example\.heartbeat', 'com.oldies.attendance.full'
 Set-Content $pbxprojPath $content
 Write-Host "✅ Updated Bundle ID in project.pbxproj" -ForegroundColor Green
 
@@ -36,7 +36,7 @@ if (-not (Test-Path $appIconPath)) {
 
 # 5. Summary
 Write-Host "`n📋 Summary:" -ForegroundColor Cyan
-Write-Host "  Bundle ID: com.oldies.attendance" -ForegroundColor White
+Write-Host "  Bundle ID: com.oldies.attendance.full" -ForegroundColor White
 Write-Host "  App Name: أولديزز وركرز (Oldies Workers)" -ForegroundColor White
 Write-Host "  Version: 1.0.0+1" -ForegroundColor White
 

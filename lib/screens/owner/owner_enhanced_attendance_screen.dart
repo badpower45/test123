@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import '../../models/attendance_summary.dart';
 import '../../models/employee_attendance_status.dart';
 import '../../services/owner_api_service.dart';
+import '../../utils/owner_time_utils.dart';
 
 class OwnerEnhancedAttendanceScreen extends StatefulWidget {
   const OwnerEnhancedAttendanceScreen({Key? key}) : super(key: key);
@@ -363,7 +364,7 @@ class _OwnerEnhancedAttendanceScreenState extends State<OwnerEnhancedAttendanceS
                             ),
                           ),
                           Text(
-                            DateFormat('HH:mm', 'ar').format(employee.checkInTime!),
+                            OwnerTimeUtils.formatTimeFromDateTime(employee.checkInTime),
                             style: const TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.w500,
@@ -385,7 +386,7 @@ class _OwnerEnhancedAttendanceScreenState extends State<OwnerEnhancedAttendanceS
                             ),
                           ),
                           Text(
-                            DateFormat('HH:mm', 'ar').format(employee.checkOutTime!),
+                            OwnerTimeUtils.formatTimeFromDateTime(employee.checkOutTime),
                             style: const TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.w500,

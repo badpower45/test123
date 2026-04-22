@@ -7,7 +7,7 @@ import '../models/employee.dart';
 
 class SupabaseAuthService {
   static final SupabaseClient _supabase = SupabaseConfig.client;
-  
+
   // Retry configuration
   static const int _maxRetries = 3;
   static const Duration _retryDelay = Duration(seconds: 2);
@@ -21,20 +21,22 @@ class SupabaseAuthService {
   }) async {
     int attempt = 0;
     Exception? lastException;
-    
+
     while (attempt < maxRetries) {
       try {
         attempt++;
         print('🔄 [Supabase] Attempt $attempt of $maxRetries');
-        
+
         // Add timeout to the operation
         final result = await operation().timeout(
           _requestTimeout,
           onTimeout: () {
-            throw TimeoutException('Request timed out after ${_requestTimeout.inSeconds} seconds');
+            throw TimeoutException(
+              'Request timed out after ${_requestTimeout.inSeconds} seconds',
+            );
           },
         );
-        
+
         if (attempt > 1) {
           print('✅ [Supabase] Request succeeded on attempt $attempt');
         }
@@ -43,15 +45,18 @@ class SupabaseAuthService {
         lastException = e;
         print('⏱️ [Supabase] Timeout on attempt $attempt: $e');
         if (attempt < maxRetries) {
-          print('⏳ [Supabase] Waiting ${retryDelay.inSeconds}s before retry...');
+          print(
+            '⏳ [Supabase] Waiting ${retryDelay.inSeconds}s before retry...',
+          );
           await Future.delayed(retryDelay * attempt); // Exponential backoff
         }
       } catch (e) {
         lastException = e is Exception ? e : Exception(e.toString());
         final errorStr = e.toString().toLowerCase();
-        
+
         // Check if error is retryable
-        final isRetryable = errorStr.contains('clientconnection') ||
+        final isRetryable =
+            errorStr.contains('clientconnection') ||
             errorStr.contains('connection closed') ||
             errorStr.contains('socket') ||
             errorStr.contains('network') ||
@@ -59,12 +64,14 @@ class SupabaseAuthService {
             errorStr.contains('eof') ||
             errorStr.contains('connection reset') ||
             errorStr.contains('handshake');
-        
+
         print('❌ [Supabase] Error on attempt $attempt: $e');
         print('   Retryable: $isRetryable');
-        
+
         if (isRetryable && attempt < maxRetries) {
-          print('⏳ [Supabase] Waiting ${retryDelay.inSeconds * attempt}s before retry...');
+          print(
+            '⏳ [Supabase] Waiting ${retryDelay.inSeconds * attempt}s before retry...',
+          );
           await Future.delayed(retryDelay * attempt); // Exponential backoff
         } else if (!isRetryable) {
           // Non-retryable error, throw immediately
@@ -72,9 +79,10 @@ class SupabaseAuthService {
         }
       }
     }
-    
+
     print('❌ [Supabase] All $maxRetries attempts failed');
-    throw lastException ?? Exception('Operation failed after $maxRetries attempts');
+    throw lastException ??
+        Exception('Operation failed after $maxRetries attempts');
   }
 
   /// Login with Employee ID and PIN
@@ -129,9 +137,7 @@ class SupabaseAuthService {
           .select()
           .order('full_name', ascending: true);
 
-      return (response as List)
-          .map((json) => Employee.fromJson(json))
-          .toList();
+      return (response as List).map((json) => Employee.fromJson(json)).toList();
     } catch (e) {
       print('Get all employees error: $e');
       return [];
@@ -147,9 +153,7 @@ class SupabaseAuthService {
           .eq('branch_id', branchId)
           .order('full_name', ascending: true);
 
-      return (response as List)
-          .map((json) => Employee.fromJson(json))
-          .toList();
+      return (response as List).map((json) => Employee.fromJson(json)).toList();
     } catch (e) {
       print('Get employees by branch error: $e');
       return [];
@@ -157,12 +161,12 @@ class SupabaseAuthService {
   }
 
   /// Update employee data
-  static Future<bool> updateEmployee(String employeeId, Map<String, dynamic> updates) async {
+  static Future<bool> updateEmployee(
+    String employeeId,
+    Map<String, dynamic> updates,
+  ) async {
     try {
-      await _supabase
-          .from('employees')
-          .update(updates)
-          .eq('id', employeeId);
+      await _supabase.from('employees').update(updates).eq('id', employeeId);
       return true;
     } catch (e) {
       print('Update employee error: $e');
@@ -171,7 +175,9 @@ class SupabaseAuthService {
   }
 
   /// Create new employee
-  static Future<Employee?> createEmployee(Map<String, dynamic> employeeData) async {
+  static Future<Employee?> createEmployee(
+    Map<String, dynamic> employeeData,
+  ) async {
     try {
       final response = await _supabase
           .from('employees')
@@ -186,6 +192,82 @@ class SupabaseAuthService {
     }
   }
 
+  /// Bulk upsert employees in chunks for fast owner import.
+  ///
+  /// Returns a summary map:
+  /// - total: total received rows
+  /// - success: rows successfully upserted
+  /// - failed: rows that failed
+  /// - failedIds: list of employee ids that failed
+  static Future<Map<String, dynamic>> upsertEmployeesBulk(
+    List<Map<String, dynamic>> employeesData, {
+    int chunkSize = 200,
+  }) async {
+    if (employeesData.isEmpty) {
+      return {'total': 0, 'success': 0, 'failed': 0, 'failedIds': <String>[]};
+    }
+
+    final sanitized = <Map<String, dynamic>>[];
+    for (final row in employeesData) {
+      final id = (row['id'] ?? '').toString().trim();
+      final fullName = (row['full_name'] ?? '').toString().trim();
+      final pin = (row['pin'] ?? '').toString().trim();
+
+      if (id.isEmpty || fullName.isEmpty || pin.isEmpty) {
+        continue;
+      }
+
+      sanitized.add({
+        'id': id,
+        'full_name': fullName,
+        'pin': pin,
+        'role': (row['role'] ?? 'staff').toString(),
+        'branch': (row['branch'] ?? '').toString(),
+        'hourly_rate': row['hourly_rate'] ?? 0,
+        'shift_start_time': row['shift_start_time'],
+        'shift_end_time': row['shift_end_time'],
+        'is_active': row['is_active'] ?? true,
+        'updated_at': DateTime.now().toIso8601String(),
+      });
+    }
+
+    final failedIds = <String>[];
+    var successCount = 0;
+
+    for (var i = 0; i < sanitized.length; i += chunkSize) {
+      final end = (i + chunkSize > sanitized.length)
+          ? sanitized.length
+          : i + chunkSize;
+      final chunk = sanitized.sublist(i, end);
+
+      try {
+        await _supabase.from('employees').upsert(chunk, onConflict: 'id');
+        successCount += chunk.length;
+      } catch (chunkError) {
+        print('Bulk upsert chunk failed, fallback to row-by-row: $chunkError');
+
+        for (final row in chunk) {
+          try {
+            await _supabase.from('employees').upsert(row, onConflict: 'id');
+            successCount += 1;
+          } catch (_) {
+            failedIds.add((row['id'] ?? '').toString());
+          }
+        }
+      }
+    }
+
+    final total = sanitized.length;
+    final failed = total - successCount;
+
+    return {
+      'total': total,
+      'success': successCount,
+      'failed': failed,
+      'failedIds': failedIds,
+    };
+  }
+
   /// Delete employee with all related records
   /// Uses Supabase Edge Function to delete employee and all related records
   static Future<bool> deleteEmployee(String employeeId) async {
@@ -196,22 +278,25 @@ class SupabaseAuthService {
           .select('id, full_name')
           .eq('id', employeeId)
           .maybeSingle();
-      
+
       if (existingEmployee == null) {
         print('Delete employee: Employee with ID $employeeId not found');
         return false;
       }
-      
-      print('Delete employee: Found employee ${existingEmployee['full_name']} (ID: $employeeId), proceeding with deletion...');
-      
+
+      print(
+        'Delete employee: Found employee ${existingEmployee['full_name']} (ID: $employeeId), proceeding with deletion...',
+      );
+
       // Try to use Edge Function first, then fallback to manual deletion
       try {
         final session = _supabase.auth.currentSession;
         final token = session?.accessToken ?? '';
-        
+
         final supabaseUrl = SupabaseConfig.supabaseUrl;
-        final functionUrl = '$supabaseUrl/functions/v1/delete-employee?employee_id=$employeeId';
-        
+        final functionUrl =
+            '$supabaseUrl/functions/v1/delete-employee?employee_id=$employeeId';
+
         final httpResponse = await http.delete(
           Uri.parse(functionUrl),
           headers: {
@@ -220,20 +305,26 @@ class SupabaseAuthService {
             'apikey': SupabaseConfig.supabaseAnonKey,
           },
         );
-        
+
         if (httpResponse.statusCode == 200) {
           final result = jsonDecode(httpResponse.body) as Map<String, dynamic>;
           if (result['success'] == true) {
-            print('Delete employee: Successfully deleted employee $employeeId via Edge Function');
+            print(
+              'Delete employee: Successfully deleted employee $employeeId via Edge Function',
+            );
             return true;
           }
         }
-        
-        print('Delete employee: Edge Function returned status ${httpResponse.statusCode}: ${httpResponse.body}');
+
+        print(
+          'Delete employee: Edge Function returned status ${httpResponse.statusCode}: ${httpResponse.body}',
+        );
         // Fallback to manual deletion
         return await _deleteEmployeeManually(employeeId);
       } catch (e) {
-        print('Delete employee: Edge Function error: $e, falling back to manual deletion');
+        print(
+          'Delete employee: Edge Function error: $e, falling back to manual deletion',
+        );
         // Fallback to manual deletion
         return await _deleteEmployeeManually(employeeId);
       }
@@ -248,7 +339,7 @@ class SupabaseAuthService {
   static Future<bool> _deleteEmployeeManually(String employeeId) async {
     try {
       print('Delete employee: Attempting manual deletion...');
-      
+
       // Delete all related records manually
       final tablesToDelete = [
         {'table': 'pulses', 'column': 'employee_id'},
@@ -275,7 +366,9 @@ class SupabaseAuthService {
               .eq(tableInfo['column'] as String, employeeId);
           print('Delete employee: Deleted from ${tableInfo['table']}');
         } catch (e) {
-          print('Delete employee: Warning - could not delete from ${tableInfo['table']}: $e');
+          print(
+            'Delete employee: Warning - could not delete from ${tableInfo['table']}: $e',
+          );
           // Continue with other tables
         }
       }
@@ -284,7 +377,10 @@ class SupabaseAuthService {
       try {
         await _supabase
             .from('branches')
-            .update({'manager_id': null, 'updated_at': DateTime.now().toIso8601String()})
+            .update({
+              'manager_id': null,
+              'updated_at': DateTime.now().toIso8601String(),
+            })
             .eq('manager_id', employeeId);
         print('Delete employee: Unlinked from branches');
       } catch (e) {
@@ -292,23 +388,24 @@ class SupabaseAuthService {
       }
 
       // Finally, delete the employee
-      await _supabase
-          .from('employees')
-          .delete()
-          .eq('id', employeeId);
-      
+      await _supabase.from('employees').delete().eq('id', employeeId);
+
       // Verify deletion
       final verify = await _supabase
           .from('employees')
           .select('id')
           .eq('id', employeeId)
           .maybeSingle();
-      
+
       if (verify == null) {
-        print('Delete employee: Successfully deleted employee $employeeId (manual method)');
+        print(
+          'Delete employee: Successfully deleted employee $employeeId (manual method)',
+        );
         return true;
       } else {
-        print('Delete employee: Employee still exists after manual deletion attempt');
+        print(
+          'Delete employee: Employee still exists after manual deletion attempt',
+        );
         return false;
       }
     } catch (e) {
@@ -357,14 +454,17 @@ class SupabaseAuthService {
     String? email,
   }) async {
     try {
-      await _supabase.from('employees').update({
-        'full_name': fullName,
-        'phone': phone,
-        'address': address,
-        'birth_date': birthDate.toIso8601String().split('T')[0],
-        if (email != null) 'email': email,
-        'updated_at': DateTime.now().toIso8601String(),
-      }).eq('id', employeeId);
+      await _supabase
+          .from('employees')
+          .update({
+            'full_name': fullName,
+            'phone': phone,
+            'address': address,
+            'birth_date': birthDate.toIso8601String().split('T')[0],
+            if (email != null) 'email': email,
+            'updated_at': DateTime.now().toIso8601String(),
+          })
+          .eq('id', employeeId);
 
       return true;
     } catch (e) {
@@ -376,10 +476,13 @@ class SupabaseAuthService {
   /// Mark onboarding as complete
   static Future<bool> markOnboardingComplete(String employeeId) async {
     try {
-      await _supabase.from('employees').update({
-        'onboarding_completed': true,
-        'updated_at': DateTime.now().toIso8601String(),
-      }).eq('id', employeeId);
+      await _supabase
+          .from('employees')
+          .update({
+            'onboarding_completed': true,
+            'updated_at': DateTime.now().toIso8601String(),
+          })
+          .eq('id', employeeId);
 
       return true;
     } catch (e) {
@@ -400,9 +503,13 @@ class SupabaseAuthService {
       if (response == null) return true;
 
       // Needs onboarding if flag is false OR missing critical data
-      final onboardingCompleted = response['onboarding_completed'] as bool? ?? false;
-      final hasPhone = response['phone'] != null && (response['phone'] as String).isNotEmpty;
-      final hasAddress = response['address'] != null && (response['address'] as String).isNotEmpty;
+      final onboardingCompleted =
+          response['onboarding_completed'] as bool? ?? false;
+      final hasPhone =
+          response['phone'] != null && (response['phone'] as String).isNotEmpty;
+      final hasAddress =
+          response['address'] != null &&
+          (response['address'] as String).isNotEmpty;
 
       return !onboardingCompleted || !hasPhone || !hasAddress;
     } catch (e) {
@@ -411,4 +518,3 @@ class SupabaseAuthService {
     }
   }
 }
-

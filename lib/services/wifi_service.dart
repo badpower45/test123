@@ -28,7 +28,11 @@ class WiFiService {
     try {
       return await Geolocator.isLocationServiceEnabled();
     } catch (e) {
-      AppLogger.instance.log('Error checking location service: $e', level: AppLogger.warning, tag: 'WiFiService');
+      AppLogger.instance.log(
+        'Error checking location service: $e',
+        level: AppLogger.warning,
+        tag: 'WiFiService',
+      );
       return false;
     }
   }
@@ -44,18 +48,24 @@ class WiFiService {
   /// Returns a map with 'available' bool and 'message' string
   static Future<Map<String, dynamic>> checkBssidAvailability() async {
     if (kIsWeb) {
-      return {'available': false, 'message': 'قراءة WiFi BSSID غير متاحة على المتصفح'};
+      return {
+        'available': false,
+        'message': 'قراءة WiFi BSSID غير متاحة على المتصفح',
+      };
     }
 
     if (!Platform.isAndroid && !Platform.isIOS) {
-      return {'available': false, 'message': 'قراءة WiFi BSSID متاحة فقط على Android و iOS'};
+      return {
+        'available': false,
+        'message': 'قراءة WiFi BSSID متاحة فقط على Android و iOS',
+      };
     }
 
     // Check 1: Location permission
     final locationStatus = await Permission.locationWhenInUse.status;
     if (!locationStatus.isGranted) {
       return {
-        'available': false, 
+        'available': false,
         'message': 'يجب منح صلاحية الموقع لقراءة معلومات الواي فاي',
         'errorCode': 'LOCATION_PERMISSION_DENIED',
       };
@@ -66,7 +76,8 @@ class WiFiService {
     if (!locationEnabled) {
       return {
         'available': false,
-        'message': 'يجب تفعيل خدمة الموقع (GPS) على الجهاز لقراءة معلومات الواي فاي.\n\nعلى أجهزة Android 10 وما بعد، لا يمكن قراءة BSSID بدون تفعيل GPS.',
+        'message':
+            'يجب تفعيل خدمة الموقع (GPS) على الجهاز لقراءة معلومات الواي فاي.\n\nعلى أجهزة Android 10 وما بعد، لا يمكن قراءة BSSID بدون تفعيل GPS.',
         'errorCode': 'LOCATION_SERVICE_DISABLED',
       };
     }
@@ -74,7 +85,7 @@ class WiFiService {
     // Check 3: Try to read BSSID
     try {
       final bssid = await _networkInfo.getWifiBSSID();
-      
+
       if (bssid == null) {
         return {
           'available': false,
@@ -87,7 +98,8 @@ class WiFiService {
       if (bssid == '02:00:00:00:00:00' || bssid == '00:00:00:00:00:00') {
         return {
           'available': false,
-          'message': 'لم يتمكن الجهاز من قراءة BSSID.\n\n'
+          'message':
+              'لم يتمكن الجهاز من قراءة BSSID.\n\n'
               'الحلول الممكنة:\n'
               '1. تأكد من تفعيل GPS\n'
               '2. افصل واي فاي وأعد الاتصال\n'
@@ -100,7 +112,8 @@ class WiFiService {
       if (!_isValidBssidFormat(bssid)) {
         return {
           'available': false,
-          'message': 'تم قراءة BSSID بصيغة غير صحيحة. حاول إعادة الاتصال بالشبكة.',
+          'message':
+              'تم قراءة BSSID بصيغة غير صحيحة. حاول إعادة الاتصال بالشبكة.',
           'errorCode': 'INVALID_FORMAT',
         };
       }
@@ -130,7 +143,9 @@ class WiFiService {
       bssid = await _networkInfo.getWifiBSSID();
 
       if (bssid == null) {
-        throw Exception('لم يتم العثور على BSSID. تأكد من اتصالك بشبكة واي فاي.');
+        throw Exception(
+          'لم يتم العثور على BSSID. تأكد من اتصالك بشبكة واي فاي.',
+        );
       }
 
       // Check for Android placeholder values (returned when location disabled)
@@ -140,29 +155,37 @@ class WiFiService {
           'تأكد من:\n'
           '1. تفعيل GPS/الموقع\n'
           '2. منح التطبيق صلاحية الموقع "دائماً"\n'
-          '3. الاتصال بشبكة الواي فاي'
+          '3. الاتصال بشبكة الواي فاي',
         );
       }
 
       // Validate BSSID format
       if (!_isValidBssidFormat(bssid)) {
-        throw FormatException('تم قراءة BSSID بصيغة غير صحيحة: "$bssid". حاول مرة أخرى.');
+        throw FormatException(
+          'تم قراءة BSSID بصيغة غير صحيحة: "$bssid". حاول مرة أخرى.',
+        );
       }
 
       // Standardize format to uppercase with colons
-      return bssid.toUpperCase().replaceAll('-', ':');
-
+      return normalizeBssid(bssid);
     } on PlatformException catch (e) {
-      AppLogger.instance.log('PlatformException reading BSSID: ${e.code} - ${e.message}', 
-        level: AppLogger.error, tag: 'WiFiService');
-      
+      AppLogger.instance.log(
+        'PlatformException reading BSSID: ${e.code} - ${e.message}',
+        level: AppLogger.error,
+        tag: 'WiFiService',
+      );
+
       // Specific error handling for common platform issues
       if (e.code == 'PERMISSION_DENIED') {
         throw Exception('صلاحية الموقع مطلوبة لقراءة معلومات الواي فاي');
       }
       throw Exception('خطأ في الوصول لمعلومات الشبكة: ${e.message}');
     } catch (e) {
-      AppLogger.instance.log('Error reading BSSID: $e', level: AppLogger.error, tag: 'WiFiService');
+      AppLogger.instance.log(
+        'Error reading BSSID: $e',
+        level: AppLogger.error,
+        tag: 'WiFiService',
+      );
       rethrow;
     }
   }
@@ -173,7 +196,11 @@ class WiFiService {
     try {
       return await _networkInfo.getWifiName();
     } catch (e) {
-      AppLogger.instance.log('Error reading WiFi SSID: $e', level: AppLogger.warning, tag: 'WiFiService');
+      AppLogger.instance.log(
+        'Error reading WiFi SSID: $e',
+        level: AppLogger.warning,
+        tag: 'WiFiService',
+      );
       return null;
     }
   }
@@ -183,12 +210,36 @@ class WiFiService {
     return _isValidBssidFormat(bssid);
   }
 
+  static String normalizeBssid(String bssid) {
+    return bssid.toUpperCase().replaceAll('-', ':').trim();
+  }
+
+  static Future<String?> tryGetCurrentWifiBssid() async {
+    if (kIsWeb) return null;
+
+    try {
+      final bssid = await _networkInfo.getWifiBSSID();
+      if (!_isValidBssidFormat(bssid)) {
+        return null;
+      }
+      return normalizeBssid(bssid!);
+    } catch (e) {
+      AppLogger.instance.log(
+        'Non-blocking BSSID read failed: $e',
+        level: AppLogger.warning,
+        tag: 'WiFiService',
+      );
+      return null;
+    }
+  }
+
   /// Debug method to get all WiFi info for troubleshooting
   static Future<Map<String, dynamic>> getDebugInfo() async {
     final result = <String, dynamic>{};
-    
+
     try {
-      result['locationPermission'] = (await Permission.locationWhenInUse.status).toString();
+      result['locationPermission'] = (await Permission.locationWhenInUse.status)
+          .toString();
       result['locationServiceEnabled'] = await isLocationServiceEnabled();
       result['bssid'] = await _networkInfo.getWifiBSSID();
       result['ssid'] = await _networkInfo.getWifiName();
@@ -198,7 +249,7 @@ class WiFiService {
     } catch (e) {
       result['error'] = e.toString();
     }
-    
+
     return result;
   }
 }

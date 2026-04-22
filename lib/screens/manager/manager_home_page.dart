@@ -22,7 +22,7 @@ import '../../services/wifi_service.dart';
 import '../../services/offline_data_service.dart';
 import '../../services/geofence_service.dart';
 import '../../services/pulse_tracking_service.dart';
-import '../../services/foreground_attendance_service.dart' hide TimeOfDay;
+import '../../services/foreground_attendance_service.dart';
 import '../../services/workmanager_pulse_service.dart';
 import '../../services/alarm_manager_pulse_service.dart';
 import '../../services/aggressive_keep_alive_service.dart';
@@ -36,6 +36,7 @@ import 'manager_send_requests_page.dart';
 import 'manager_employees_page.dart';
 import 'manager_add_employee_page.dart';
 import 'session_validation_page.dart';
+import 'manager_dashboard_simple.dart';
 import '../branch_manager_screen.dart';
 
 class ManagerHomePage extends StatefulWidget {
@@ -53,14 +54,16 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
   String _elapsedTime = '00:00:00';
   Timer? _timer;
   bool _isLoading = false;
+  bool _isCheckingStatus = false;
+  bool _hasCompletedInitialStatusCheck = false;
   String? _branchId;
   Map<String, dynamic>? _branchData;
   List<String> _allowedBssids = [];
   String? _currentAttendanceId;
-  
+
   final _offlineService = OfflineDataService();
   final _pulseService = PulseTrackingService();
-  
+
   // 🚨 NEW: Subscription for auto-checkout events
   StreamSubscription<AutoCheckoutEvent>? _autoCheckoutSubscription;
 
@@ -74,9 +77,11 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
       _checkCurrentStatus().catchError((e) {
         print('❌ Error checking current status: $e');
       });
-      
+
       // 🚨 NEW: Listen to auto-checkout events for immediate UI update
-      _autoCheckoutSubscription = _pulseService.onAutoCheckout.listen(_handleAutoCheckout);
+      _autoCheckoutSubscription = _pulseService.onAutoCheckout.listen(
+        _handleAutoCheckout,
+      );
     } catch (e, stackTrace) {
       print('❌ Error in ManagerHomePage initState: $e');
       print('Stack trace: $stackTrace');
@@ -89,19 +94,19 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
     _autoCheckoutSubscription?.cancel(); // 🚨 Cancel auto-checkout subscription
     super.dispose();
   }
-  
+
   /// 🚨 Handle auto-checkout event from PulseTrackingService
   void _handleAutoCheckout(AutoCheckoutEvent event) {
     if (!mounted) return;
-    
+
     print('🚨 Auto-checkout event received in Manager UI');
     print('   Reason: ${event.reason}');
     print('   Saved offline: ${event.savedOffline}');
-    
+
     // ✅ IMMEDIATELY stop timer and update UI state
     _timer?.cancel();
     _timer = null;
-    
+
     setState(() {
       _isCheckedIn = false;
       _checkInTime = null;
@@ -109,7 +114,7 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
       _currentAttendanceId = null;
       _isLoading = false;
     });
-    
+
     // Show dialog to user
     showDialog(
       context: context,
@@ -117,7 +122,11 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
       builder: (context) => AlertDialog(
         title: Row(
           children: [
-            Icon(Icons.warning_amber_rounded, color: Colors.orange[700], size: 28),
+            Icon(
+              Icons.warning_amber_rounded,
+              color: Colors.orange[700],
+              size: 28,
+            ),
             const SizedBox(width: 8),
             const Expanded(
               child: Text(
@@ -213,14 +222,14 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
         await _loadBranchDataForWeb();
         return;
       }
-      
+
       // On Mobile/Desktop, use SQLite-based OfflineDatabase
       final db = OfflineDatabase.instance;
-      
+
       // Check if we need to refresh (older than 24 hours)
       final needsRefresh = await db.needsCacheRefresh(widget.managerId);
       final cached = await db.getCachedBranchData(widget.managerId);
-      
+
       // Use cached data immediately if available (for fast startup)
       if (cached != null && !needsRefresh) {
         setState(() {
@@ -231,14 +240,16 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
             _allowedBssids = bssidsArray.map((e) => e.toString()).toList();
           }
         });
-        print('✅ [Manager] Using cached branch data: ${cached['branch_name']} (${_allowedBssids.length} WiFi networks)');
+        print(
+          '✅ [Manager] Using cached branch data: ${cached['branch_name']} (${_allowedBssids.length} WiFi networks)',
+        );
         return;
       }
-      
+
       // Need to fetch from Supabase (first time or refresh needed)
       final syncService = SyncService.instance;
       final hasInternet = await syncService.hasInternet();
-      
+
       if (!hasInternet) {
         if (cached != null) {
           // Use stale cache if no internet
@@ -249,58 +260,68 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
               _allowedBssids = bssidsArray.map((e) => e.toString()).toList();
             }
           });
-          print('⚠️ [Manager] Using stale cache (no internet): ${cached['branch_name']}');
+          print(
+            '⚠️ [Manager] Using stale cache (no internet): ${cached['branch_name']}',
+          );
         } else {
           print('⚠️ [Manager] No internet and no cached branch data');
         }
         return;
       }
-      
+
       // Get employee data to find branch
-      final employeeData = await SupabaseAttendanceService.getEmployeeStatus(widget.managerId);
-      
+      final employeeData = await SupabaseAttendanceService.getEmployeeStatus(
+        widget.managerId,
+      );
+
       // ✅ First try branch_id (more reliable), then fallback to branch name
       final branchIdFromEmployee = employeeData['employee']?['branch_id'];
-      final branchName = employeeData['employee']?['branch'] ?? 
-                        employeeData['employee']?['branch_name'];
-      
+      final branchName =
+          employeeData['employee']?['branch'] ??
+          employeeData['employee']?['branch_name'];
+
       // Store branch_id if available
-      if (branchIdFromEmployee != null && branchIdFromEmployee.toString().isNotEmpty) {
+      if (branchIdFromEmployee != null &&
+          branchIdFromEmployee.toString().isNotEmpty) {
         _branchId = branchIdFromEmployee.toString();
         print('📍 [Manager] Branch ID from employee: $_branchId');
-        
+
         // Fetch branch data by ID
         try {
-          final branchData = await BranchApiService.getBranchById(branchIdFromEmployee.toString());
+          final branchData = await BranchApiService.getBranchById(
+            branchIdFromEmployee.toString(),
+          );
           await _processBranchData(branchData, db);
           return;
         } catch (e) {
           print('⚠️ Failed to get branch by ID, trying by name: $e');
         }
       }
-      
+
       if (branchName == null || branchName.toString().isEmpty) {
         print('⚠️ [Manager] Manager has no branch assigned');
         print('⚠️ Employee data: $employeeData');
         return;
       }
-      
+
       print('📍 [Manager] Branch name: $branchName');
-      
+
       // Fetch branch data from Supabase by name
       final branchList = await BranchApiService.getBranches();
       final branchData = branchList.firstWhere(
         (b) => b['name'] == branchName,
         orElse: () => <String, dynamic>{},
       );
-      
+
       if (branchData.isEmpty) {
         print('❌ [Manager] Branch not found: $branchName');
         return;
       }
-      
-      print('✅ [Manager] Found branch: ${branchData['name']} (${branchData['id']})');
-      
+
+      print(
+        '✅ [Manager] Found branch: ${branchData['name']} (${branchData['id']})',
+      );
+
       await _processBranchData(branchData, db);
     } catch (e) {
       print('❌ [Manager] Error loading branch data: $e');
@@ -308,10 +329,14 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
   }
 
   /// Helper to process and cache branch data
-  Future<void> _processBranchData(Map<String, dynamic> branchData, OfflineDatabase db) async {
+  Future<void> _processBranchData(
+    Map<String, dynamic> branchData,
+    OfflineDatabase db,
+  ) async {
     // Parse WiFi BSSIDs (can be comma-separated or array)
     List<String> wifiBssids = [];
-    if (branchData['wifi_bssid'] != null && branchData['wifi_bssid'].toString().isNotEmpty) {
+    if (branchData['wifi_bssid'] != null &&
+        branchData['wifi_bssid'].toString().isNotEmpty) {
       wifiBssids = branchData['wifi_bssid']
           .toString()
           .split(',')
@@ -319,7 +344,7 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
           .where((e) => e.isNotEmpty)
           .toList();
     }
-    
+
     // Parse location
     double? latitude;
     double? longitude;
@@ -328,35 +353,43 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
         final location = branchData['location'];
         if (location is Map) {
           latitude = (location['latitude'] ?? location['lat'])?.toDouble();
-          longitude = (location['longitude'] ?? location['lng'] ?? location['long'])?.toDouble();
+          longitude =
+              (location['longitude'] ?? location['lng'] ?? location['long'])
+                  ?.toDouble();
         } else if (location is String) {
           final decoded = jsonDecode(location);
           latitude = (decoded['latitude'] ?? decoded['lat'])?.toDouble();
-          longitude = (decoded['longitude'] ?? decoded['lng'] ?? decoded['long'])?.toDouble();
+          longitude =
+              (decoded['longitude'] ?? decoded['lng'] ?? decoded['long'])
+                  ?.toDouble();
         }
       } catch (e) {
         print('⚠️ Error parsing location: $e');
       }
     }
-    
+
     // Also check direct lat/lng
     latitude ??= (branchData['latitude'] as num?)?.toDouble();
     longitude ??= (branchData['longitude'] as num?)?.toDouble();
-    
-    final geofenceRadius = (branchData['geofence_radius'] ?? 
-                           branchData['geofenceRadius'] ?? 
-                           100.0).toDouble();
-    
+
+    final geofenceRadius =
+        (branchData['geofence_radius'] ?? branchData['geofenceRadius'] ?? 100.0)
+            .toDouble();
+
     // Cache it locally for future use
     int dataVersion = 1;
     if (branchData['updated_at'] != null) {
       try {
-        dataVersion = DateTime.parse(branchData['updated_at'].toString()).millisecondsSinceEpoch ~/ 1000;
+        dataVersion =
+            DateTime.parse(
+              branchData['updated_at'].toString(),
+            ).millisecondsSinceEpoch ~/
+            1000;
       } catch (e) {
         dataVersion = 1;
       }
     }
-    
+
     await db.cacheBranchData(
       employeeId: widget.managerId,
       branchId: branchData['id'],
@@ -367,22 +400,26 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
       geofenceRadius: geofenceRadius,
       dataVersion: dataVersion,
     );
-    
+
     setState(() {
       _branchData = branchData;
       _branchId = branchData['id'];
       _allowedBssids = wifiBssids;
     });
-    
-    print('✅ [Manager] Fetched and cached branch data: ${branchData['name']} (${wifiBssids.length} WiFi networks)');
+
+    print(
+      '✅ [Manager] Fetched and cached branch data: ${branchData['name']} (${wifiBssids.length} WiFi networks)',
+    );
   }
 
   /// Load branch data for Web platform (using Hive)
   Future<void> _loadBranchDataForWeb() async {
     try {
       // Check cached data from Hive (employee-specific)
-      final cached = await _offlineService.getCachedBranchData(employeeId: widget.managerId);
-      
+      final cached = await _offlineService.getCachedBranchData(
+        employeeId: widget.managerId,
+      );
+
       if (cached != null) {
         setState(() {
           _branchData = cached;
@@ -393,34 +430,38 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
             _allowedBssids = [bssid.toString()];
           }
         });
-        print('✅ [Manager] Using cached branch data from Hive: ${cached['name']}');
+        print(
+          '✅ [Manager] Using cached branch data from Hive: ${cached['name']}',
+        );
         return;
       }
-      
+
       // Need to fetch from Supabase
       final syncService = SyncService.instance;
       final hasInternet = await syncService.hasInternet();
-      
+
       if (!hasInternet) {
         print('⚠️ [Manager] No internet and no cached branch data on Web');
         return;
       }
-      
+
       // Get manager data to find branch name
-      final managerData = await SupabaseAttendanceService.getEmployeeStatus(widget.managerId);
+      final managerData = await SupabaseAttendanceService.getEmployeeStatus(
+        widget.managerId,
+      );
       final branchName = managerData['employee']?['branch'];
-      
+
       if (branchName == null) {
         print('⚠️ [Manager] Employee has no branch assigned');
         return;
       }
-      
+
       // Download and cache branch data (with manager ID)
       final branchData = await _offlineService.downloadBranchData(
         branchName,
         employeeId: widget.managerId,
       );
-      
+
       if (branchData != null) {
         setState(() {
           _branchData = branchData;
@@ -430,7 +471,9 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
             _allowedBssids = [bssid.toString()];
           }
         });
-        print('✅ [Manager] Downloaded branch data on Web: ${branchData['name']}');
+        print(
+          '✅ [Manager] Downloaded branch data on Web: ${branchData['name']}',
+        );
       }
     } catch (e) {
       print('❌ [Manager] Error loading branch data on Web: $e');
@@ -488,17 +531,24 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
                   pin: pinController.text.trim(),
                   branchId: branchId,
                   branchName: branchName,
-                  hourlyRate: double.tryParse(hourlyRateController.text.trim()) ?? 0,
+                  hourlyRate:
+                      double.tryParse(hourlyRateController.text.trim()) ?? 0,
                   role: selectedRole,
-                  email: emailController.text.trim().isEmpty ? null : emailController.text.trim(),
-                  phone: phoneController.text.trim().isEmpty ? null : phoneController.text.trim(),
+                  email: emailController.text.trim().isEmpty
+                      ? null
+                      : emailController.text.trim(),
+                  phone: phoneController.text.trim().isEmpty
+                      ? null
+                      : phoneController.text.trim(),
                 );
 
                 if (!mounted) return;
                 Navigator.of(context).pop();
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: Text('تم إضافة ${nameController.text.trim()} للفرع $branchName'),
+                    content: Text(
+                      'تم إضافة ${nameController.text.trim()} للفرع $branchName',
+                    ),
                     backgroundColor: AppColors.success,
                   ),
                 );
@@ -532,7 +582,10 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
                               borderRadius: BorderRadius.circular(12),
                             ),
                             padding: const EdgeInsets.all(12),
-                            child: const Icon(Icons.person_add_alt_1, color: AppColors.primaryOrange),
+                            child: const Icon(
+                              Icons.person_add_alt_1,
+                              color: AppColors.primaryOrange,
+                            ),
                           ),
                           const SizedBox(width: 16),
                           Expanded(
@@ -541,11 +594,17 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
                               children: [
                                 const Text(
                                   'إضافة موظف جديد',
-                                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.bold,
+                                  ),
                                 ),
                                 Text(
                                   'سيتم ربط الموظف أوتوماتيكياً بفرع $branchName',
-                                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 14),
+                                  style: const TextStyle(
+                                    color: AppColors.textSecondary,
+                                    fontSize: 14,
+                                  ),
                                 ),
                               ],
                             ),
@@ -653,10 +712,15 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
                               ? const SizedBox(
                                   width: 18,
                                   height: 18,
-                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
                                 )
                               : const Icon(Icons.person_add_alt_1),
-                          label: Text(isSubmitting ? 'جاري الإضافة...' : 'إضافة الموظف'),
+                          label: Text(
+                            isSubmitting ? 'جاري الإضافة...' : 'إضافة الموظف',
+                          ),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: AppColors.primaryOrange,
                             padding: const EdgeInsets.symmetric(vertical: 16),
@@ -695,53 +759,251 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
   }
 
   Future<void> _checkCurrentStatus() async {
+    if (mounted) {
+      setState(() {
+        _isCheckingStatus = true;
+      });
+    }
+
     try {
       // ✅ Use Supabase directly like employee page (fixes "No host specified in URI" error)
-      print('🔄 Checking current attendance status for manager: ${widget.managerId}');
-      final status = await SupabaseAttendanceService.getEmployeeStatus(widget.managerId);
-      
-      final wasCheckedIn = _isCheckedIn;
-      setState(() {
-        _isCheckedIn = status['isCheckedIn'] as bool? ?? false;
-        // Parse checkInTime and convert from UTC to local time (with safe parsing)
-        if (status['attendance']?['check_in_time'] != null) {
-          try {
-            _checkInTime = DateTime.parse(status['attendance']['check_in_time'].toString()).toLocal();
-          } catch (e) {
-            _checkInTime = null;
+      print(
+        '🔄 Checking current attendance status for manager: ${widget.managerId}',
+      );
+
+      final prefs = await SharedPreferences.getInstance();
+      var savedAttendanceId = prefs.getString('active_attendance_id');
+      var activeEmployeeId = prefs.getString('active_employee_id');
+      final hasForeignCache =
+          activeEmployeeId != null && activeEmployeeId != widget.managerId;
+      var isOfflineAttendance = prefs.getBool('is_offline_attendance') ?? false;
+      var isCheckedInFlag = prefs.getBool('is_checked_in') ?? false;
+      final pulseTrackingActive =
+          prefs.getBool('pulse_tracking_active') ?? false;
+      var offlineCheckinTimeStr = prefs.getString('offline_checkin_time');
+      var cachedCheckinTimeStr = prefs.getString('cached_checkin_time');
+      final persistedTimerCheckInTimeStr = prefs.getString(
+        'timer_check_in_time',
+      );
+      var restoredTimeSource =
+          offlineCheckinTimeStr ??
+          cachedCheckinTimeStr ??
+          persistedTimerCheckInTimeStr;
+
+      final snapshot =
+          await SupabaseAttendanceService.getCachedActiveAttendanceOnDevice(
+            employeeId: widget.managerId,
+          );
+      if (snapshot != null &&
+          ((savedAttendanceId == null || savedAttendanceId.isEmpty) ||
+              hasForeignCache)) {
+        savedAttendanceId = snapshot['attendance_id']?.toString();
+        activeEmployeeId = snapshot['employee_id']?.toString();
+        isOfflineAttendance = snapshot['is_offline_attendance'] == true;
+        isCheckedInFlag = true;
+
+        final snapshotCheckInTime = snapshot['check_in_time']?.toString();
+        if (snapshotCheckInTime != null && snapshotCheckInTime.isNotEmpty) {
+          cachedCheckinTimeStr = snapshotCheckInTime;
+          restoredTimeSource = snapshotCheckInTime;
+          await prefs.setString('cached_checkin_time', snapshotCheckInTime);
+          if (isOfflineAttendance) {
+            offlineCheckinTimeStr = snapshotCheckInTime;
+            await prefs.setString('offline_checkin_time', snapshotCheckInTime);
           }
+        }
+
+        if (savedAttendanceId != null && savedAttendanceId.isNotEmpty) {
+          await prefs.setString('active_attendance_id', savedAttendanceId);
+        }
+
+        if (activeEmployeeId != null && activeEmployeeId.isNotEmpty) {
+          await prefs.setString('active_employee_id', activeEmployeeId);
         } else {
-          _checkInTime = null;
+          activeEmployeeId = widget.managerId;
+          await prefs.setString('active_employee_id', widget.managerId);
         }
-        
-        // ✅ Clear if checked out
-        if (!_isCheckedIn) {
-          _timer?.cancel();
+
+        await prefs.setBool('is_checked_in', true);
+        await prefs.setBool('is_offline_attendance', isOfflineAttendance);
+        print(
+          '📦 Restored manager active attendance from device snapshot: $savedAttendanceId',
+        );
+      }
+
+      final cacheBelongsToManager =
+          activeEmployeeId == null || activeEmployeeId == widget.managerId;
+
+      // Restore quickly from local cache so reopening the app keeps active session UI.
+      if (savedAttendanceId != null &&
+          cacheBelongsToManager &&
+          restoredTimeSource != null &&
+          (isOfflineAttendance || isCheckedInFlag || pulseTrackingActive)) {
+        try {
+          final restoredCheckIn = DateTime.parse(restoredTimeSource).toLocal();
+          if (mounted) {
+            setState(() {
+              _isCheckedIn = true;
+              _currentAttendanceId = savedAttendanceId;
+              _checkInTime = restoredCheckIn;
+            });
+          }
+
+          _startTimer();
+
+          if (!_pulseService.isTracking) {
+            await _pulseService.startTracking(
+              widget.managerId,
+              attendanceId: savedAttendanceId,
+            );
+          }
+
+          print('📱 Restored manager attendance state from local cache');
+        } catch (restoreError) {
+          print('⚠️ Could not restore cached manager session: $restoreError');
         }
-      });
-      
-      print('✅ Manager status updated: isCheckedIn=$_isCheckedIn (was: $wasCheckedIn)');
-      
+      }
+
+      final status = await SupabaseAttendanceService.getEmployeeStatus(
+        widget.managerId,
+      );
+
+      final wasCheckedIn = _isCheckedIn;
+      if (mounted) {
+        setState(() {
+          _isCheckedIn = status['isCheckedIn'] as bool? ?? false;
+          _currentAttendanceId =
+              status['attendance']?['id']?.toString() ??
+              (_isCheckedIn ? savedAttendanceId : null);
+          // Parse checkInTime and convert from UTC to local time (with safe parsing)
+          if (status['attendance']?['check_in_time'] != null) {
+            try {
+              _checkInTime = DateTime.parse(
+                status['attendance']['check_in_time'].toString(),
+              ).toLocal();
+            } catch (e) {
+              _checkInTime = null;
+            }
+          } else {
+            if (_isCheckedIn && restoredTimeSource != null) {
+              try {
+                _checkInTime = DateTime.parse(restoredTimeSource).toLocal();
+              } catch (_) {
+                _checkInTime = null;
+              }
+            } else {
+              _checkInTime = null;
+            }
+          }
+
+          // ✅ Clear if checked out
+          if (!_isCheckedIn) {
+            _timer?.cancel();
+            _elapsedTime = '00:00:00';
+            _currentAttendanceId = null;
+          }
+        });
+      }
+
+      print(
+        '✅ Manager status updated: isCheckedIn=$_isCheckedIn (was: $wasCheckedIn)',
+      );
+
       // Load branch data if available
       if (_branchId != null && _branchId!.isNotEmpty) {
         try {
-          final branchResponse = await BranchApiService.getBranchById(_branchId!);
+          final branchResponse = await BranchApiService.getBranchById(
+            _branchId!,
+          );
           setState(() {
             _branchData = branchResponse['branch'];
-            _allowedBssids = (branchResponse['allowedBssids'] as List<dynamic>?)
-                ?.map((e) => e.toString().toUpperCase())
-                .toList() ?? [];
+            _allowedBssids =
+                (branchResponse['allowedBssids'] as List<dynamic>?)
+                    ?.map((e) => e.toString().toUpperCase())
+                    .toList() ??
+                [];
           });
         } catch (e) {
           print('Failed to load branch data: $e');
         }
       }
-      
+
       if (_isCheckedIn && _checkInTime != null) {
         _startTimer();
       }
     } catch (e) {
       print('❌ Error checking manager status: $e');
+
+      // Fallback for transient network issues: keep active session from local cache.
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        var savedAttendanceId = prefs.getString('active_attendance_id');
+        var activeEmployeeId = prefs.getString('active_employee_id');
+        final hasForeignCache =
+            activeEmployeeId != null && activeEmployeeId != widget.managerId;
+        final offlineCheckinTimeStr = prefs.getString('offline_checkin_time');
+        final cachedCheckinTimeStr = prefs.getString('cached_checkin_time');
+        final persistedTimerCheckInTimeStr = prefs.getString(
+          'timer_check_in_time',
+        );
+        var sourceTime =
+            offlineCheckinTimeStr ??
+            cachedCheckinTimeStr ??
+            persistedTimerCheckInTimeStr;
+
+        if ((savedAttendanceId == null || hasForeignCache) &&
+            sourceTime == null) {
+          final snapshot =
+              await SupabaseAttendanceService.getCachedActiveAttendanceOnDevice(
+                employeeId: widget.managerId,
+              );
+          if (snapshot != null) {
+            savedAttendanceId = snapshot['attendance_id']?.toString();
+            activeEmployeeId =
+                snapshot['employee_id']?.toString() ?? widget.managerId;
+            sourceTime = snapshot['check_in_time']?.toString();
+          }
+        }
+
+        final cacheBelongsToManager =
+            activeEmployeeId == null || activeEmployeeId == widget.managerId;
+
+        if (savedAttendanceId != null &&
+            cacheBelongsToManager &&
+            sourceTime != null) {
+          if (mounted) {
+            setState(() {
+              _isCheckedIn = true;
+              _currentAttendanceId = savedAttendanceId;
+              _checkInTime = DateTime.parse(sourceTime!).toLocal();
+            });
+          }
+
+          _startTimer();
+
+          if (!_pulseService.isTracking) {
+            await _pulseService.startTracking(
+              widget.managerId,
+              attendanceId: savedAttendanceId,
+            );
+          }
+
+          print(
+            '📱 Restored manager session after status error from local cache',
+          );
+        }
+      } catch (restoreError) {
+        print(
+          '⚠️ Could not restore manager session after error: $restoreError',
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCheckingStatus = false;
+          _hasCompletedInitialStatusCheck = true;
+        });
+      }
     }
   }
 
@@ -751,11 +1013,26 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
 
   void _startTimer() {
     _timer?.cancel();
+
+    if (_checkInTime == null) {
+      _elapsedTime = '00:00:00';
+      return;
+    }
+
+    final initialDuration = DateTime.now().difference(_checkInTime!);
+    final safeInitialDuration = initialDuration.isNegative
+        ? Duration.zero
+        : initialDuration;
+    setState(() {
+      _elapsedTime = _formatDuration(safeInitialDuration);
+    });
+
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (_checkInTime != null) {
         final duration = DateTime.now().difference(_checkInTime!);
+        final safeDuration = duration.isNegative ? Duration.zero : duration;
         setState(() {
-          _elapsedTime = _formatDuration(duration);
+          _elapsedTime = _formatDuration(safeDuration);
         });
       }
     });
@@ -791,28 +1068,28 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
         employeeId: widget.managerId,
         branchId: _branchId,
       );
-      
+
       if (!mounted) return;
       Navigator.of(context).pop();
 
       final summary = CheckoutDebugService.instance.getReadableSummary(report);
-      
+
       await showDialog(
         context: context,
         builder: (context) => AlertDialog(
           title: Row(
             children: [
               Icon(
-                report['status'] == 'healthy' 
-                    ? Icons.check_circle 
+                report['status'] == 'healthy'
+                    ? Icons.check_circle
                     : report['status'] == 'critical'
-                        ? Icons.error
-                        : Icons.warning,
+                    ? Icons.error
+                    : Icons.warning,
                 color: report['status'] == 'healthy'
                     ? Colors.green
                     : report['status'] == 'critical'
-                        ? Colors.red
-                        : Colors.orange,
+                    ? Colors.red
+                    : Colors.orange,
               ),
               const SizedBox(width: 10),
               const Text('تقرير التشخيص', style: TextStyle(fontSize: 18)),
@@ -821,17 +1098,16 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
           content: SingleChildScrollView(
             child: SelectableText(
               summary,
-              style: const TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 12,
-              ),
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
             ),
           ),
           actions: [
             TextButton(
               onPressed: () {
                 Navigator.pop(context);
-                DeviceCompatibilityService.instance.showPermissionGuideDialog(context);
+                DeviceCompatibilityService.instance.showPermissionGuideDialog(
+                  context,
+                );
               },
               child: const Text('دليل الإعدادات'),
             ),
@@ -871,30 +1147,61 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
     required String attendanceId,
     required String branchId,
   }) async {
-    print('🚀 PHASE 2: Starting Unified Pulse System with 5-Layer Protection (MANAGER)');
+    print(
+      '🚀 PHASE 2: Starting Unified Pulse System with 5-Layer Protection (MANAGER)',
+    );
     print('   Manager ID: $employeeId');
     print('   Attendance: $attendanceId');
     print('   Branch: $branchId');
-    
+
     if (kIsWeb) {
       print('⚠️ Web platform - pulse tracking not available');
       return;
     }
-    
-    if (!Platform.isAndroid) {
-      print('⚠️ Non-Android platform - pulse tracking limited');
+
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      print('⚠️ Unsupported platform for unified pulse system');
       return;
     }
-    
+
     try {
+      if (Platform.isIOS) {
+        print(
+          '🍎 iOS unified pulse path (MANAGER): PulseTracking + WorkManager',
+        );
+        if (!_pulseService.isTracking) {
+          await _pulseService.startTracking(
+            employeeId,
+            attendanceId: attendanceId,
+          );
+        }
+
+        await WorkManagerPulseService.instance.startPeriodicPulses(
+          employeeId: employeeId,
+          attendanceId: attendanceId,
+          branchId: branchId,
+        );
+
+        AppLogger.instance.log(
+          'Unified Pulse System started on iOS (MANAGER)',
+          tag: 'UnifiedPulseManager',
+        );
+        return;
+      }
+
       // Get manager data for service initialization
       final authData = await AuthService.getLoginData();
       final managerName = authData['fullName'] ?? 'المدير';
-      
+
       // ✅ LAYER 1: Start PulseTrackingService (Primary Foreground Service)
       print('📍 Layer 1: Starting PulseTrackingService...');
-      // Note: PulseTrackingService is started via ForegroundAttendanceService
-      
+      if (!_pulseService.isTracking) {
+        await _pulseService.startTracking(
+          employeeId,
+          attendanceId: attendanceId,
+        );
+      }
+
       // ✅ LAYER 2: Start ForegroundAttendanceService (Persistent Notification)
       print('🔔 Layer 2: Starting ForegroundAttendanceService...');
       final foregroundService = ForegroundAttendanceService.instance;
@@ -903,46 +1210,43 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
         employeeName: managerName,
       );
       print('✅ ForegroundAttendanceService started successfully');
-      
+
       // ✅ LAYER 3: Start AlarmManager (Guaranteed - Even When App Killed)
       print('⏰ Layer 3: Starting AlarmManagerPulseService...');
       final alarmService = AlarmManagerPulseService();
       await alarmService.startPeriodicAlarms(employeeId);
       print('✅ AlarmManagerPulseService started successfully');
-      
-      // ✅ LAYER 4: Start WorkManager (15-Min Backup for Old Devices)
-      print('🔄 Layer 4: Starting WorkManagerPulseService...');
-      await WorkManagerPulseService.instance.startPeriodicPulses(
-        employeeId: employeeId,
-        attendanceId: attendanceId,
-        branchId: branchId,
+
+      // ✅ LAYER 4: WorkManager disabled here to avoid duplicate pulses.
+      print(
+        '⏭️ Layer 4: WorkManagerPulseService skipped to avoid duplicate pulses',
       );
-      print('✅ WorkManagerPulseService started successfully');
-      
+
       // ✅ LAYER 5: Start AggressiveKeepAlive (For Problematic Devices)
       print('💪 Layer 5: Starting AggressiveKeepAliveService...');
       await AggressiveKeepAliveService().startKeepAlive(employeeId);
       print('✅ AggressiveKeepAliveService started successfully');
-      
-      print('🎉 All 5 layers of pulse protection started successfully! (MANAGER)');
-      
+
+      print(
+        '🎉 All 5 layers of pulse protection started successfully! (MANAGER)',
+      );
+
       // Log success
       AppLogger.instance.log(
         'Unified Pulse System started with 5-layer protection (MANAGER)',
         tag: 'UnifiedPulseManager',
       );
-      
     } catch (e, stackTrace) {
       print('❌ Error starting unified pulse system (MANAGER): $e');
       print('Stack trace: $stackTrace');
-      
+
       AppLogger.instance.log(
         'Failed to start unified pulse system (MANAGER)',
         level: AppLogger.error,
         tag: 'UnifiedPulseManager',
         error: e,
       );
-      
+
       // Don't throw - pulse tracking is secondary to check-in success
       // Manager should still be checked in even if pulse tracking fails
     }
@@ -952,27 +1256,39 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
   /// Stops all 5 layers of pulse tracking services
   Future<void> _stopUnifiedPulseSystem() async {
     print('🛑 PHASE 2: Stopping Unified Pulse System (5 layers) - MANAGER');
-    
+
     if (kIsWeb) {
       print('⚠️ Web platform - pulse tracking not available');
       return;
     }
-    
-    if (!Platform.isAndroid) {
-      print('⚠️ Non-Android platform - pulse tracking limited');
+
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      print('⚠️ Unsupported platform for unified pulse system');
       return;
     }
-    
+
     try {
+      if (Platform.isIOS) {
+        print('🍎 Stopping iOS unified pulse path (MANAGER)');
+        _pulseService.stopTracking();
+        await WorkManagerPulseService.instance.stopPeriodicPulses();
+        AppLogger.instance.log(
+          'Unified Pulse System stopped on iOS (MANAGER)',
+          tag: 'UnifiedPulseManager',
+        );
+        return;
+      }
+
       // ✅ LAYER 1: Stop PulseTrackingService
       print('🛑 Layer 1: Stopping PulseTrackingService...');
       _pulseService.stopTracking();
       print('✅ PulseTrackingService stopped');
-      
+
       // ✅ LAYER 2: Stop ForegroundAttendanceService
       print('🛑 Layer 2: Stopping ForegroundAttendanceService...');
       try {
-        final stopped = await ForegroundAttendanceService.instance.stopTracking();
+        final stopped = await ForegroundAttendanceService.instance
+            .stopTracking();
         if (stopped) {
           print('✅ ForegroundAttendanceService stopped successfully');
         } else {
@@ -981,7 +1297,7 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
       } catch (e) {
         print('⚠️ Error stopping ForegroundAttendanceService: $e');
       }
-      
+
       // ✅ LAYER 3: Stop AlarmManagerPulseService
       print('🛑 Layer 3: Stopping AlarmManagerPulseService...');
       try {
@@ -990,7 +1306,7 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
       } catch (e) {
         print('⚠️ Error stopping AlarmManagerPulseService: $e');
       }
-      
+
       // ✅ LAYER 4: Stop WorkManagerPulseService
       print('🛑 Layer 4: Stopping WorkManagerPulseService...');
       try {
@@ -999,7 +1315,7 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
       } catch (e) {
         print('⚠️ Error stopping WorkManagerPulseService: $e');
       }
-      
+
       // ✅ LAYER 5: Stop AggressiveKeepAliveService
       print('🛑 Layer 5: Stopping AggressiveKeepAliveService...');
       try {
@@ -1008,26 +1324,27 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
       } catch (e) {
         print('⚠️ Error stopping AggressiveKeepAliveService: $e');
       }
-      
-      print('🎉 All 5 layers of pulse protection stopped successfully! (MANAGER)');
-      
+
+      print(
+        '🎉 All 5 layers of pulse protection stopped successfully! (MANAGER)',
+      );
+
       // Log success
       AppLogger.instance.log(
         'Unified Pulse System stopped (all 5 layers) - MANAGER',
         tag: 'UnifiedPulseManager',
       );
-      
     } catch (e, stackTrace) {
       print('❌ Error stopping unified pulse system (MANAGER): $e');
       print('Stack trace: $stackTrace');
-      
+
       AppLogger.instance.log(
         'Failed to stop unified pulse system (MANAGER)',
         level: AppLogger.error,
         tag: 'UnifiedPulseManager',
         error: e,
       );
-      
+
       // Don't throw - continue with checkout anyway
     }
   }
@@ -1036,21 +1353,22 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
   Future<void> _showLocationPermissionGuideIfNeeded() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final hasShownLocationGuide = prefs.getBool('location_permission_guide_shown_manager') ?? false;
-      
+      final hasShownLocationGuide =
+          prefs.getBool('location_permission_guide_shown_manager') ?? false;
+
       // Only show once per install
       if (!hasShownLocationGuide && mounted) {
         // Check current permission status
         final permission = await Geolocator.checkPermission();
-        
+
         // Only show if we don't have "always" permission yet
         if (permission != LocationPermission.always) {
           // Mark as shown
           await prefs.setBool('location_permission_guide_shown_manager', true);
-          
+
           // Show dialog after a short delay (let check-in success message show first)
           await Future.delayed(const Duration(seconds: 3));
-          
+
           if (mounted) {
             showDialog(
               context: context,
@@ -1069,14 +1387,26 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
                   children: [
                     const Text(
                       'للحصول على أفضل أداء لنظام تتبع الحضور:',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
                     ),
                     const SizedBox(height: 15),
-                    _buildPermissionStep('1', 'اختر "السماح طوال الوقت" (Always Allow)'),
+                    _buildPermissionStep(
+                      '1',
+                      'اختر "السماح طوال الوقت" (Always Allow)',
+                    ),
                     const SizedBox(height: 10),
-                    _buildPermissionStep('2', 'هذا يسمح بتتبع حضورك حتى عند إغلاق التطبيق'),
+                    _buildPermissionStep(
+                      '2',
+                      'هذا يسمح بتتبع حضورك حتى عند إغلاق التطبيق',
+                    ),
                     const SizedBox(height: 10),
-                    _buildPermissionStep('3', 'سيتم إرسال النبضات تلقائياً في الخلفية'),
+                    _buildPermissionStep(
+                      '3',
+                      'سيتم إرسال النبضات تلقائياً في الخلفية',
+                    ),
                     const SizedBox(height: 15),
                     Container(
                       padding: const EdgeInsets.all(12),
@@ -1087,12 +1417,19 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
                       ),
                       child: Row(
                         children: [
-                          Icon(Icons.privacy_tip, color: Colors.blue[700], size: 20),
+                          Icon(
+                            Icons.privacy_tip,
+                            color: Colors.blue[700],
+                            size: 20,
+                          ),
                           const SizedBox(width: 10),
                           const Expanded(
                             child: Text(
                               'نحن نحترم خصوصيتك - يُستخدم الموقع فقط لتتبع الحضور أثناء ساعات العمل',
-                              style: TextStyle(fontSize: 12, color: Colors.black87),
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.black87,
+                              ),
                             ),
                           ),
                         ],
@@ -1112,7 +1449,12 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
         }
       }
     } catch (e) {
-      AppLogger.instance.log('Error showing location guide', level: AppLogger.warning, tag: 'LocationGuideManager', error: e);
+      AppLogger.instance.log(
+        'Error showing location guide',
+        level: AppLogger.warning,
+        tag: 'LocationGuideManager',
+        error: e,
+      );
     }
   }
 
@@ -1123,24 +1465,20 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
         Container(
           width: 24,
           height: 24,
-          decoration: BoxDecoration(
-            color: Colors.blue,
-            shape: BoxShape.circle,
-          ),
+          decoration: BoxDecoration(color: Colors.blue, shape: BoxShape.circle),
           child: Center(
             child: Text(
               number,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
             ),
           ),
         ),
         const SizedBox(width: 10),
-        Expanded(
-          child: Text(
-            text,
-            style: const TextStyle(fontSize: 14),
-          ),
-        ),
+        Expanded(child: Text(text, style: const TextStyle(fontSize: 14))),
       ],
     );
   }
@@ -1149,21 +1487,23 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
   Future<void> _showBatteryGuideIfNeeded() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final hasShownGuide = prefs.getBool('battery_guide_shown_manager') ?? false;
-      
+      final hasShownGuide =
+          prefs.getBool('battery_guide_shown_manager') ?? false;
+
       // 🚀 PHASE 5: Show for all Android devices
       if (!hasShownGuide && mounted) {
         // Check if battery optimization is already disabled
-        final batteryStatus = await Permission.ignoreBatteryOptimizations.status;
-        
+        final batteryStatus =
+            await Permission.ignoreBatteryOptimizations.status;
+
         // Only show if not already granted
         if (!batteryStatus.isGranted) {
           // Mark as shown
           await prefs.setBool('battery_guide_shown_manager', true);
-          
+
           // Show dialog after location guide (5 seconds delay)
           await Future.delayed(const Duration(seconds: 5));
-          
+
           if (mounted) {
             showDialog(
               context: context,
@@ -1171,7 +1511,11 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
               builder: (context) => AlertDialog(
                 title: Row(
                   children: [
-                    Icon(Icons.battery_charging_full, color: Colors.orange[700], size: 28),
+                    Icon(
+                      Icons.battery_charging_full,
+                      color: Colors.orange[700],
+                      size: 28,
+                    ),
                     const SizedBox(width: 10),
                     const Text('🔋 تحسين أداء التطبيق'),
                   ],
@@ -1182,14 +1526,23 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
                   children: [
                     const Text(
                       'لضمان عمل تتبع الحضور بشكل مثالي:',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
                     ),
                     const SizedBox(height: 15),
                     _buildBatteryStep('1', 'تعطيل تحسين البطارية للتطبيق'),
                     const SizedBox(height: 10),
-                    _buildBatteryStep('2', 'يضمن استمرار إرسال النبضات في الخلفية'),
+                    _buildBatteryStep(
+                      '2',
+                      'يضمن استمرار إرسال النبضات في الخلفية',
+                    ),
                     const SizedBox(height: 10),
-                    _buildBatteryStep('3', 'لن يستنزف البطارية - التطبيق مُحسّن'),
+                    _buildBatteryStep(
+                      '3',
+                      'لن يستنزف البطارية - التطبيق مُحسّن',
+                    ),
                     const SizedBox(height: 15),
                     Container(
                       padding: const EdgeInsets.all(12),
@@ -1200,12 +1553,19 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
                       ),
                       child: Row(
                         children: [
-                          Icon(Icons.info_outline, color: Colors.orange[700], size: 20),
+                          Icon(
+                            Icons.info_outline,
+                            color: Colors.orange[700],
+                            size: 20,
+                          ),
                           const SizedBox(width: 10),
                           const Expanded(
                             child: Text(
                               'مهم خاصة لأجهزة Samsung و Xiaomi و Realme',
-                              style: TextStyle(fontSize: 12, color: Colors.black87),
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.black87,
+                              ),
                             ),
                           ),
                         ],
@@ -1216,18 +1576,24 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
                 actions: [
                   TextButton(
                     onPressed: () => Navigator.pop(context),
-                    child: const Text('لاحقاً', style: TextStyle(color: Colors.grey)),
+                    child: const Text(
+                      'لاحقاً',
+                      style: TextStyle(color: Colors.grey),
+                    ),
                   ),
                   ElevatedButton(
                     onPressed: () async {
                       Navigator.pop(context);
                       // Request permission directly
-                      final status = await Permission.ignoreBatteryOptimizations.request();
-                      
+                      final status = await Permission.ignoreBatteryOptimizations
+                          .request();
+
                       if (status.isGranted && mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
-                            content: Text('✅ تم تعطيل تحسين البطارية - الأداء سيكون ممتاز!'),
+                            content: Text(
+                              '✅ تم تعطيل تحسين البطارية - الأداء سيكون ممتاز!',
+                            ),
                             backgroundColor: Colors.green,
                           ),
                         );
@@ -1246,7 +1612,12 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
         }
       }
     } catch (e) {
-      AppLogger.instance.log('Error showing battery guide', level: AppLogger.warning, tag: 'BatteryGuideManager', error: e);
+      AppLogger.instance.log(
+        'Error showing battery guide',
+        level: AppLogger.warning,
+        tag: 'BatteryGuideManager',
+        error: e,
+      );
     }
   }
 
@@ -1264,17 +1635,16 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
           child: Center(
             child: Text(
               number,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
             ),
           ),
         ),
         const SizedBox(width: 10),
-        Expanded(
-          child: Text(
-            text,
-            style: const TextStyle(fontSize: 14),
-          ),
-        ),
+        Expanded(child: Text(text, style: const TextStyle(fontSize: 14))),
       ],
     );
   }
@@ -1284,7 +1654,7 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
 
     try {
       print('🚀 Manager check-in started...');
-      
+
       // Create a simple employee object for validation
       final employee = Employee(
         id: widget.managerId,
@@ -1305,11 +1675,11 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
       }
 
       print('✅ Validation passed: ${validation.message}');
-      
+
       // Use validated position and BSSID
       final position = validation.position;
       var wifiBSSID = validation.bssid;
-      
+
       // If BSSID is null but we're connected to WiFi, try to get it (best effort)
       if (wifiBSSID == null && !kIsWeb) {
         try {
@@ -1338,9 +1708,21 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
       final attendanceId = response['id'] as String?;
       _currentAttendanceId = attendanceId;
 
+      DateTime checkInTime;
+      try {
+        final serverCheckIn = response['check_in_time']?.toString();
+        if (serverCheckIn != null && serverCheckIn.isNotEmpty) {
+          checkInTime = DateTime.parse(serverCheckIn).toLocal();
+        } else {
+          checkInTime = DateTime.now();
+        }
+      } catch (_) {
+        checkInTime = DateTime.now();
+      }
+
       setState(() {
         _isCheckedIn = true;
-        _checkInTime = DateTime.now();
+        _checkInTime = checkInTime;
         _isLoading = false;
       });
 
@@ -1349,21 +1731,30 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
       // ✅ Start pulse tracking when check-in succeeds
       if (_branchData != null) {
         await _pulseService.startTracking(
-          widget.managerId, 
+          widget.managerId,
           attendanceId: attendanceId,
         );
-        AppLogger.instance.log('Started pulse tracking after manager check-in', tag: 'ManagerCheckIn');
-        
+        AppLogger.instance.log(
+          'Started pulse tracking after manager check-in',
+          tag: 'ManagerCheckIn',
+        );
+
         // 🚀 PHASE 2: Start unified pulse system (all 5 layers)
-        if (!kIsWeb && Platform.isAndroid && _branchData != null && attendanceId != null) {
-          final branchIdForPulse = validation.branchId ?? _branchData!['id']?.toString() ?? _branchData!['branch_id']?.toString();
+        if (!kIsWeb &&
+            Platform.isAndroid &&
+            _branchData != null &&
+            attendanceId != null) {
+          final branchIdForPulse =
+              validation.branchId ??
+              _branchData!['id']?.toString() ??
+              _branchData!['branch_id']?.toString();
           if (branchIdForPulse != null) {
             await _startUnifiedPulseSystem(
               employeeId: widget.managerId,
               attendanceId: attendanceId,
               branchId: branchIdForPulse,
             );
-            
+
             // 🚀 PHASE 6: Start sync service for offline pulses
             SyncService.instance.startPeriodicSync();
             print('✅ Started sync service for offline pulses (Manager)');
@@ -1379,7 +1770,7 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
             behavior: SnackBarBehavior.floating,
           ),
         );
-        
+
         // 🚀 PHASE 3: Show location permission guide (educate about "Always Allow")
         // 🚀 PHASE 5: Show battery optimization guide
         if (!kIsWeb && Platform.isAndroid) {
@@ -1407,20 +1798,22 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
       print('⚠️ Check-out already in progress, ignoring...');
       return;
     }
-    
+
     setState(() => _isLoading = true);
 
     try {
       print('🚪 Manager check-out started...');
-      
+
       // 🚀 PHASE 6: Try to sync pending pulses before check-out
       if (!kIsWeb) {
         try {
           print('🔄 Syncing pending pulses before check-out...');
           final syncResult = await SyncService.instance.forceSyncNow();
           if (syncResult['success'] == true && syncResult['synced'] > 0) {
-            print('✅ Synced ${syncResult['synced']} pending records before check-out');
-            
+            print(
+              '✅ Synced ${syncResult['synced']} pending records before check-out',
+            );
+
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
@@ -1436,10 +1829,11 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
           print('⚠️ Sync before check-out failed (will try again later): $e');
         }
       }
-      
+
       // ✅ STEP 1: Get active attendance first (before validation)
-      final activeAttendance = await SupabaseAttendanceService.getActiveAttendance(widget.managerId);
-      
+      final activeAttendance =
+          await SupabaseAttendanceService.getActiveAttendance(widget.managerId);
+
       if (activeAttendance == null) {
         throw Exception('لا يوجد سجل حضور نشط');
       }
@@ -1462,9 +1856,9 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
 
       // ✅ FIXED: validateForCheckOut now always returns isValid=true
       // It's flexible and allows checkout even if location checks fail
-      
+
       var wifiBSSID = validation.bssid;
-      
+
       // Try to get BSSID if not already available
       if (wifiBSSID == null && !kIsWeb) {
         try {
@@ -1478,7 +1872,7 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
       // ✅ SIMPLIFIED: Get position from validation or use defaults
       double latitude = 0.0;
       double longitude = 0.0;
-      
+
       if (validation.position != null) {
         latitude = validation.position!.latitude;
         longitude = validation.position!.longitude;
@@ -1486,8 +1880,10 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
       } else {
         // WiFi validation passed - use branch location (no need to wait for GPS)
         print('📍 WiFi validated - using branch location');
-        latitude = _branchData?['latitude']?.toDouble() ?? RestaurantConfig.latitude;
-        longitude = _branchData?['longitude']?.toDouble() ?? RestaurantConfig.longitude;
+        latitude =
+            _branchData?['latitude']?.toDouble() ?? RestaurantConfig.latitude;
+        longitude =
+            _branchData?['longitude']?.toDouble() ?? RestaurantConfig.longitude;
         print('📍 Using branch location: $latitude, $longitude');
       }
 
@@ -1521,9 +1917,11 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(validation.message.contains('⚠️') 
-                ? '✓ تم تسجيل الانصراف (${validation.message})'
-                : '✓ تم تسجيل الانصراف بنجاح'),
+            content: Text(
+              validation.message.contains('⚠️')
+                  ? '✓ تم تسجيل الانصراف (${validation.message})'
+                  : '✓ تم تسجيل الانصراف بنجاح',
+            ),
             backgroundColor: AppColors.success,
             behavior: SnackBarBehavior.floating,
           ),
@@ -1546,12 +1944,15 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
   // ignore: unused_element
   void _showAttendanceRequestDialog() async {
     final today = DateTime.now();
-    final requests = await RequestsApiService.fetchAttendanceRequests(widget.managerId);
-    final hasTodayRequest = requests.any((r) =>
-        r.requestedTime.year == today.year &&
-        r.requestedTime.month == today.month &&
-        r.requestedTime.day == today.day &&
-        r.status == RequestStatus.pending
+    final requests = await RequestsApiService.fetchAttendanceRequests(
+      widget.managerId,
+    );
+    final hasTodayRequest = requests.any(
+      (r) =>
+          r.requestedTime.year == today.year &&
+          r.requestedTime.month == today.month &&
+          r.requestedTime.day == today.day &&
+          r.status == RequestStatus.pending,
     );
     if (hasTodayRequest) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1636,7 +2037,10 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(color: AppColors.primaryOrange, width: 2),
+                      borderSide: const BorderSide(
+                        color: AppColors.primaryOrange,
+                        width: 2,
+                      ),
                     ),
                   ),
                   maxLines: 3,
@@ -1644,7 +2048,10 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
                 const SizedBox(height: 16),
                 Row(
                   children: [
-                    const Text('وقت الحضور:', style: TextStyle(fontWeight: FontWeight.bold)),
+                    const Text(
+                      'وقت الحضور:',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
                     const SizedBox(width: 8),
                     TextButton(
                       onPressed: () async {
@@ -1655,13 +2062,20 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
                         if (picked != null) {
                           setModalState(() {
                             selectedTime = DateTime(
-                                today.year, today.month, today.day, picked.hour, picked.minute);
+                              today.year,
+                              today.month,
+                              today.day,
+                              picked.hour,
+                              picked.minute,
+                            );
                           });
                         }
                       },
-                      child: Text(selectedTime != null
-                          ? '${selectedTime!.hour.toString().padLeft(2, '0')}:${selectedTime!.minute.toString().padLeft(2, '0')}'
-                          : '--:--'),
+                      child: Text(
+                        selectedTime != null
+                            ? '${selectedTime!.hour.toString().padLeft(2, '0')}:${selectedTime!.minute.toString().padLeft(2, '0')}'
+                            : '--:--',
+                      ),
                     ),
                   ],
                 ),
@@ -1725,595 +2139,192 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
     try {
       return Scaffold(
         backgroundColor: AppColors.background,
-      body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 900),
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-              // Header with Greeting
-              Container(
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  gradient: AppColors.primaryGradient,
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppColors.primaryOrange.withOpacity(0.3),
-                      blurRadius: 20,
-                      offset: const Offset(0, 10),
-                    ),
-                  ],
+        body: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 900),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 24,
                 ),
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(12),
+                    // Header with Greeting
+                    Container(
+                      padding: const EdgeInsets.all(24),
+                      decoration: BoxDecoration(
+                        gradient: AppColors.primaryGradient,
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppColors.primaryOrange.withOpacity(0.3),
+                            blurRadius: 20,
+                            offset: const Offset(0, 10),
                           ),
-                          child: const Icon(
-                            Icons.wb_sunny_outlined,
-                            color: Colors.white,
-                            size: 28,
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        const Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                        ],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
                             children: [
-                              Text(
-                                'صباح الخير',
-                                style: TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 14,
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.2),
+                                  borderRadius: BorderRadius.circular(12),
                                 ),
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                'أهلاً بك في عملك اليوم',
-                                style: TextStyle(
+                                child: const Icon(
+                                  Icons.wb_sunny_outlined,
                                   color: Colors.white,
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.bold,
+                                  size: 28,
                                 ),
+                              ),
+                              const SizedBox(width: 16),
+                              const Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'صباح الخير',
+                                      style: TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                    SizedBox(height: 4),
+                                    Text(
+                                      'أهلاً بك في عملك اليوم',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 20,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              // Debug buttons
+                              IconButton(
+                                icon: const Icon(
+                                  Icons.bug_report,
+                                  color: Colors.white,
+                                ),
+                                tooltip: 'تشخيص الموقع',
+                                onPressed: _showDiagnosticDialog,
+                              ),
+                              IconButton(
+                                icon: const Icon(
+                                  Icons.help_outline,
+                                  color: Colors.white,
+                                ),
+                                tooltip: 'مساعدة الموقع',
+                                onPressed: () {
+                                  DeviceCompatibilityService.instance
+                                      .showPermissionGuideDialog(context);
+                                },
                               ),
                             ],
                           ),
-                        ),
-                        // Debug buttons
-                        IconButton(
-                          icon: const Icon(Icons.bug_report, color: Colors.white),
-                          tooltip: 'تشخيص الموقع',
-                          onPressed: _showDiagnosticDialog,
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.help_outline, color: Colors.white),
-                          tooltip: 'مساعدة الموقع',
-                          onPressed: () {
-                            DeviceCompatibilityService.instance.showPermissionGuideDialog(context);
-                          },
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 24),
-
-              // Quick Actions - Employees Management
-              Card(
-                elevation: 2,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(16),
-                  onTap: () {
-                    if (_branchId == null || _branchId!.isEmpty) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('خطأ: لا يوجد فرع مرتبط بحسابك'),
-                          backgroundColor: AppColors.error,
-                        ),
-                      );
-                      return;
-                    }
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => ManagerEmployeesPage(
-                          managerId: widget.managerId,
-                          branchId: _branchId!,
-                          branchName: _branchData?['branch_name'] ?? 'الفرع',
-                        ),
+                        ],
                       ),
-                    );
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            gradient: AppColors.primaryGradient,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Icon(
-                            Icons.people,
-                            color: Colors.white,
-                            size: 28,
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        const Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'إدارة الموظفين',
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                  color: AppColors.textPrimary,
-                                ),
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                'عرض وإضافة موظفي الفرع',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: AppColors.textSecondary,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const Icon(
-                          Icons.arrow_forward_ios,
-                          color: AppColors.textTertiary,
-                          size: 20,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 16),
-
-              // Branch Manager Dashboard Card
-              Card(
-                elevation: 2,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(16),
-                  onTap: () {
-                    final branchName = _getBranchName();
-                    if (branchName == null || branchName.isEmpty) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('خطأ: لا يوجد فرع مرتبط بحسابك'),
-                          backgroundColor: AppColors.error,
-                        ),
-                      );
-                      return;
-                    }
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => BranchManagerScreen(
-                          branchName: branchName,
-                          managerId: widget.managerId,
-                        ),
-                      ),
-                    );
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: Colors.blue.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Icon(
-                            Icons.dashboard,
-                            color: Colors.blue,
-                            size: 28,
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        const Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'لوحة مدير الفرع',
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                  color: AppColors.textPrimary,
-                                ),
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                'متابعة الطلبات والحضور والنبضات',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: AppColors.textSecondary,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const Icon(
-                          Icons.arrow_forward_ios,
-                          color: AppColors.textTertiary,
-                          size: 20,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 16),
-
-              // Session Validation Card
-              Card(
-                elevation: 2,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(16),
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => const SessionValidationPage(),
-                      ),
-                    );
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: Colors.orange.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Icon(
-                            Icons.verified_user,
-                            color: Colors.orange,
-                            size: 28,
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        const Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'طلبات التحقق من الحضور',
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                  color: AppColors.textPrimary,
-                                ),
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                'الموافقة أو الرفض على طلبات الموظفين',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: AppColors.textSecondary,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const Icon(
-                          Icons.arrow_forward_ios,
-                          color: AppColors.textTertiary,
-                          size: 20,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 24),
-
-              // Status Card with Timer
-              Container(
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.05),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: _isCheckedIn
-                                ? AppColors.success.withOpacity(0.1)
-                                : AppColors.textTertiary.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Icon(
-                            _isCheckedIn ? Icons.work : Icons.work_outline,
-                            color: _isCheckedIn ? AppColors.success : AppColors.textTertiary,
-                            size: 24,
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _isCheckedIn ? 'قيد العمل' : 'خارج العمل',
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                  color: _isCheckedIn ? AppColors.success : AppColors.textSecondary,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                _isCheckedIn
-                                    ? 'منذ ${_checkInTime != null ? "${_checkInTime!.hour}:${_checkInTime!.minute.toString().padLeft(2, '0')}" : ""}'
-                                    : 'سجل حضورك لبدء العمل',
-                                style: const TextStyle(
-                                  fontSize: 14,
-                                  color: AppColors.textTertiary,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
                     ),
 
-                    if (_isCheckedIn) ...[
-                      const SizedBox(height: 24),
-                      Container(
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        decoration: BoxDecoration(
-                          color: AppColors.surfaceVariant,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Column(
-                          children: [
-                            const Text(
-                              'مدة العمل',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: AppColors.textSecondary,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              _elapsedTime,
-                              style: const TextStyle(
-                                fontSize: 32,
-                                fontWeight: FontWeight.bold,
-                                color: AppColors.primaryOrange,
-                                fontFeatures: [FontFeature.tabularFigures()],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
+                    const SizedBox(height: 24),
 
-              const SizedBox(height: 24),
-
-              // Main Action Button
-              SizedBox(
-                height: 56,
-                child: ElevatedButton(
-                  onPressed: _isLoading
-                      ? null
-                      : (_isCheckedIn ? _handleCheckOut : _handleCheckIn),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _isCheckedIn ? AppColors.error : AppColors.primaryOrange,
-                    disabledBackgroundColor: AppColors.textTertiary,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    elevation: 0,
-                  ),
-                  child: _isLoading
-                      ? const SizedBox(
-                          height: 24,
-                          width: 24,
-                          child: CircularProgressIndicator(
-                            color: Colors.white,
-                            strokeWidth: 2,
-                          ),
-                        )
-                      : Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              _isCheckedIn ? Icons.logout : Icons.login,
-                              size: 24,
-                            ),
-                            const SizedBox(width: 12),
-                            Text(
-                              _isCheckedIn ? 'تسجيل الانصراف' : 'تسجيل الحضور',
-                              style: const TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                ),
-              ),
-
-              const SizedBox(height: 16),
-
-              // Send Requests Button
-              SizedBox(
-                height: 56,
-                child: OutlinedButton(
-                  onPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (context) => ManagerSendRequestsPage(managerId: widget.managerId),
-                      ),
-                    );
-                  },
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.primaryOrange,
-                    side: const BorderSide(color: AppColors.primaryOrange, width: 2),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: const [
-                      Icon(Icons.send, size: 24),
-                      SizedBox(width: 12),
-                      Text(
-                        'إرسال طلبات',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 16),
-
-              // Request Break Button
-              if (_isCheckedIn)
-                SizedBox(
-                  height: 48,
-                  child: OutlinedButton(
-                    onPressed: _isLoading ? null : _requestBreak,
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.primaryOrange,
-                      side: const BorderSide(color: AppColors.primaryOrange, width: 2),
+                    // Quick Actions - Employees Management
+                    Card(
+                      elevation: 2,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius: BorderRadius.circular(16),
                       ),
-                    ),
-                    child: const Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.coffee, size: 20),
-                        SizedBox(width: 8),
-                        Text(
-                          'طلب استراحة (بريك)',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-
-              if (_isCheckedIn) const SizedBox(height: 16),
-
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.05),
-                      blurRadius: 12,
-                      offset: const Offset(0, 6),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: AppColors.primaryOrange.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Icon(Icons.person_add_alt_1, color: AppColors.primaryOrange, size: 26),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(16),
+                        onTap: () {
+                          if (_branchId == null || _branchId!.isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('خطأ: لا يوجد فرع مرتبط بحسابك'),
+                                backgroundColor: AppColors.error,
+                              ),
+                            );
+                            return;
+                          }
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => ManagerEmployeesPage(
+                                managerId: widget.managerId,
+                                branchId: _branchId!,
+                                branchName:
+                                    _branchData?['branch_name'] ?? 'الفرع',
+                              ),
+                            ),
+                          );
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.all(20),
+                          child: Row(
                             children: [
-                              const Text(
-                                'إضافة موظف جديد',
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                  color: AppColors.textPrimary,
+                              Container(
+                                padding: const EdgeInsets.all(14),
+                                decoration: BoxDecoration(
+                                  gradient: AppColors.primaryGradient,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: const Icon(
+                                  Icons.people,
+                                  color: Colors.white,
+                                  size: 28,
                                 ),
                               ),
-                              const SizedBox(height: 4),
-                              Text(
-                                _getBranchName() != null
-                                    ? 'سيتم ربط الموظف بفرع ${_getBranchName()} تلقائياً'
-                                    : 'يرجى التأكد من تحميل بيانات الفرع قبل إضافة موظف',
-                                style: const TextStyle(
-                                  fontSize: 14,
-                                  color: AppColors.textSecondary,
+                              const SizedBox(width: 16),
+                              const Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'إدارة الموظفين',
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        color: AppColors.textPrimary,
+                                      ),
+                                    ),
+                                    SizedBox(height: 4),
+                                    Text(
+                                      'عرض وإضافة موظفي الفرع',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: AppColors.textSecondary,
+                                      ),
+                                    ),
+                                  ],
                                 ),
+                              ),
+                              const Icon(
+                                Icons.arrow_forward_ios,
+                                color: AppColors.textTertiary,
+                                size: 20,
                               ),
                             ],
                           ),
                         ),
-                      ],
+                      ),
                     ),
-                    const SizedBox(height: 20),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: () {
+
+                    const SizedBox(height: 16),
+
+                    // Branch Manager Dashboard Card
+                    Card(
+                      elevation: 2,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(16),
+                        onTap: () {
                           final branchName = _getBranchName();
                           if (branchName == null || branchName.isEmpty) {
                             ScaffoldMessenger.of(context).showSnackBar(
@@ -2326,37 +2337,564 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
                           }
                           Navigator.of(context).push(
                             MaterialPageRoute(
-                              builder: (_) => ManagerAddEmployeePage(
+                              builder: (_) => BranchManagerScreen(
+                                branchName: branchName,
                                 managerId: widget.managerId,
-                                managerBranch: branchName,
                               ),
                             ),
                           );
                         },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.primaryOrange,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                        ),
-                        icon: const Icon(Icons.add),
-                        label: const Text(
-                          'إضافة موظف للفرع',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
+                        child: Padding(
+                          padding: const EdgeInsets.all(20),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(14),
+                                decoration: BoxDecoration(
+                                  color: Colors.blue.withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: const Icon(
+                                  Icons.dashboard,
+                                  color: Colors.blue,
+                                  size: 28,
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              const Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'لوحة مدير الفرع',
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        color: AppColors.textPrimary,
+                                      ),
+                                    ),
+                                    SizedBox(height: 4),
+                                    Text(
+                                      'متابعة الطلبات والحضور والنبضات',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: AppColors.textSecondary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const Icon(
+                                Icons.arrow_forward_ios,
+                                color: AppColors.textTertiary,
+                                size: 20,
+                              ),
+                            ],
                           ),
                         ),
                       ),
                     ),
+
+                    const SizedBox(height: 16),
+
+                    Card(
+                      elevation: 2,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(16),
+                        onTap: () {
+                          final branchName = _getBranchName();
+                          if (branchName == null || branchName.isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('خطأ: لا يوجد فرع مرتبط بحسابك'),
+                                backgroundColor: AppColors.error,
+                              ),
+                            );
+                            return;
+                          }
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => ManagerDashboardSimple(
+                                managerId: widget.managerId,
+                                branchName: branchName,
+                                initialTabIndex: 3,
+                              ),
+                            ),
+                          );
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.all(20),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(14),
+                                decoration: BoxDecoration(
+                                  color: AppColors.success.withOpacity(0.12),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: const Icon(
+                                  Icons.fact_check_outlined,
+                                  color: AppColors.success,
+                                  size: 28,
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              const Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'الجدول الحضوري اليومي',
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        color: AppColors.textPrimary,
+                                      ),
+                                    ),
+                                    SizedBox(height: 4),
+                                    Text(
+                                      'عرض وتعديل حضور كل موظفي الفرع بسرعة',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: AppColors.textSecondary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const Icon(
+                                Icons.arrow_forward_ios,
+                                color: AppColors.textTertiary,
+                                size: 20,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 16),
+
+                    // Session Validation Card
+                    Card(
+                      elevation: 2,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(16),
+                        onTap: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const SessionValidationPage(),
+                            ),
+                          );
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.all(20),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(14),
+                                decoration: BoxDecoration(
+                                  color: Colors.orange.withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: const Icon(
+                                  Icons.verified_user,
+                                  color: Colors.orange,
+                                  size: 28,
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              const Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'طلبات التحقق من الحضور',
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        color: AppColors.textPrimary,
+                                      ),
+                                    ),
+                                    SizedBox(height: 4),
+                                    Text(
+                                      'الموافقة أو الرفض على طلبات الموظفين',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: AppColors.textSecondary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const Icon(
+                                Icons.arrow_forward_ios,
+                                color: AppColors.textTertiary,
+                                size: 20,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 24),
+
+                    // Status Card with Timer
+                    Container(
+                      padding: const EdgeInsets.all(24),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.05),
+                            blurRadius: 10,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: _isCheckedIn
+                                      ? AppColors.success.withOpacity(0.1)
+                                      : AppColors.textTertiary.withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Icon(
+                                  _isCheckedIn
+                                      ? Icons.work
+                                      : Icons.work_outline,
+                                  color: _isCheckedIn
+                                      ? AppColors.success
+                                      : AppColors.textTertiary,
+                                  size: 24,
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      _isCheckedIn ? 'قيد العمل' : 'خارج العمل',
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        color: _isCheckedIn
+                                            ? AppColors.success
+                                            : AppColors.textSecondary,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      (_isCheckingStatus &&
+                                              !_hasCompletedInitialStatusCheck)
+                                          ? 'جاري التحقق من حالة الحضور...'
+                                          : _isCheckedIn
+                                          ? 'منذ ${_checkInTime != null ? "${_checkInTime!.hour}:${_checkInTime!.minute.toString().padLeft(2, '0')}" : ""}'
+                                          : 'سجل حضورك لبدء العمل',
+                                      style: const TextStyle(
+                                        fontSize: 14,
+                                        color: AppColors.textTertiary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+
+                          if (_isCheckedIn) ...[
+                            const SizedBox(height: 24),
+                            Container(
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              decoration: BoxDecoration(
+                                color: AppColors.surfaceVariant,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Column(
+                                children: [
+                                  const Text(
+                                    'مدة العمل',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: AppColors.textSecondary,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    _elapsedTime,
+                                    style: const TextStyle(
+                                      fontSize: 32,
+                                      fontWeight: FontWeight.bold,
+                                      color: AppColors.primaryOrange,
+                                      fontFeatures: [
+                                        FontFeature.tabularFigures(),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+
+                    const SizedBox(height: 24),
+
+                    // Main Action Button
+                    SizedBox(
+                      height: 56,
+                      child: ElevatedButton(
+                        onPressed: (_isLoading || _isCheckingStatus)
+                            ? null
+                            : (_isCheckedIn ? _handleCheckOut : _handleCheckIn),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _isCheckedIn
+                              ? AppColors.error
+                              : AppColors.primaryOrange,
+                          disabledBackgroundColor: AppColors.textTertiary,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          elevation: 0,
+                        ),
+                        child: (_isLoading || _isCheckingStatus)
+                            ? const SizedBox(
+                                height: 24,
+                                width: 24,
+                                child: CircularProgressIndicator(
+                                  color: Colors.white,
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    _isCheckedIn ? Icons.logout : Icons.login,
+                                    size: 24,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Text(
+                                    _isCheckedIn
+                                        ? 'تسجيل الانصراف'
+                                        : 'تسجيل الحضور',
+                                    style: const TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 16),
+
+                    // Send Requests Button
+                    SizedBox(
+                      height: 56,
+                      child: OutlinedButton(
+                        onPressed: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (context) => ManagerSendRequestsPage(
+                                managerId: widget.managerId,
+                              ),
+                            ),
+                          );
+                        },
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppColors.primaryOrange,
+                          side: const BorderSide(
+                            color: AppColors.primaryOrange,
+                            width: 2,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: const [
+                            Icon(Icons.send, size: 24),
+                            SizedBox(width: 12),
+                            Text(
+                              'إرسال طلبات',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 16),
+
+                    // Request Break Button
+                    if (_isCheckedIn)
+                      SizedBox(
+                        height: 48,
+                        child: OutlinedButton(
+                          onPressed: _isLoading ? null : _requestBreak,
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppColors.primaryOrange,
+                            side: const BorderSide(
+                              color: AppColors.primaryOrange,
+                              width: 2,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.coffee, size: 20),
+                              SizedBox(width: 8),
+                              Text(
+                                'طلب استراحة (بريك)',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+
+                    if (_isCheckedIn) const SizedBox(height: 16),
+
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.05),
+                            blurRadius: 12,
+                            offset: const Offset(0, 6),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: AppColors.primaryOrange.withOpacity(
+                                    0.1,
+                                  ),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: const Icon(
+                                  Icons.person_add_alt_1,
+                                  color: AppColors.primaryOrange,
+                                  size: 26,
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'إضافة موظف جديد',
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        color: AppColors.textPrimary,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      _getBranchName() != null
+                                          ? 'سيتم ربط الموظف بفرع ${_getBranchName()} تلقائياً'
+                                          : 'يرجى التأكد من تحميل بيانات الفرع قبل إضافة موظف',
+                                      style: const TextStyle(
+                                        fontSize: 14,
+                                        color: AppColors.textSecondary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 20),
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              onPressed: () {
+                                final branchName = _getBranchName();
+                                if (branchName == null || branchName.isEmpty) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                        'خطأ: لا يوجد فرع مرتبط بحسابك',
+                                      ),
+                                      backgroundColor: AppColors.error,
+                                    ),
+                                  );
+                                  return;
+                                }
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => ManagerAddEmployeePage(
+                                      managerId: widget.managerId,
+                                      managerBranch: branchName,
+                                    ),
+                                  ),
+                                );
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppColors.primaryOrange,
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 16,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                              ),
+                              icon: const Icon(Icons.add),
+                              label: const Text(
+                                'إضافة موظف للفرع',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    const SizedBox(height: 24),
                   ],
-                ),
-              ),
-
-              const SizedBox(height: 24),
-
-            ],
                 ), // Column
               ), // SingleChildScrollView
             ), // ConstrainedBox
@@ -2375,17 +2913,28 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Icon(Icons.error_outline, size: 64, color: AppColors.error),
+                  const Icon(
+                    Icons.error_outline,
+                    size: 64,
+                    color: AppColors.error,
+                  ),
                   const SizedBox(height: 16),
                   const Text(
                     'حدث خطأ في تحميل الصفحة الرئيسية',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.error),
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.error,
+                    ),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 8),
                   Text(
                     'الخطأ: ${e.toString()}',
-                    style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+                    style: const TextStyle(
+                      fontSize: 14,
+                      color: AppColors.textSecondary,
+                    ),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 24),
@@ -2398,7 +2947,10 @@ class _ManagerHomePageState extends State<ManagerHomePage> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primaryOrange,
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 12,
+                      ),
                     ),
                   ),
                 ],

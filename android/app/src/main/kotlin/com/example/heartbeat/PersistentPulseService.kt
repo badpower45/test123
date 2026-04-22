@@ -68,6 +68,7 @@ class PersistentPulseService : Service() {
         private const val EXTRA_BRANCH_LAT = "branchLatitude"
         private const val EXTRA_BRANCH_LNG = "branchLongitude"
         private const val EXTRA_BRANCH_RADIUS = "branchRadius"
+        private const val PREFS_NAME = "persistent_pulse_service"
         
         /**
          * Start the persistent pulse service
@@ -101,6 +102,12 @@ class PersistentPulseService : Service() {
             
             // Cancel any scheduled alarms
             PulseAlarmReceiver.cancelAlarm(context)
+
+            // Clear persisted params to avoid stale service restarts after checkout
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .clear()
+                .apply()
             
             Log.d(TAG, "🛑 Service stop requested")
         }
@@ -131,15 +138,19 @@ class PersistentPulseService : Service() {
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "🎯 Service started with intent")
-        
-        // Extract parameters from intent
-        employeeId = intent?.getStringExtra(EXTRA_EMPLOYEE_ID)
-        attendanceId = intent?.getStringExtra(EXTRA_ATTENDANCE_ID)
-        branchId = intent?.getStringExtra(EXTRA_BRANCH_ID)
-        intervalMinutes = intent?.getIntExtra(EXTRA_INTERVAL, 5) ?: 5
-        branchLatitude = intent?.getDoubleExtra(EXTRA_BRANCH_LAT, 0.0) ?: 0.0
-        branchLongitude = intent?.getDoubleExtra(EXTRA_BRANCH_LNG, 0.0) ?: 0.0
-        branchRadius = intent?.getDoubleExtra(EXTRA_BRANCH_RADIUS, 100.0) ?: 100.0
+
+        // START_STICKY can restart service with null intent, so restore the last known params.
+        val loadedFromIntent = loadParametersFromIntent(intent)
+        if (!loadedFromIntent) {
+            if (!restorePersistedParameters()) {
+                Log.e(TAG, "❌ Missing required parameters and no persisted backup available")
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            Log.w(TAG, "♻️ Restored service params from persisted storage")
+        } else {
+            persistCurrentParameters()
+        }
         
         Log.d(TAG, "📋 Params - Employee: $employeeId, Attendance: $attendanceId, Branch: $branchId, Interval: $intervalMinutes min")
         Log.d(TAG, "📍 Branch Location: ($branchLatitude, $branchLongitude), Radius: ${branchRadius}m")
@@ -294,13 +305,19 @@ class PersistentPulseService : Service() {
             val distance = pulseData["distance"] as? Double ?: 0.0
             val insideGeofence = if (pulseData["inside_geofence"] as? Boolean == true) 1 else 0
             
+            val validationMethod = if (latitude != null && longitude != null) {
+                "LOCATION"
+            } else {
+                "UNKNOWN"
+            }
+
             // Insert into pending_pulses table
             val sql = """
                 INSERT OR REPLACE INTO pending_pulses 
                 (id, employee_id, attendance_id, timestamp, latitude, longitude, 
-                 inside_geofence, distance_from_center, wifi_bssid, 
+                 inside_geofence, distance_from_center, wifi_bssid, validation_method,
                  validated_by_wifi, validated_by_location, created_at, synced)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, 0)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 0, ?, ?, 0)
             """.trimIndent()
             
             db.execSQL(sql, arrayOf(
@@ -312,6 +329,7 @@ class PersistentPulseService : Service() {
                 longitude,
                 insideGeofence,
                 distance,
+                validationMethod,
                 if (latitude != null && longitude != null) 1 else 0, // validated_by_location
                 currentTime
             ))
@@ -336,6 +354,9 @@ class PersistentPulseService : Service() {
                 putExtra(EXTRA_ATTENDANCE_ID, attendanceId)
                 putExtra(EXTRA_BRANCH_ID, branchId)
                 putExtra(EXTRA_INTERVAL, intervalMinutes)
+                putExtra(EXTRA_BRANCH_LAT, branchLatitude)
+                putExtra(EXTRA_BRANCH_LNG, branchLongitude)
+                putExtra(EXTRA_BRANCH_RADIUS, branchRadius)
             }
             
             val pendingIntent = PendingIntent.getBroadcast(
@@ -379,6 +400,68 @@ class PersistentPulseService : Service() {
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to schedule alarm: ${e.message}", e)
         }
+    }
+
+    private fun loadParametersFromIntent(intent: Intent?): Boolean {
+        if (intent == null) {
+            return false
+        }
+
+        val intentEmployeeId = intent.getStringExtra(EXTRA_EMPLOYEE_ID)
+        val intentAttendanceId = intent.getStringExtra(EXTRA_ATTENDANCE_ID)
+        if (intentEmployeeId.isNullOrEmpty() || intentAttendanceId.isNullOrEmpty()) {
+            return false
+        }
+
+        employeeId = intentEmployeeId
+        attendanceId = intentAttendanceId
+        branchId = intent.getStringExtra(EXTRA_BRANCH_ID)
+        intervalMinutes = intent.getIntExtra(EXTRA_INTERVAL, 5).coerceAtLeast(1)
+        branchLatitude = intent.getDoubleExtra(EXTRA_BRANCH_LAT, 0.0)
+        branchLongitude = intent.getDoubleExtra(EXTRA_BRANCH_LNG, 0.0)
+        branchRadius = intent.getDoubleExtra(EXTRA_BRANCH_RADIUS, 100.0)
+        return true
+    }
+
+    private fun persistCurrentParameters() {
+        val safeEmployeeId = employeeId ?: return
+        val safeAttendanceId = attendanceId ?: return
+
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putString(EXTRA_EMPLOYEE_ID, safeEmployeeId)
+            .putString(EXTRA_ATTENDANCE_ID, safeAttendanceId)
+            .putString(EXTRA_BRANCH_ID, branchId)
+            .putInt(EXTRA_INTERVAL, intervalMinutes.coerceAtLeast(1))
+            .putLong(EXTRA_BRANCH_LAT, java.lang.Double.doubleToRawLongBits(branchLatitude))
+            .putLong(EXTRA_BRANCH_LNG, java.lang.Double.doubleToRawLongBits(branchLongitude))
+            .putLong(EXTRA_BRANCH_RADIUS, java.lang.Double.doubleToRawLongBits(branchRadius))
+            .apply()
+    }
+
+    private fun restorePersistedParameters(): Boolean {
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+
+        val savedEmployeeId = prefs.getString(EXTRA_EMPLOYEE_ID, null)
+        val savedAttendanceId = prefs.getString(EXTRA_ATTENDANCE_ID, null)
+        if (savedEmployeeId.isNullOrEmpty() || savedAttendanceId.isNullOrEmpty()) {
+            return false
+        }
+
+        employeeId = savedEmployeeId
+        attendanceId = savedAttendanceId
+        branchId = prefs.getString(EXTRA_BRANCH_ID, null)
+        intervalMinutes = prefs.getInt(EXTRA_INTERVAL, 5).coerceAtLeast(1)
+        branchLatitude = java.lang.Double.longBitsToDouble(
+            prefs.getLong(EXTRA_BRANCH_LAT, java.lang.Double.doubleToRawLongBits(0.0))
+        )
+        branchLongitude = java.lang.Double.longBitsToDouble(
+            prefs.getLong(EXTRA_BRANCH_LNG, java.lang.Double.doubleToRawLongBits(0.0))
+        )
+        branchRadius = java.lang.Double.longBitsToDouble(
+            prefs.getLong(EXTRA_BRANCH_RADIUS, java.lang.Double.doubleToRawLongBits(100.0))
+        )
+        return true
     }
     
     /**

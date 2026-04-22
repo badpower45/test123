@@ -2,7 +2,7 @@ import 'dart:math';
 
 import 'package:supabase/supabase.dart';
 
-import 'package:oldies_workers_app/config/app_config.dart';
+import 'package:at_app/config/app_config.dart';
 
 Future<void> main(List<String> args) async {
   final client = SupabaseClient(

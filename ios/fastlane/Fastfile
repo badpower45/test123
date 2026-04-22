@@ -1,0 +1,72 @@
+default_platform(:ios)
+
+platform :ios do
+  def asc_api_key_json
+    {
+      key_id: ENV.fetch("ASC_KEY_ID"),
+      issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+      key_filepath: ENV.fetch("ASC_KEY_FILEPATH")
+    }.to_json
+  end
+
+  def asc_api_key
+    app_store_connect_api_key(
+      key_id: ENV.fetch("ASC_KEY_ID"),
+      issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+      key_filepath: ENV.fetch("ASC_KEY_FILEPATH"),
+      duration: 1200,
+      in_house: false
+    )
+  end
+
+  desc "Create app on App Store Connect if missing"
+  lane :create_appstore_app do
+    ENV["SPACESHIP_CONNECT_API_KEY"] = asc_api_key_json
+
+    produce(
+      app_identifier: ENV.fetch("APP_IDENTIFIER", "com.oldies.attendance.full"),
+      app_name: ENV.fetch("APP_NAME", "AT"),
+      sku: ENV.fetch("APP_SKU", "oldies-workers-001"),
+      language: ENV.fetch("APP_PRIMARY_LANGUAGE", "ar"),
+      platform: "ios",
+      skip_devcenter: true
+    )
+  end
+
+  desc "Upload an existing IPA to TestFlight"
+  lane :upload_ipa_to_testflight do
+    ipa_path = ENV.fetch("IPA_PATH")
+
+    pilot(
+      api_key: asc_api_key,
+      ipa: ipa_path,
+      skip_waiting_for_build_processing: true,
+      distribute_external: false
+    )
+  end
+
+  desc "Create app (if needed), build IPA, and upload to TestFlight"
+  lane :create_build_upload do
+    UI.message("SKIP_CREATE_APP=#{ENV.fetch("SKIP_CREATE_APP", "0")}")
+    if ENV.fetch("SKIP_CREATE_APP", "0") != "1"
+      create_appstore_app
+    end
+
+    build_ios_app(
+      workspace: "Runner.xcworkspace",
+      scheme: "Runner",
+      export_method: "app-store",
+      clean: true,
+      output_directory: "../build/ios/ipa",
+      output_name: "Runner.ipa",
+      xcargs: "-allowProvisioningUpdates"
+    )
+
+    pilot(
+      api_key: asc_api_key,
+      ipa: "../build/ios/ipa/Runner.ipa",
+      skip_waiting_for_build_processing: true,
+      distribute_external: false
+    )
+  end
+end

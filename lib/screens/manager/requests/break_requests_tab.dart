@@ -51,6 +51,7 @@ class _ManagerBreakRequestsTabState extends State<ManagerBreakRequestsTab> {
     super.didUpdateWidget(oldWidget);
     if (widget.shiftStatus != oldWidget.shiftStatus) {
       _currentShiftStatus = widget.shiftStatus;
+      _isShiftActive = widget.shiftStatus?.hasActiveShift ?? _isShiftActive;
     }
   }
 
@@ -109,7 +110,10 @@ class _ManagerBreakRequestsTabState extends State<ManagerBreakRequestsTab> {
       if (!mounted) {
         return;
       }
-      setState(() => _currentShiftStatus = status);
+      setState(() {
+        _currentShiftStatus = status;
+        _isShiftActive = status.hasActiveShift;
+      });
     } catch (_) {
       // Ignore shift status errors silently.
     }
@@ -278,6 +282,7 @@ class _ManagerBreakRequestsTabState extends State<ManagerBreakRequestsTab> {
   Widget build(BuildContext context) {
   final shiftStatusKnown = !widget.isShiftStatusLoading && _currentShiftStatus != null;
   final hasActiveShift = shiftStatusKnown ? _currentShiftStatus!.hasActiveShift : true;
+  final canRequestBreak = !_isLoadingStatus && (_isShiftActive || hasActiveShift);
     Break? activeBreak;
     for (final item in _breaks) {
       if (item.status == BreakStatus.active) {
@@ -298,7 +303,7 @@ class _ManagerBreakRequestsTabState extends State<ManagerBreakRequestsTab> {
         physics: const AlwaysScrollableScrollPhysics(),
         children: [
           ElevatedButton.icon(
-            onPressed: (_isShiftActive && !_isLoadingStatus) ? _openBreakRequestSheet : null,
+            onPressed: canRequestBreak ? _openBreakRequestSheet : null,
             icon: const Icon(Icons.add),
             label: _isLoadingStatus
                 ? const SizedBox(

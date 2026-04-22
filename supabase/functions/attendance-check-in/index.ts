@@ -48,19 +48,85 @@ function getCairoNow(): Date {
   return new Date();
 }
 
+function getCairoOffsetMinutes(referenceUtc: Date): number {
+  const timezonePart = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Africa/Cairo',
+    timeZoneName: 'shortOffset',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).formatToParts(referenceUtc).find((part) => part.type === 'timeZoneName')?.value ?? 'GMT+2';
+
+  const match = timezonePart.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/i);
+  if (!match) {
+    return 120;
+  }
+
+  const sign = match[1] === '-' ? -1 : 1;
+  const hours = Number(match[2] ?? '0');
+  const minutes = Number(match[3] ?? '0');
+
+  return sign * ((hours * 60) + minutes);
+}
+
+function parseNaiveCairoTimestamp(input: string): Date | null {
+  const match = input.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/,
+  );
+
+  if (!match) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6] ?? '0');
+  const millisecond = Number((match[7] ?? '').padEnd(3, '0') || '0');
+
+  if (
+    !Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day) ||
+    !Number.isInteger(hour) || !Number.isInteger(minute) || !Number.isInteger(second) ||
+    month < 1 || month > 12 || day < 1 || day > 31 ||
+    hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59
+  ) {
+    return null;
+  }
+
+  const utcGuessMs = Date.UTC(year, month - 1, day, hour, minute, second, millisecond);
+  const offsetMinutes = getCairoOffsetMinutes(new Date(utcGuessMs));
+  const corrected = new Date(utcGuessMs - (offsetMinutes * 60 * 1000));
+
+  return Number.isNaN(corrected.getTime()) ? null : corrected;
+}
+
 function parseTimestamp(input: unknown): Date | null {
   if (!input) return null;
   if (input instanceof Date) {
     return Number.isNaN(input.getTime()) ? null : input;
   }
   if (typeof input === 'number') {
-    const date = new Date(input);
+    const normalized = input < 1e12 ? input * 1000 : input;
+    const date = new Date(normalized);
     return Number.isNaN(date.getTime()) ? null : date;
   }
   if (typeof input === 'string') {
     const trimmed = input.trim();
     if (!trimmed) return null;
-    const date = new Date(trimmed);
+
+    const normalized = trimmed.replace(' ', 'T');
+    const hasTimezone = /(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(normalized);
+
+    let date: Date;
+    if (hasTimezone) {
+      date = new Date(normalized);
+    } else {
+      // Legacy/mobile fallback: naive timestamps are treated as Cairo local time,
+      // including DST-aware offset changes.
+      date = parseNaiveCairoTimestamp(normalized) ?? new Date(normalized);
+    }
+
     return Number.isNaN(date.getTime()) ? null : date;
   }
   return null;
@@ -81,6 +147,20 @@ function cairoTimeString(date: Date): string {
   // Get time string in Cairo timezone (HH:mm:ss)
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: 'Africa/Cairo',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  return formatter.format(date);
+}
+
+function cairoDateTimeString(date: Date): string {
+  const formatter = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Africa/Cairo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
@@ -386,7 +466,49 @@ serve(async (req: Request) => {
       });
     }
 
-    // First check for any existing attendance today (regardless of status)
+    // Block duplicate check-ins even if an old active session crossed midnight.
+    const { data: activeAnyDay, error: activeAnyDayError } = await supabase
+      .from('attendance')
+      .select('id, check_in_time, check_out_time, status, date')
+      .eq('employee_id', employeeId)
+      .eq('status', 'active')
+      .order('check_in_time', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (activeAnyDayError) {
+      console.warn('[attendance-check-in] Failed to check active attendance', activeAnyDayError);
+    }
+
+    if (activeAnyDay && !activeAnyDay.check_out_time) {
+      const checkInTime = new Date(activeAnyDay.check_in_time);
+      const timeDiff = cairoNow.getTime() - checkInTime.getTime();
+      const hoursAgo = Math.floor(timeDiff / (1000 * 60 * 60));
+      const minutesAgo = Math.floor((timeDiff % (1000 * 60 * 60)) / (1000 * 60));
+
+      let timeDisplay = '';
+      if (hoursAgo > 0) {
+        timeDisplay = `منذ ${hoursAgo} ساعة`;
+      } else if (minutesAgo > 0) {
+        timeDisplay = `منذ ${minutesAgo} دقيقة`;
+      } else {
+        timeDisplay = 'منذ لحظات';
+      }
+
+      console.log(`[attendance-check-in] Employee ${employeeId} already has active attendance: ${activeAnyDay.id}`);
+
+      return response(409, {
+        success: false,
+        alreadyCheckedIn: true,
+        error: '⚠️ لديك حضور نشط بالفعل!',
+        message: `تم تسجيل الحضور ${timeDisplay}\nيجب تسجيل الانصراف أولاً`,
+        attendance: activeAnyDay,
+        check_in_time: activeAnyDay.check_in_time,
+        time_since_check_in: timeDisplay,
+      });
+    }
+
+    // Then check today's records to prevent duplicate ACTIVE attendance on the same day.
     const todayDate = cairoDateString(cairoNow);
     const { data: existingToday, error: existingTodayError } = await supabase
       .from('attendance')
@@ -432,40 +554,6 @@ serve(async (req: Request) => {
         });
       }
       
-      // If it's completed, reactivate it (allow re-check-in after check-out)
-      if (existingRecord.status === 'completed' && existingRecord.check_out_time) {
-        console.log(`[attendance-check-in] Employee ${employeeId} re-checking in after checkout, updating existing record`);
-        
-        const eventTimestamp = parseTimestamp(body.timestamp) ?? cairoNow;
-        const { data: updatedRecord, error: updateError } = await supabase
-          .from('attendance')
-          .update({
-            check_in_time: eventTimestamp.toISOString(),
-            check_out_time: null,
-            status: 'active',
-            work_hours: null,
-          })
-          .eq('id', existingRecord.id)
-          .select('id, check_in_time, status, employee_id')
-          .maybeSingle();
-        
-        if (updateError) {
-          console.error('[attendance-check-in] Failed to reactivate attendance', updateError);
-          return response(500, { success: false, error: 'فشل إعادة تسجيل الحضور' });
-        }
-        
-        return response(201, {
-          success: true,
-          message: 'تم إعادة تسجيل الحضور بنجاح',
-          attendance: updatedRecord,
-          reactivated: true,
-          validation: {
-            wifi: isWifiValid,
-            location: isWithinGeofence,
-            distance: distance !== null ? Math.round(distance) : null,
-          },
-        });
-      }
     }
 
     const eventTimestamp = parseTimestamp(body.timestamp) ?? cairoNow;
@@ -605,6 +693,11 @@ serve(async (req: Request) => {
       success: true,
       message: 'تم تسجيل الحضور بنجاح',
       attendance: insertData,
+      time_context: {
+        stored_timezone: 'UTC',
+        display_timezone: 'Africa/Cairo',
+        check_in_time_cairo: cairoDateTimeString(eventTimestamp),
+      },
       validation: {
         wifi: isWifiValid,
         location: isWithinGeofence,

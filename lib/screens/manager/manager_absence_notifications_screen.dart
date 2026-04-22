@@ -195,7 +195,7 @@ class _ManagerAbsenceNotificationsScreenState
                       const SizedBox(height: 16),
                       Text(
                         'فشل في تحميل البيانات',
-                        style: GoogleFonts.ibmPlexSansArabic(
+                        style: GoogleFonts.tajawal(
                           fontSize: 18,
                           fontWeight: FontWeight.bold,
                         ),
@@ -204,7 +204,7 @@ class _ManagerAbsenceNotificationsScreenState
                       Text(
                         _error!,
                         textAlign: TextAlign.center,
-                        style: GoogleFonts.ibmPlexSansArabic(
+                        style: GoogleFonts.tajawal(
                           fontSize: 14,
                           color: Colors.grey,
                         ),
@@ -226,7 +226,7 @@ class _ManagerAbsenceNotificationsScreenState
                           const SizedBox(height: 16),
                           Text(
                             'لا توجد إشعارات غياب',
-                            style: GoogleFonts.ibmPlexSansArabic(
+                            style: GoogleFonts.tajawal(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
                               color: Colors.grey,
@@ -235,7 +235,7 @@ class _ManagerAbsenceNotificationsScreenState
                           const SizedBox(height: 8),
                           Text(
                             'جميع إشعارات الغياب تمت مراجعتها',
-                            style: GoogleFonts.ibmPlexSansArabic(
+                            style: GoogleFonts.tajawal(
                               fontSize: 14,
                               color: Colors.grey,
                             ),
@@ -264,7 +264,7 @@ class _ManagerAbsenceNotificationsScreenState
                                       Expanded(
                                         child: Text(
                                           notification.employeeName,
-                                          style: GoogleFonts.ibmPlexSansArabic(
+                                          style: GoogleFonts.tajawal(
                                             fontSize: 16,
                                             fontWeight: FontWeight.bold,
                                           ),
@@ -281,7 +281,7 @@ class _ManagerAbsenceNotificationsScreenState
                                         ),
                                         child: Text(
                                           'غائب',
-                                          style: GoogleFonts.ibmPlexSansArabic(
+                                          style: GoogleFonts.tajawal(
                                             fontSize: 12,
                                             color: Colors.orange.shade800,
                                           ),
@@ -296,7 +296,7 @@ class _ManagerAbsenceNotificationsScreenState
                                       const SizedBox(width: 4),
                                       Text(
                                         'تاريخ الغياب: ${notification.absenceDate}',
-                                        style: GoogleFonts.ibmPlexSansArabic(
+                                        style: GoogleFonts.tajawal(
                                           fontSize: 14,
                                           color: Colors.grey[700],
                                         ),
@@ -310,7 +310,7 @@ class _ManagerAbsenceNotificationsScreenState
                                       const SizedBox(width: 4),
                                       Text(
                                         'تم الإبلاغ: ${_formatDateTime(notification.notifiedAt)}',
-                                        style: GoogleFonts.ibmPlexSansArabic(
+                                        style: GoogleFonts.tajawal(
                                           fontSize: 12,
                                           color: Colors.grey[600],
                                         ),
@@ -336,14 +336,14 @@ class _ManagerAbsenceNotificationsScreenState
                                               children: [
                                                 Text(
                                                   'الخصم المقترح (يومين):',
-                                                  style: GoogleFonts.ibmPlexSansArabic(
+                                                  style: GoogleFonts.tajawal(
                                                     fontSize: 11,
                                                     color: Colors.grey[700],
                                                   ),
                                                 ),
                                                 Text(
                                                   '${notification.deductionAmount!.toStringAsFixed(0)} جنيه',
-                                                  style: GoogleFonts.ibmPlexSansArabic(
+                                                  style: GoogleFonts.tajawal(
                                                     fontSize: 16,
                                                     fontWeight: FontWeight.bold,
                                                     color: Colors.red.shade700,

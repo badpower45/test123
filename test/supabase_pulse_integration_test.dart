@@ -5,18 +5,40 @@ import 'dart:math';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'package:oldies_workers_app/config/app_config.dart';
-import 'package:oldies_workers_app/models/pulse.dart';
-import 'package:oldies_workers_app/services/pulse_backend_client.dart';
+import 'package:at_app/config/app_config.dart';
+import 'package:at_app/models/pulse.dart';
+import 'package:at_app/services/pulse_backend_client.dart';
+
+const _runSupabaseIntegration = bool.fromEnvironment(
+  'RUN_SUPABASE_INTEGRATION',
+  defaultValue: false,
+);
 
 void main() {
-  setUpAll(() {
+  setUpAll(() async {
+    if (!_runSupabaseIntegration) {
+      return;
+    }
+
     TestWidgetsFlutterBinding.ensureInitialized();
+
+    try {
+      await Supabase.initialize(
+        url: AppConfig.supabaseUrl,
+        anonKey: AppConfig.supabaseAnonKey,
+      );
+    } catch (_) {
+      // Ignore when an existing initialized instance is reused across tests.
+    }
   });
 
   testWidgets(
     'PulseBackendClient sends and persists to Supabase',
     (tester) async {
+      if (!_runSupabaseIntegration) {
+        return;
+      }
+
       await HttpOverrides.runWithHttpOverrides(() async {
         // Removed: PulseBackendClient.resetTestingOverrides (method does not exist)
         await PulseBackendClient.initialize();
@@ -38,7 +60,7 @@ void main() {
         final rows = await client
             .from(AppConfig.supabasePulseTable)
             .select()
-            .eq('employeeId', pulse.employeeId)
+          .eq('employee_id', pulse.employeeId)
             .eq('timestamp', pulse.timestamp.toIso8601String())
             .limit(1);
 
@@ -47,9 +69,10 @@ void main() {
         await client
             .from(AppConfig.supabasePulseTable)
             .delete()
-            .eq('employeeId', pulse.employeeId);
+          .eq('employee_id', pulse.employeeId);
       }, _AllowRealHttpOverrides());
     },
+    skip: !_runSupabaseIntegration,
     timeout: const Timeout(Duration(minutes: 2)),
   );
 }

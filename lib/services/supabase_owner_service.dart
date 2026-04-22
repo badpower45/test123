@@ -16,7 +16,7 @@ class SupabaseOwnerService {
 
       var query = _supabase
           .from('employees')
-          .select('*, attendance!left(id, date, check_in_time, check_out_time, total_hours)')
+          .select('*, attendance!left(id, date, check_in_time, check_out_time, total_hours, status)')
           .eq('is_active', true);
 
       if (branchName != null) {
@@ -38,7 +38,9 @@ class SupabaseOwnerService {
         employeesWithStatus.add({
           ...employee,
           'current_attendance': todayAttendance,
-          'is_checked_in': todayAttendance != null && todayAttendance['check_out_time'] == null,
+          'is_checked_in': todayAttendance != null &&
+              todayAttendance['check_out_time'] == null &&
+              todayAttendance['status'] == 'active',
         });
       }
 
@@ -399,8 +401,23 @@ class SupabaseOwnerService {
           .from('attendance')
           .select()
           .eq('date', today);
-      
-      final currentlyPresent = (allTodayAttendance as List).where((att) => att['check_out_time'] == null).toList();
+
+        final activeEmployeeIds = (totalEmployees as List)
+          .map((emp) => emp['id']?.toString())
+          .whereType<String>()
+          .toSet();
+
+        final todayAttendanceList = (todayAttendance as List);
+        final currentlyPresent = (allTodayAttendance as List)
+          .where((att) =>
+            att['check_out_time'] == null &&
+            att['status'] == 'active' &&
+            activeEmployeeIds.contains(att['employee_id']?.toString()))
+          .toList();
+
+        final todayAttendanceActive = todayAttendanceList
+          .where((att) => activeEmployeeIds.contains(att['employee_id']?.toString()))
+          .toList();
 
       // Pending requests
       final pendingLeave = await _supabase
@@ -420,7 +437,7 @@ class SupabaseOwnerService {
 
       return {
         'total_employees': (totalEmployees as List).length,
-        'today_attendance': (todayAttendance as List).length,
+        'today_attendance': todayAttendanceActive.length,
         'currently_present': currentlyPresent.length,
         'pending_leave_requests': (pendingLeave as List).length,
         'pending_attendance_requests': (pendingAttendance as List).length,

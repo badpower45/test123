@@ -11,6 +11,8 @@ class SupabasePulseService {
     required double latitude,
     required double longitude,
     bool isWithinGeofence = true,
+    String? wifiBssid,
+    String? validationMethod,
   }) async {
     try {
       await _supabase.from('pulses').insert({
@@ -20,6 +22,8 @@ class SupabasePulseService {
         'longitude': longitude,
         'is_within_geofence': isWithinGeofence,
         'timestamp': DateTime.now().toUtc().toIso8601String(),
+        if (wifiBssid != null) 'wifi_bssid': wifiBssid,
+        if (validationMethod != null) 'validation_method': validationMethod,
       });
 
       return true;

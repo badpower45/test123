@@ -54,6 +54,14 @@ supabase.env
 supabase/.temp/
 .replit/
 
+# Apple signing secrets and local provisioning
+*.p8
+*.mobileprovision
+
+# Vercel local project linkage files
+.vercel/
+**/.vercel/
+
 # Logs
 logs
 npm-debug.log*

@@ -94,6 +94,48 @@ function mapBreakRow(row: any): Record<string, unknown> {
   };
 }
 
+async function resolveAssignedManagerId(supabase: any, employeeId: string): Promise<string | null> {
+  try {
+    const { data: employee, error: employeeError } = await supabase
+      .from('employees')
+      .select('id, role, branch_id, branch')
+      .eq('id', employeeId)
+      .maybeSingle();
+
+    if (employeeError || !employee) {
+      console.warn('[employee-break] could not resolve employee for manager assignment', employeeError);
+      return null;
+    }
+
+    let managerQuery = supabase
+      .from('employees')
+      .select('id')
+      .eq('role', 'manager')
+      .eq('is_active', true)
+      .neq('id', employeeId)
+      .limit(1);
+
+    if (employee.branch_id) {
+      managerQuery = managerQuery.eq('branch_id', employee.branch_id);
+    } else if (employee.branch) {
+      managerQuery = managerQuery.eq('branch', employee.branch);
+    } else {
+      return null;
+    }
+
+    const { data: manager, error: managerError } = await managerQuery.maybeSingle();
+    if (managerError) {
+      console.warn('[employee-break] manager lookup failed', managerError);
+      return null;
+    }
+
+    return manager?.id?.toString() ?? null;
+  } catch (error) {
+    console.warn('[employee-break] unexpected manager assignment error', error);
+    return null;
+  }
+}
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { status: 200, headers: corsHeaders });
@@ -130,6 +172,7 @@ serve(async (req: Request) => {
         // Note: break_start is NOT NULL in schema, so we set it to request time
         // The actual break start will be recorded in a separate tracking system or via start_time later
         const now = getCairoNow().toISOString();
+        const assignedManagerId = await resolveAssignedManagerId(supabase, employeeId);
         const { data, error } = await supabase
           .from('breaks')
           .insert({
@@ -137,6 +180,7 @@ serve(async (req: Request) => {
             break_start: now, // Required by schema (NOT NULL) - represents request time
             duration_minutes: Math.round(duration), // Correct column name in schema
             status: 'PENDING', // Explicitly set status to PENDING (waiting for approval)
+            assigned_manager_id: assignedManagerId,
           })
           .select('*')
           .maybeSingle();

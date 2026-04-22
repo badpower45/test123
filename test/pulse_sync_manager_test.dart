@@ -2,17 +2,24 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
-import 'package:oldies_workers_app/models/pulse.dart';
-import 'package:oldies_workers_app/models/pulse_log_entry.dart';
-import 'package:oldies_workers_app/services/pulse_backend_client.dart';
-import 'package:oldies_workers_app/services/pulse_sync_manager.dart';
+import 'package:at_app/models/pulse.dart';
+import 'package:at_app/models/pulse_log_entry.dart';
+import 'package:at_app/database/offline_database.dart';
+import 'package:at_app/services/pulse_backend_client.dart';
+import 'package:at_app/services/pulse_sync_manager.dart';
 
 void main() {
   late Directory tempDir;
   Pulse? lastSinglePulse;
   List<Pulse>? lastBulkPayload;
   var bulkShouldSucceed = true;
+
+  setUpAll(() {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+  });
 
   setUp(() async {
     tempDir = await Directory.systemTemp.createTemp('oldies_pulse_test');
@@ -32,6 +39,9 @@ void main() {
         return bulkShouldSucceed;
       },
     );
+
+    final db = await OfflineDatabase.instance.database;
+    await db.delete('pending_pulses');
   });
 
   tearDown(() async {
@@ -63,14 +73,14 @@ void main() {
       employeeId: 'EMP001',
       latitude: 30.0,
       longitude: 31.0,
-      timestamp: DateTime.utc(2024, 5, 10, 12, 0, 0),
+      timestamp: DateTime.utc(2024, 5, 10, 12, 10, 0),
       isFake: false,
     );
     final secondPulse = Pulse(
       employeeId: 'EMP001',
       latitude: 30.1,
       longitude: 31.1,
-      timestamp: DateTime.utc(2024, 5, 10, 12, 0, 10),
+      timestamp: DateTime.utc(2024, 5, 10, 12, 10, 10),
       isFake: false,
     );
 
@@ -92,7 +102,7 @@ void main() {
       employeeId: 'EMP001',
       latitude: 30.0,
       longitude: 31.0,
-      timestamp: DateTime.utc(2024, 5, 10, 12, 0, 0),
+      timestamp: DateTime.utc(2024, 5, 11, 12, 0, 0),
       isFake: false,
     );
 

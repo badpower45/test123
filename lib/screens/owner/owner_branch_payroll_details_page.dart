@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../services/payroll_service.dart';
+import '../../utils/owner_time_utils.dart';
 import 'owner_employee_payroll_report_page.dart';
 
 class OwnerBranchPayrollDetailsPage extends StatefulWidget {
@@ -331,7 +332,7 @@ class _OwnerBranchPayrollDetailsPageState extends State<OwnerBranchPayrollDetail
                                             Builder(builder: (context) {
                                               try {
                                                 return Text(
-                                                  'تم الدفع في ${DateFormat('dd/MM/yyyy HH:mm').format(DateTime.parse(employee['paid_at'] as String))}',
+                                                  'تم الدفع في ${OwnerTimeUtils.formatDateTime(employee['paid_at'] as String)}',
                                                   style: const TextStyle(
                                                     fontSize: 11,
                                                     color: Colors.green,

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../../models/detailed_attendance_request.dart';
 import '../../../services/supabase_requests_service.dart';
 import '../../../theme/app_colors.dart';
+import '../../../utils/owner_time_utils.dart';
 
 class OwnerAttendanceRequestsScreen extends StatefulWidget {
   const OwnerAttendanceRequestsScreen({super.key, required this.ownerId});
@@ -240,30 +241,17 @@ class _AttendanceRequestCard extends StatelessWidget {
   final VoidCallback onApprove;
 
   String _formatDate(String dateStr) {
-    try {
-      final date = DateTime.parse(dateStr);
-      return '${date.day}/${date.month}/${date.year}';
-    } catch (e) {
-      return '-';
-    }
+    return OwnerTimeUtils.formatDate(dateStr);
   }
 
   String _formatTime(String dateStr) {
-    try {
-      final date = DateTime.parse(dateStr);
-      return '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
-    } catch (e) {
-      return '-';
-    }
+    return OwnerTimeUtils.formatTimeShort(dateStr);
   }
 
   String _formatFullDateTime(String dateStr) {
-    try {
-      final date = DateTime.parse(dateStr);
-      return '${date.day}/${date.month}/${date.year} - ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
-    } catch (e) {
-      return '-';
-    }
+    final formatted = OwnerTimeUtils.formatDateTime(dateStr);
+    if (formatted == '-') return '-';
+    return formatted.replaceFirst(' ', ' - ');
   }
 
   @override

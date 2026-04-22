@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../services/payroll_service.dart';
-import '../../utils/time_utils.dart';
+import '../../utils/owner_time_utils.dart';
 
 class EmployeeAttendanceTableScreen extends StatefulWidget {
   final String employeeId;
@@ -261,9 +261,8 @@ class _EmployeeAttendanceTableScreenState extends State<EmployeeAttendanceTableS
         DataColumn(label: Text('الخصومات', style: TextStyle(fontWeight: FontWeight.bold))),
       ],
       rows: _tableRows.map((row) {
-        // ✅ Use TimeUtils to format times correctly (converts to Cairo timezone)
-        final checkInFormatted = TimeUtils.formatTimeShort(row['checkIn']);
-        final checkOutFormatted = TimeUtils.formatTimeShort(row['checkOut']);
+        final checkInFormatted = OwnerTimeUtils.formatTimeShort(row['checkIn']?.toString());
+        final checkOutFormatted = OwnerTimeUtils.formatTimeShort(row['checkOut']?.toString());
 
         return DataRow(
           cells: [

@@ -50,27 +50,34 @@ class SyncService {
     try {
       // First: Quick connectivity check
       final connectivityResult = await Connectivity().checkConnectivity();
-      
+
       if (connectivityResult == ConnectivityResult.none) {
         print('❌ No connectivity detected');
         return false;
       }
-      
+
       // If we have connectivity type, try a simple network request
       try {
         // Use Supabase REST API with anon key (more reliable than auth endpoint)
         final healthUrl = Uri.parse('${SupabaseConfig.supabaseUrl}/rest/v1/');
         final response = await http
-            .get(healthUrl, headers: { 
-              'apikey': SupabaseConfig.supabaseAnonKey,
-              'Accept': 'application/json' 
-            })
+            .get(
+              healthUrl,
+              headers: {
+                'apikey': SupabaseConfig.supabaseAnonKey,
+                'Accept': 'application/json',
+              },
+            )
             .timeout(const Duration(seconds: 4));
 
         // Any response from Supabase means internet is working
         // (even 404 or 400 means we reached the server)
         final hasNet = response.statusCode < 500;
-        print(hasNet ? '✅ Internet available' : '❌ Supabase unreachable (${response.statusCode})');
+        print(
+          hasNet
+              ? '✅ Internet available'
+              : '❌ Supabase unreachable (${response.statusCode})',
+        );
         return hasNet;
       } catch (e) {
         print('❌ Network check failed (Supabase health): $e');
@@ -105,9 +112,10 @@ class SyncService {
       if (kIsWeb) {
         // === WEB: Use Hive ===
         print('🌐 Syncing Web data (Hive)...');
-        
+
         // Sync attendance from Hive
-        final unsyncedAttendance = await _offlineService.getUnsyncedAttendance();
+        final unsyncedAttendance = await _offlineService
+            .getUnsyncedAttendance();
         for (var record in unsyncedAttendance) {
           try {
             if (record['type'] == 'check_in') {
@@ -135,15 +143,14 @@ class SyncService {
             failedCount++;
           }
         }
-
       } else {
         // === MOBILE: Use SQLite ===
         print('📱 Syncing Mobile data (SQLite)...');
-        
+
         // Check if database file exists and is initialized
         try {
           final db = OfflineDatabase.instance;
-          
+
           // Verify database is accessible
           final pendingCount = await db.getPendingCount();
           print('📊 Total pending records in SQLite: $pendingCount');
@@ -167,7 +174,9 @@ class SyncService {
               await db.markCheckinSynced(checkin['id']);
               syncedCount++;
             } catch (e) {
-              print('[SyncService] Failed to sync check-in ${checkin['id']}: $e');
+              print(
+                '[SyncService] Failed to sync check-in ${checkin['id']}: $e',
+              );
               failedCount++;
             }
           }
@@ -181,7 +190,9 @@ class SyncService {
               await db.markCheckoutSynced(checkout['id']);
               syncedCount++;
             } catch (e) {
-              print('[SyncService] Failed to sync check-out ${checkout['id']}: $e');
+              print(
+                '[SyncService] Failed to sync check-out ${checkout['id']}: $e',
+              );
               failedCount++;
             }
           }
@@ -209,7 +220,9 @@ class SyncService {
               await db.markViolationSynced(violation['id']);
               syncedCount++;
             } catch (e) {
-              print('[SyncService] Failed to sync violation ${violation['id']}: $e');
+              print(
+                '[SyncService] Failed to sync violation ${violation['id']}: $e',
+              );
               failedCount++;
             }
           }
@@ -218,14 +231,10 @@ class SyncService {
           await db.deleteSyncedCheckins();
           await db.deleteSyncedCheckouts();
           print('🗑️ Cleaned up synced records');
-          
         } catch (e) {
           print('❌ SQLite database error: $e');
           print('💡 Database may not be initialized yet (first run)');
-          return {
-            'success': false,
-            'message': 'Database not ready: $e',
-          };
+          return {'success': false, 'message': 'Database not ready: $e'};
         }
       }
 
@@ -239,7 +248,7 @@ class SyncService {
         'success': true,
         'synced': syncedCount,
         'failed': failedCount,
-        'message': syncedCount > 0 
+        'message': syncedCount > 0
             ? 'تم مزامنة البيانات ورفعها بالكامل'
             : 'لا توجد بيانات للمزامنة',
       };
@@ -252,8 +261,10 @@ class SyncService {
   }
 
   Future<void> _syncCheckin(Map<String, dynamic> checkin) async {
-    print('📥 Syncing check-in: employee=${checkin['employee_id']}, wifi=${checkin['wifi_bssid']}');
-    
+    print(
+      '📥 Syncing check-in: employee=${checkin['employee_id']}, wifi=${checkin['wifi_bssid']}',
+    );
+
     final payload = {
       'employee_id': checkin['employee_id'],
       'latitude': checkin['latitude'],
@@ -261,7 +272,11 @@ class SyncService {
       if (checkin['wifi_bssid'] != null) 'wifi_bssid': checkin['wifi_bssid'],
       if (checkin['timestamp'] != null) 'timestamp': checkin['timestamp'],
     };
-    final result = await SupabaseFunctionClient.post('attendance-check-in', payload, throwOnError: false);
+    final result = await SupabaseFunctionClient.post(
+      'attendance-check-in',
+      payload,
+      throwOnError: false,
+    );
 
     String? newAttendanceId;
     if (result != null) {
@@ -282,7 +297,9 @@ class SyncService {
           employeeId: checkin['employee_id'],
           attendanceId: newAttendanceId,
         );
-        print('🔄 Backfilled attendance_id for $affected pending pulses (id=$newAttendanceId)');
+        print(
+          '🔄 Backfilled attendance_id for $affected pending pulses (id=$newAttendanceId)',
+        );
       } catch (e) {
         print('⚠️ Backfill pulses failed: $e');
       }
@@ -292,13 +309,17 @@ class SyncService {
   }
 
   Future<void> _syncCheckout(Map<String, dynamic> checkout) async {
-    print('📤 Syncing check-out: employee=${checkout['employee_id']}, attendance_id=${checkout['attendance_id']}');
+    print(
+      '📤 Syncing check-out: employee=${checkout['employee_id']}, attendance_id=${checkout['attendance_id']}',
+    );
     final note = checkout['notes'] as String?;
     final isForced = note?.toLowerCase().contains('auto') ?? false;
-    
+
     final payload = {
       'employee_id': checkout['employee_id'],
-      if (checkout['attendance_id'] != null) 'attendance_id': checkout['attendance_id'], // ✅ Add attendance_id if available
+      if (checkout['attendance_id'] != null)
+        'attendance_id':
+            checkout['attendance_id'], // ✅ Add attendance_id if available
       'latitude': checkout['latitude'],
       'longitude': checkout['longitude'],
       if (checkout['wifi_bssid'] != null) 'wifi_bssid': checkout['wifi_bssid'],
@@ -313,7 +334,9 @@ class SyncService {
   }
 
   Future<void> _syncPulse(Map<String, dynamic> pulse) async {
-    print('📍 Syncing pulse: employee=${pulse['employee_id']}, inside=${pulse['inside_geofence']}');
+    print(
+      '📍 Syncing pulse: employee=${pulse['employee_id']}, inside=${pulse['inside_geofence']}',
+    );
 
     bool? insideGeofence;
     final rawInside = pulse['inside_geofence'];
@@ -341,31 +364,60 @@ class SyncService {
     String? attendanceId = pulse['attendance_id'] as String?;
     if (attendanceId != null) {
       final trimmed = attendanceId.trim();
-      final isPlaceholder = RegExp(r'(pending|local|temp|dummy)', caseSensitive: false).hasMatch(trimmed) || trimmed.length < 8;
-      final uuidRegex = RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$', caseSensitive: false);
+      final isPlaceholder =
+          RegExp(
+            r'(pending|local|temp|dummy)',
+            caseSensitive: false,
+          ).hasMatch(trimmed) ||
+          trimmed.length < 8;
+      final uuidRegex = RegExp(
+        r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+        caseSensitive: false,
+      );
       if (isPlaceholder || !uuidRegex.hasMatch(trimmed)) {
         attendanceId = null; // Strip invalid
       }
     }
+
+    final validationMethod = (pulse['validation_method'] as String?) ??
+        ((pulse['validated_by_wifi'] == 1 || pulse['validated_by_wifi'] == true)
+            ? 'WIFI'
+            : ((pulse['validated_by_location'] == 1 || pulse['validated_by_location'] == true)
+                ? 'LOCATION'
+                : 'UNKNOWN'));
 
     final payload = {
       'pulses': [
         {
           'employee_id': pulse['employee_id'],
           if (attendanceId != null) 'attendance_id': attendanceId,
+          if (pulse['branch_id'] != null) 'branch_id': pulse['branch_id'],
           'timestamp': pulse['timestamp'],
           'latitude': pulse['latitude'],
           'longitude': pulse['longitude'],
           if (pulse['wifi_bssid'] != null) 'wifi_bssid': pulse['wifi_bssid'],
+          'validation_method': validationMethod,
           if (insideGeofence != null) 'inside_geofence': insideGeofence,
-          if (distanceFromCenter != null) 'distance_from_center': distanceFromCenter,
+          if (insideGeofence != null) 'is_within_geofence': insideGeofence,
+          if (distanceFromCenter != null)
+            'distance_from_center': distanceFromCenter,
+          if (pulse['validated_by_wifi'] != null)
+            'validated_by_wifi':
+                pulse['validated_by_wifi'] == 1 ||
+                pulse['validated_by_wifi'] == true,
+          if (pulse['validated_by_location'] != null)
+            'validated_by_location':
+                pulse['validated_by_location'] == 1 ||
+                pulse['validated_by_location'] == true,
         },
       ],
     };
 
     await SupabaseFunctionClient.post('sync-pulses', payload);
 
-    print('✅ Pulse synced successfully (distance=${distanceFromCenter ?? 'n/a'}m)');
+    print(
+      '✅ Pulse synced successfully (distance=${distanceFromCenter ?? 'n/a'}m)',
+    );
   }
 
   Future<void> _syncGeofenceViolation(Map<String, dynamic> violation) async {
@@ -379,7 +431,7 @@ class SyncService {
       'distance': violation['distance'],
       'geofence_radius': violation['geofence_radius'],
     };
-    
+
     await SupabaseFunctionClient.post('log-violation', payload);
     print('✅ Violation synced successfully');
   }

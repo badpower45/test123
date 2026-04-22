@@ -247,7 +247,7 @@ serve(async (req: Request) => {
         id: emp.id,
         fullName: emp.full_name,
         role: emp.role,
-        active: emp.active,
+        active: emp.is_active ?? true,
         branchId: emp.branch_id,
         hourlyRate: Number(hourlyRate.toFixed(2)),
         totalPulses: stats.totalPulses,

@@ -53,6 +53,9 @@ class PulseAlarmReceiver : BroadcastReceiver() {
         val attendanceId = intent.getStringExtra("attendanceId")
         val branchId = intent.getStringExtra("branchId")
         val interval = intent.getIntExtra("interval", 5)
+        val branchLatitude = intent.getDoubleExtra("branchLatitude", 0.0)
+        val branchLongitude = intent.getDoubleExtra("branchLongitude", 0.0)
+        val branchRadius = intent.getDoubleExtra("branchRadius", 100.0)
         
         Log.d(TAG, "📋 Params - Employee: $employeeId, Attendance: $attendanceId")
         
@@ -62,7 +65,10 @@ class PulseAlarmReceiver : BroadcastReceiver() {
                 "employeeId" to employeeId,
                 "attendanceId" to attendanceId,
                 "branchId" to (branchId ?: ""),
-                "interval" to interval
+                "interval" to interval,
+                "branchLatitude" to branchLatitude,
+                "branchLongitude" to branchLongitude,
+                "branchRadius" to branchRadius
             )
             
             // Restart the service

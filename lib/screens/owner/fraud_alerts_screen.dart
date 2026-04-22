@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../services/supabase_fraud_alerts_service.dart';
+import '../../utils/owner_time_utils.dart';
 
 /// Fraud Alerts Screen for Managers/Owners
 /// Shows fraud detection alerts with ability to review and resolve
@@ -485,8 +486,9 @@ class _FraudAlertsScreenState extends State<FraudAlertsScreen> {
   }
 
   String _formatTime(DateTime time) {
+    final displayTime = time.add(const Duration(hours: 2));
     final now = DateTime.now();
-    final difference = now.difference(time);
+    final difference = now.difference(displayTime);
 
     if (difference.inMinutes < 1) {
       return 'Just now';
@@ -497,11 +499,11 @@ class _FraudAlertsScreenState extends State<FraudAlertsScreen> {
     } else if (difference.inDays < 7) {
       return '${difference.inDays}d ago';
     } else {
-      return '${time.day}/${time.month}/${time.year}';
+      return '${displayTime.day}/${displayTime.month}/${displayTime.year}';
     }
   }
 
   String _formatFullTime(DateTime time) {
-    return '${time.day}/${time.month}/${time.year} at ${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+    return OwnerTimeUtils.formatDateTimeFromDateTime(time);
   }
 }

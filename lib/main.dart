@@ -111,16 +111,56 @@ Future<void> main() async {
     // WorkManager as the 3rd layer of defense
     await WorkManagerPulseService.initialize();
   }
+
+  if (!kIsWeb && Platform.isIOS) {
+    await [
+      Permission.notification,
+      Permission.locationAlways,
+    ].request();
+
+    await WorkManagerPulseService.initialize();
+  }
   
   // 5. Auto-Resume Logic (Offline-First)
   try {
     final login = await AuthService.getLoginData();
     final employeeId = login['employeeId'];
     if (employeeId != null && employeeId.isNotEmpty) {
-      final activeAttendance = await SupabaseAttendanceService.getActiveAttendance(employeeId);
+      Map<String, dynamic>? activeAttendance =
+          await SupabaseAttendanceService.getActiveAttendance(employeeId);
+
+      if (activeAttendance == null) {
+        final snapshot =
+            await SupabaseAttendanceService.getCachedActiveAttendanceOnDevice(
+              employeeId: employeeId,
+            );
+        final snapshotAttendanceId = snapshot?['attendance_id']?.toString();
+        if (snapshotAttendanceId != null && snapshotAttendanceId.isNotEmpty) {
+          activeAttendance = {
+            'id': snapshotAttendanceId,
+            'check_in_time': snapshot?['check_in_time'],
+          };
+          print('📦 Bootstrap resume from device snapshot: $snapshotAttendanceId');
+        }
+      }
+
       if (activeAttendance != null) {
         final attendanceId = activeAttendance['id'] as String?;
         await PulseTrackingService().startTracking(employeeId, attendanceId: attendanceId);
+
+        if (!kIsWeb && Platform.isIOS) {
+          final branchId = activeAttendance['branch_id']?.toString();
+          if (attendanceId != null && attendanceId.isNotEmpty && branchId != null && branchId.isNotEmpty) {
+            await WorkManagerPulseService.instance.startPeriodicPulses(
+              employeeId: employeeId,
+              attendanceId: attendanceId,
+              branchId: branchId,
+            );
+            print('🍎 iOS periodic background pulses resumed from bootstrap');
+          } else {
+            print('⚠️ iOS bootstrap resume skipped periodic pulses (missing branch/attendance id)');
+          }
+        }
         
         if (!kIsWeb && Platform.isAndroid) {
           await ForegroundAttendanceService.instance.startTracking(
@@ -149,11 +189,11 @@ class OldiesApp extends StatelessWidget {
     );
 
     final theme = baseTheme.copyWith(
-      textTheme: GoogleFonts.ibmPlexSansArabicTextTheme(baseTheme.textTheme),
-      primaryTextTheme: GoogleFonts.ibmPlexSansArabicTextTheme(baseTheme.primaryTextTheme),
+      textTheme: GoogleFonts.tajawalTextTheme(baseTheme.textTheme),
+      primaryTextTheme: GoogleFonts.tajawalTextTheme(baseTheme.primaryTextTheme),
       colorScheme: baseTheme.colorScheme,
       appBarTheme: baseTheme.appBarTheme.copyWith(
-        titleTextStyle: GoogleFonts.ibmPlexSansArabic(
+        titleTextStyle: GoogleFonts.tajawal(
           textStyle: baseTheme.textTheme.titleLarge?.copyWith(
             color: baseTheme.colorScheme.onPrimary,
             fontWeight: FontWeight.w700,

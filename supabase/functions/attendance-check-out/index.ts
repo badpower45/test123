@@ -27,6 +27,10 @@ function response(status: number, body: JsonRecord) {
   });
 }
 
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
 function normalizeBssid(value?: string | null): string | null {
   if (!value) return null;
   return value.trim().toUpperCase().replace(/-/g, ':');
@@ -49,19 +53,85 @@ function getCairoNow(): Date {
   return new Date();
 }
 
+function getCairoOffsetMinutes(referenceUtc: Date): number {
+  const timezonePart = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Africa/Cairo',
+    timeZoneName: 'shortOffset',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).formatToParts(referenceUtc).find((part) => part.type === 'timeZoneName')?.value ?? 'GMT+2';
+
+  const match = timezonePart.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/i);
+  if (!match) {
+    return 120;
+  }
+
+  const sign = match[1] === '-' ? -1 : 1;
+  const hours = Number(match[2] ?? '0');
+  const minutes = Number(match[3] ?? '0');
+
+  return sign * ((hours * 60) + minutes);
+}
+
+function parseNaiveCairoTimestamp(input: string): Date | null {
+  const match = input.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/,
+  );
+
+  if (!match) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6] ?? '0');
+  const millisecond = Number((match[7] ?? '').padEnd(3, '0') || '0');
+
+  if (
+    !Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day) ||
+    !Number.isInteger(hour) || !Number.isInteger(minute) || !Number.isInteger(second) ||
+    month < 1 || month > 12 || day < 1 || day > 31 ||
+    hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59
+  ) {
+    return null;
+  }
+
+  const utcGuessMs = Date.UTC(year, month - 1, day, hour, minute, second, millisecond);
+  const offsetMinutes = getCairoOffsetMinutes(new Date(utcGuessMs));
+  const corrected = new Date(utcGuessMs - (offsetMinutes * 60 * 1000));
+
+  return Number.isNaN(corrected.getTime()) ? null : corrected;
+}
+
 function parseTimestamp(input: unknown): Date | null {
   if (!input) return null;
   if (input instanceof Date) {
     return Number.isNaN(input.getTime()) ? null : input;
   }
   if (typeof input === 'number') {
-    const date = new Date(input);
+    const normalized = input < 1e12 ? input * 1000 : input;
+    const date = new Date(normalized);
     return Number.isNaN(date.getTime()) ? null : date;
   }
   if (typeof input === 'string') {
     const trimmed = input.trim();
     if (!trimmed) return null;
-    const date = new Date(trimmed);
+
+    const normalized = trimmed.replace(' ', 'T');
+    const hasTimezone = /(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(normalized);
+
+    let date: Date;
+    if (hasTimezone) {
+      date = new Date(normalized);
+    } else {
+      // Legacy/mobile fallback: naive timestamps are treated as Cairo local time,
+      // including DST-aware offset changes.
+      date = parseNaiveCairoTimestamp(normalized) ?? new Date(normalized);
+    }
+
     return Number.isNaN(date.getTime()) ? null : date;
   }
   return null;
@@ -93,6 +163,20 @@ function parseAllowedBssids(branch: any, bssidRecords: any[]): Set<string> {
   });
 
   return allowed;
+}
+
+function cairoDateTimeString(date: Date): string {
+  const formatter = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Africa/Cairo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  return formatter.format(date);
 }
 
 function haversineDistanceMeters(
@@ -278,44 +362,58 @@ serve(async (req: Request) => {
       });
     }
 
+    const eventTimestamp = parseTimestamp(body.timestamp) ?? getCairoNow();
+
     // ✅ If attendance_id is provided, use it directly; otherwise find active attendance
     let activeAttendance: any = null;
     
     if (body.attendance_id) {
-      console.log(`[attendance-check-out] Using provided attendance_id: ${body.attendance_id}`);
-      const { data: attendanceRecord, error: attendanceError } = await supabase
-        .from('attendance')
-        .select('id, check_in_time, status, work_hours, employee_id')
-        .eq('id', body.attendance_id)
-        .maybeSingle();
-      
-      if (attendanceError) {
-        console.error('[attendance-check-out] Failed to fetch attendance by ID', attendanceError);
-        return response(500, { success: false, error: 'فشل التحقق من سجل الحضور' });
+      const providedAttendanceId = body.attendance_id.trim();
+
+      if (!isUuid(providedAttendanceId)) {
+        console.warn(
+          `[attendance-check-out] Non-UUID attendance_id provided (${providedAttendanceId}), falling back to active lookup`,
+        );
+      } else {
+        console.log(`[attendance-check-out] Using provided attendance_id: ${providedAttendanceId}`);
+        const { data: attendanceRecord, error: attendanceError } = await supabase
+          .from('attendance')
+          .select('id, check_in_time, check_out_time, status, work_hours, employee_id')
+          .eq('id', providedAttendanceId)
+          .maybeSingle();
+
+        if (attendanceError) {
+          console.error('[attendance-check-out] Failed to fetch attendance by ID, falling back to active lookup', attendanceError);
+        } else if (!attendanceRecord) {
+          console.warn('[attendance-check-out] Provided attendance record not found, falling back to active lookup');
+        } else {
+          // Verify the attendance belongs to this employee
+          if (attendanceRecord.employee_id !== employeeId) {
+            return response(403, { success: false, error: 'سجل الحضور لا ينتمي لهذا الموظف' });
+          }
+
+          // Check if already completed
+          if (attendanceRecord.status === 'completed') {
+            const completedCheckOut = parseTimestamp(attendanceRecord.check_out_time) ?? eventTimestamp;
+            return response(200, {
+              success: true,
+              alreadyCheckedOut: true,
+              message: 'لقد سجلت انصرافك بالفعل',
+              attendance: attendanceRecord,
+              time_context: {
+                stored_timezone: 'UTC',
+                display_timezone: 'Africa/Cairo',
+                check_out_time_cairo: cairoDateTimeString(completedCheckOut),
+              },
+            });
+          }
+
+          activeAttendance = attendanceRecord;
+        }
       }
-      
-      if (!attendanceRecord) {
-        return response(404, { success: false, error: 'سجل الحضور غير موجود' });
-      }
-      
-      // Verify the attendance belongs to this employee
-      if (attendanceRecord.employee_id !== employeeId) {
-        return response(403, { success: false, error: 'سجل الحضور لا ينتمي لهذا الموظف' });
-      }
-      
-      // Check if already completed
-      if (attendanceRecord.status === 'completed') {
-        return response(200, {
-          success: true,
-          alreadyCheckedOut: true,
-          message: 'لقد سجلت انصرافك بالفعل',
-          attendance: attendanceRecord,
-        });
-      }
-      
-      activeAttendance = attendanceRecord;
-    } else {
-      // Fallback: Find active attendance by employee_id
+    }
+
+    if (!activeAttendance) {
       console.log(`[attendance-check-out] Finding active attendance for employee: ${employeeId}`);
       const { data: activeRecords, error: activeError } = await supabase
         .from('attendance')
@@ -332,7 +430,6 @@ serve(async (req: Request) => {
 
       activeAttendance = activeRecords?.[0] ?? null;
     }
-  const eventTimestamp = parseTimestamp(body.timestamp) ?? getCairoNow();
 
     if (!activeAttendance) {
       const { data: completedRecords, error: completedError } = await supabase
@@ -350,11 +447,17 @@ serve(async (req: Request) => {
 
       const completed = completedRecords?.[0];
       if (completed) {
+        const completedCheckOut = parseTimestamp(completed.check_out_time) ?? eventTimestamp;
         return response(200, {
           success: true,
           alreadyCheckedOut: true,
           message: 'لقد سجلت انصرافك بالفعل اليوم',
           attendance: completed,
+          time_context: {
+            stored_timezone: 'UTC',
+            display_timezone: 'Africa/Cairo',
+            check_out_time_cairo: cairoDateTimeString(completedCheckOut),
+          },
         });
       }
 
@@ -552,6 +655,11 @@ serve(async (req: Request) => {
       success: true,
       message: validationPassed ? 'تم تسجيل الانصراف بنجاح' : 'تم تسجيل الانصراف بدون تحقق موقع/واي فاي',
       attendance: updatedAttendance,
+      time_context: {
+        stored_timezone: 'UTC',
+        display_timezone: 'Africa/Cairo',
+        check_out_time_cairo: cairoDateTimeString(eventTimestamp),
+      },
       validation: {
         wifi: isWifiValid,
         location: isLocationValid,

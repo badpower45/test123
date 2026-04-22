@@ -33,6 +33,18 @@ class GeofenceService {
   static final GeofenceService instance = GeofenceService._init();
   GeofenceService._init();
 
+  static List<String> _sanitizeBssidList(Iterable<dynamic> rawValues) {
+    final unique = <String>{};
+    for (final value in rawValues) {
+      final text = value.toString().trim();
+      if (text.isEmpty) continue;
+      final normalized = WiFiService.normalizeBssid(text);
+      if (!WiFiService.isValidBssidFormat(normalized)) continue;
+      unique.add(normalized);
+    }
+    return unique.toList(growable: false);
+  }
+
   Timer? _locationCheckTimer;
   bool _isMonitoring = false;
   String? _currentEmployeeId;
@@ -61,7 +73,7 @@ class GeofenceService {
     _branchLatitude = branchLatitude;
     _branchLongitude = branchLongitude;
     _geofenceRadius = geofenceRadius;
-    _requiredBssids = requiredBssids.map((e) => e.toUpperCase()).toList();
+    _requiredBssids = _sanitizeBssidList(requiredBssids);
 
     // 🚀 PHASE 3: Request ALWAYS location permission for background tracking
     LocationPermission permission = await Geolocator.checkPermission();
@@ -466,15 +478,18 @@ class GeofenceService {
       // On Web, single BSSID
       final bssidValue = branchData['bssid'];
       if (bssidValue != null && bssidValue.toString().isNotEmpty) {
-        allowedBssids.addAll(
-          bssidValue.toString().split(',').map((e) => e.trim().toUpperCase())
-        );
+        allowedBssids.addAll(_sanitizeBssidList(bssidValue.toString().split(',')));
       }
     } else {
       // On Mobile, array of BSSIDs
       if (branchData['wifi_bssids_array'] != null) {
         final bssidsArray = branchData['wifi_bssids_array'] as List<dynamic>;
-        allowedBssids.addAll(bssidsArray.map((e) => e.toString().toUpperCase()));
+        allowedBssids.addAll(_sanitizeBssidList(bssidsArray));
+      } else {
+        final bssidValue = branchData['wifi_bssid'];
+        if (bssidValue != null && bssidValue.toString().isNotEmpty) {
+          allowedBssids.addAll(_sanitizeBssidList(bssidValue.toString().split(',')));
+        }
       }
     }
 
@@ -715,14 +730,17 @@ class GeofenceService {
     if (kIsWeb) {
       final bssidValue = branchData['bssid'];
       if (bssidValue != null && bssidValue.toString().isNotEmpty) {
-        allowedBssids.addAll(
-          bssidValue.toString().split(',').map((e) => e.trim().toUpperCase())
-        );
+        allowedBssids.addAll(_sanitizeBssidList(bssidValue.toString().split(',')));
       }
     } else {
       if (branchData['wifi_bssids_array'] != null) {
         final bssidsArray = branchData['wifi_bssids_array'] as List<dynamic>;
-        allowedBssids.addAll(bssidsArray.map((e) => e.toString().toUpperCase()));
+        allowedBssids.addAll(_sanitizeBssidList(bssidsArray));
+      } else {
+        final bssidValue = branchData['wifi_bssid'];
+        if (bssidValue != null && bssidValue.toString().isNotEmpty) {
+          allowedBssids.addAll(_sanitizeBssidList(bssidValue.toString().split(',')));
+        }
       }
     }
 
