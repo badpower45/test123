@@ -102,17 +102,35 @@ jobs:
       - name: Build Windows release
         run: flutter build windows --release
 
+      - name: Verify Windows release bundle
+        shell: pwsh
+        run: |
+          $releaseDir = "build/windows/x64/runner/Release"
+          $requiredPaths = @(
+            "$releaseDir/heartbeat.exe",
+            "$releaseDir/flutter_windows.dll",
+            "$releaseDir/data"
+          )
+
+          foreach ($path in $requiredPaths) {
+            if (-not (Test-Path $path)) {
+              Write-Error "Missing required Windows release asset: $path"
+              exit 1
+            }
+          }
+
       - name: Package Windows release (zip)
         shell: pwsh
         run: |
-          $source = "build/windows/x64/runner/Release/*"
-          $targetDir = "build/windows/x64/runner"
-          $zipPath = "$targetDir/windows-release.zip"
+          $releaseDir = "build/windows/x64/runner/Release"
+          $zipPath = "build/windows/x64/runner/windows-release.zip"
           if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-          Compress-Archive -Path $source -DestinationPath $zipPath
+          Compress-Archive -Path "$releaseDir/*" -DestinationPath $zipPath
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-desktop-release
-          path: build/windows/x64/runner/windows-release.zip
+          path: |
+            build/windows/x64/runner/Release
+            build/windows/x64/runner/windows-release.zip
