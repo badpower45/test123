@@ -36,6 +36,7 @@ import 'config/supabase_config.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  final isMobileRuntime = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
   // 🎯 Detect and Configure Build Flavor (Lite vs Full)
   await BuildConfig.detectFlavor();
@@ -71,7 +72,7 @@ Future<void> main() async {
   await SupabaseConfig.initialize();
   await PulseSyncManager.initializeForMainIsolate();
   await PulseBackendClient.initialize();
-  if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+  if (isMobileRuntime) {
     await NotificationService.instance.initialize();
   }
 
@@ -121,66 +122,68 @@ Future<void> main() async {
   }
 
   // 5. Auto-Resume Logic (Offline-First)
-  try {
-    final login = await AuthService.getLoginData();
-    final employeeId = login['employeeId'];
-    if (employeeId != null && employeeId.isNotEmpty) {
-      Map<String, dynamic>? activeAttendance =
-          await SupabaseAttendanceService.getActiveAttendance(employeeId);
+  if (isMobileRuntime) {
+    try {
+      final login = await AuthService.getLoginData();
+      final employeeId = login['employeeId'];
+      if (employeeId != null && employeeId.isNotEmpty) {
+        Map<String, dynamic>? activeAttendance =
+            await SupabaseAttendanceService.getActiveAttendance(employeeId);
 
-      if (activeAttendance == null) {
-        final snapshot =
-            await SupabaseAttendanceService.getCachedActiveAttendanceOnDevice(
-              employeeId: employeeId,
-            );
-        final snapshotAttendanceId = snapshot?['attendance_id']?.toString();
-        if (snapshotAttendanceId != null && snapshotAttendanceId.isNotEmpty) {
-          activeAttendance = {
-            'id': snapshotAttendanceId,
-            'check_in_time': snapshot?['check_in_time'],
-          };
-          print(
-            '📦 Bootstrap resume from device snapshot: $snapshotAttendanceId',
-          );
-        }
-      }
-
-      if (activeAttendance != null) {
-        final attendanceId = activeAttendance['id'] as String?;
-        await PulseTrackingService().startTracking(
-          employeeId,
-          attendanceId: attendanceId,
-        );
-
-        if (!kIsWeb && Platform.isIOS) {
-          final branchId = activeAttendance['branch_id']?.toString();
-          if (attendanceId != null &&
-              attendanceId.isNotEmpty &&
-              branchId != null &&
-              branchId.isNotEmpty) {
-            await WorkManagerPulseService.instance.startPeriodicPulses(
-              employeeId: employeeId,
-              attendanceId: attendanceId,
-              branchId: branchId,
-            );
-            print('🍎 iOS periodic background pulses resumed from bootstrap');
-          } else {
+        if (activeAttendance == null) {
+          final snapshot =
+              await SupabaseAttendanceService.getCachedActiveAttendanceOnDevice(
+                employeeId: employeeId,
+              );
+          final snapshotAttendanceId = snapshot?['attendance_id']?.toString();
+          if (snapshotAttendanceId != null && snapshotAttendanceId.isNotEmpty) {
+            activeAttendance = {
+              'id': snapshotAttendanceId,
+              'check_in_time': snapshot?['check_in_time'],
+            };
             print(
-              '⚠️ iOS bootstrap resume skipped periodic pulses (missing branch/attendance id)',
+              '📦 Bootstrap resume from device snapshot: $snapshotAttendanceId',
             );
           }
         }
 
-        if (!kIsWeb && Platform.isAndroid) {
-          await ForegroundAttendanceService.instance.startTracking(
-            employeeId: employeeId,
-            employeeName: login['fullName'] ?? 'الموظف',
+        if (activeAttendance != null) {
+          final attendanceId = activeAttendance['id'] as String?;
+          await PulseTrackingService().startTracking(
+            employeeId,
+            attendanceId: attendanceId,
           );
+
+          if (!kIsWeb && Platform.isIOS) {
+            final branchId = activeAttendance['branch_id']?.toString();
+            if (attendanceId != null &&
+                attendanceId.isNotEmpty &&
+                branchId != null &&
+                branchId.isNotEmpty) {
+              await WorkManagerPulseService.instance.startPeriodicPulses(
+                employeeId: employeeId,
+                attendanceId: attendanceId,
+                branchId: branchId,
+              );
+              print('🍎 iOS periodic background pulses resumed from bootstrap');
+            } else {
+              print(
+                '⚠️ iOS bootstrap resume skipped periodic pulses (missing branch/attendance id)',
+              );
+            }
+          }
+
+          if (!kIsWeb && Platform.isAndroid) {
+            await ForegroundAttendanceService.instance.startTracking(
+              employeeId: employeeId,
+              employeeName: login['fullName'] ?? 'الموظف',
+            );
+          }
         }
       }
+    } catch (e) {
+      print('⚠️ Resume Error: $e');
     }
-  } catch (e) {
-    print('⚠️ Resume Error: $e');
   }
 
   runApp(const OldiesApp());

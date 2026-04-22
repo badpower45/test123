@@ -7,12 +7,14 @@ class NotificationService {
   static final NotificationService instance = NotificationService._init();
   NotificationService._init();
 
-  final FlutterLocalNotificationsPlugin _notifications =
-      FlutterLocalNotificationsPlugin();
+  FlutterLocalNotificationsPlugin? _notifications;
   bool _initialized = false;
 
   bool get _isSupportedPlatform =>
       !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+
+  FlutterLocalNotificationsPlugin get _plugin =>
+      _notifications ??= FlutterLocalNotificationsPlugin();
 
   Future<void> initialize() async {
     if (_initialized || !_isSupportedPlatform) return;
@@ -31,7 +33,7 @@ class NotificationService {
       iOS: iosSettings,
     );
 
-    await _notifications.initialize(
+    await _plugin.initialize(
       initSettings,
       onDidReceiveNotificationResponse: _onNotificationTapped,
     );
@@ -39,14 +41,14 @@ class NotificationService {
     _initialized = true;
 
     // Request permissions on Android 13+
-    await _notifications
+    await _plugin
         .resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin
         >()
         ?.requestNotificationsPermission();
 
     // Request permissions on iOS
-    await _notifications
+    await _plugin
         .resolvePlatformSpecificImplementation<
           IOSFlutterLocalNotificationsPlugin
         >()
@@ -87,7 +89,7 @@ class NotificationService {
       iOS: iosDetails,
     );
 
-    await _notifications.show(
+    await _plugin.show(
       1, // Notification ID
       '⚠️ تحذير: خارج المكان',
       message,
@@ -116,7 +118,7 @@ class NotificationService {
       iOS: iosDetails,
     );
 
-    await _notifications.show(
+    await _plugin.show(
       2,
       '📴 وضع عدم الاتصال',
       'تم حفظ البيانات محلياً. سيتم الرفع عند توفر الإنترنت.',
@@ -144,7 +146,7 @@ class NotificationService {
       iOS: iosDetails,
     );
 
-    await _notifications.show(
+    await _plugin.show(
       3,
       '✅ تم الرفع بنجاح',
       'تم رفع $count سجل إلى الخادم',
@@ -178,7 +180,7 @@ class NotificationService {
       iOS: iosDetails,
     );
 
-    await _notifications.show(
+    await _plugin.show(
       4,
       '📤 بيانات في انتظار الرفع',
       'لديك $pendingCount سجل لم يتم رفعه. اتصل بالإنترنت.',
@@ -218,7 +220,7 @@ class NotificationService {
     // Use a random ID or based on time to allow multiple notifications
     final id = DateTime.now().millisecondsSinceEpoch % 100000;
 
-    await _notifications.show(id, title, body, details);
+    await _plugin.show(id, title, body, details);
   }
 
   Future<void> showBreakStatusNotification({
@@ -260,7 +262,7 @@ class NotificationService {
       body = 'تم احتساب الاستراحة.\nتمت إعادة تفعيل مراقبة الموقع بشكل طبيعي.';
     }
 
-    await _notifications.show(
+    await _plugin.show(
       started ? 5 : 6,
       title,
       body,
@@ -307,7 +309,7 @@ class NotificationService {
         ? 'تم التحقق في الخلفية عبر الواي فاي.'
         : 'تم التحقق في الخلفية عبر الموقع (${distanceMeters.round()}م).';
 
-    await _notifications.show(
+    await _plugin.show(
       77,
       'متابعة الحضور تعمل',
       '$text المصدر: $source',
@@ -319,12 +321,12 @@ class NotificationService {
   // Cancel specific notification
   Future<void> cancelNotification(int id) async {
     if (!_isSupportedPlatform) return;
-    await _notifications.cancel(id);
+    await _plugin.cancel(id);
   }
 
   // Cancel all notifications
   Future<void> cancelAllNotifications() async {
     if (!_isSupportedPlatform) return;
-    await _notifications.cancelAll();
+    await _plugin.cancelAll();
   }
 }
