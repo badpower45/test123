@@ -1,17 +1,25 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:universal_io/io.dart';
 import '../database/offline_database.dart';
 
 class NotificationService {
   static final NotificationService instance = NotificationService._init();
   NotificationService._init();
 
-  final FlutterLocalNotificationsPlugin _notifications = FlutterLocalNotificationsPlugin();
+  final FlutterLocalNotificationsPlugin _notifications =
+      FlutterLocalNotificationsPlugin();
   bool _initialized = false;
 
-  Future<void> initialize() async {
-    if (_initialized) return;
+  bool get _isSupportedPlatform =>
+      !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+  Future<void> initialize() async {
+    if (_initialized || !_isSupportedPlatform) return;
+
+    const androidSettings = AndroidInitializationSettings(
+      '@mipmap/ic_launcher',
+    );
     const iosSettings = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
@@ -32,17 +40,17 @@ class NotificationService {
 
     // Request permissions on Android 13+
     await _notifications
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
         ?.requestNotificationsPermission();
-    
+
     // Request permissions on iOS
     await _notifications
-        .resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>()
-        ?.requestPermissions(
-          alert: true,
-          badge: true,
-          sound: true,
-        );
+        .resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin
+        >()
+        ?.requestPermissions(alert: true, badge: true, sound: true);
   }
 
   void _onNotificationTapped(NotificationResponse response) {
@@ -55,6 +63,7 @@ class NotificationService {
     required String employeeName,
     required String message,
   }) async {
+    if (!_isSupportedPlatform) return;
     await initialize();
 
     const androidDetails = AndroidNotificationDetails(
@@ -89,6 +98,7 @@ class NotificationService {
 
   // Show offline mode notification
   Future<void> showOfflineModeNotification() async {
+    if (!_isSupportedPlatform) return;
     await initialize();
 
     const androidDetails = AndroidNotificationDetails(
@@ -116,6 +126,7 @@ class NotificationService {
 
   // Show sync success notification
   Future<void> showSyncSuccessNotification(int count) async {
+    if (!_isSupportedPlatform) return;
     await initialize();
 
     const androidDetails = AndroidNotificationDetails(
@@ -143,6 +154,7 @@ class NotificationService {
 
   // Show pending data notification
   Future<void> showPendingDataNotification() async {
+    if (!_isSupportedPlatform) return;
     await initialize();
 
     final db = OfflineDatabase.instance;
@@ -179,6 +191,7 @@ class NotificationService {
     required String title,
     required String body,
   }) async {
+    if (!_isSupportedPlatform) return;
     await initialize();
 
     const androidDetails = AndroidNotificationDetails(
@@ -205,18 +218,14 @@ class NotificationService {
     // Use a random ID or based on time to allow multiple notifications
     final id = DateTime.now().millisecondsSinceEpoch % 100000;
 
-    await _notifications.show(
-      id,
-      title,
-      body,
-      details,
-    );
+    await _notifications.show(id, title, body, details);
   }
 
   Future<void> showBreakStatusNotification({
     required bool started,
     int? durationMinutes,
   }) async {
+    if (!_isSupportedPlatform) return;
     await initialize();
 
     final androidDetails = AndroidNotificationDetails(
@@ -241,9 +250,11 @@ class NotificationService {
     final title = started ? '☕ تم بدء الاستراحة' : '✅ تم إنهاء الاستراحة';
     String body;
     if (started) {
-      final durationLine =
-          durationMinutes != null ? '\nالمدة المسموحة: $durationMinutes دقيقة' : '';
-      body = 'وقت الاستراحة لا يُحتسب من ساعات العمل.\n'
+      final durationLine = durationMinutes != null
+          ? '\nالمدة المسموحة: $durationMinutes دقيقة'
+          : '';
+      body =
+          'وقت الاستراحة لا يُحتسب من ساعات العمل.\n'
           'لن يتم تطبيق خصومات الخروج من النطاق خلال هذه الفترة$durationLine.';
     } else {
       body = 'تم احتساب الاستراحة.\nتمت إعادة تفعيل مراقبة الموقع بشكل طبيعي.';
@@ -264,12 +275,14 @@ class NotificationService {
     required bool usedWifi,
     required double distanceMeters,
   }) async {
+    if (!_isSupportedPlatform) return;
     await initialize();
 
     const androidDetails = AndroidNotificationDetails(
       'background_heartbeat_channel',
       'متابعة الخلفية الصامتة',
-      channelDescription: 'تنبيه صامت لنبضات الخلفية والتحقق من الموقع/الواي فاي',
+      channelDescription:
+          'تنبيه صامت لنبضات الخلفية والتحقق من الموقع/الواي فاي',
       importance: Importance.min,
       priority: Priority.min,
       playSound: false,
@@ -305,11 +318,13 @@ class NotificationService {
 
   // Cancel specific notification
   Future<void> cancelNotification(int id) async {
+    if (!_isSupportedPlatform) return;
     await _notifications.cancel(id);
   }
 
   // Cancel all notifications
   Future<void> cancelAllNotifications() async {
+    if (!_isSupportedPlatform) return;
     await _notifications.cancelAll();
   }
 }

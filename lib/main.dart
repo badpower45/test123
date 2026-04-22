@@ -36,20 +36,20 @@ import 'config/supabase_config.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   // 🎯 Detect and Configure Build Flavor (Lite vs Full)
   await BuildConfig.detectFlavor();
   BuildConfig.printConfig();
-  
+
   // 1. Critical Crash Prevention
   FlutterError.onError = (FlutterErrorDetails details) {
     FlutterError.presentError(details);
   };
-  
+
   PlatformDispatcher.instance.onError = (error, stack) {
-    return true; 
+    return true;
   };
-  
+
   // 2. Initialize Database (Fastest first for offline support)
   await Hive.initFlutter();
   registerPulseAdapter();
@@ -71,8 +71,10 @@ Future<void> main() async {
   await SupabaseConfig.initialize();
   await PulseSyncManager.initializeForMainIsolate();
   await PulseBackendClient.initialize();
-  await NotificationService.instance.initialize();
-  
+  if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+    await NotificationService.instance.initialize();
+  }
+
   // 🎧 Initialize Background Pulse Listener (Native Service → Flutter)
   if (!kIsWeb && Platform.isAndroid) {
     await BackgroundPulseListener.initialize(
@@ -87,7 +89,7 @@ Future<void> main() async {
     final androidInfo = await DeviceInfoPlugin().androidInfo;
     final manufacturer = androidInfo.manufacturer.toLowerCase();
     final sdkInt = androidInfo.version.sdkInt;
-    
+
     print('🚀 System Info: $manufacturer on Android $sdkInt');
 
     // Request Critical Permissions immediately
@@ -101,7 +103,7 @@ Future<void> main() async {
     // Initialize Persistent Services
     await ForegroundAttendanceService.initialize();
     await AggressiveKeepAliveService().initialize();
-    
+
     // Start Alarm Manager (Resurrector)
     final alarmService = AlarmManagerPulseService();
     if (alarmService.isSupported) {
@@ -113,14 +115,11 @@ Future<void> main() async {
   }
 
   if (!kIsWeb && Platform.isIOS) {
-    await [
-      Permission.notification,
-      Permission.locationAlways,
-    ].request();
+    await [Permission.notification, Permission.locationAlways].request();
 
     await WorkManagerPulseService.initialize();
   }
-  
+
   // 5. Auto-Resume Logic (Offline-First)
   try {
     final login = await AuthService.getLoginData();
@@ -140,17 +139,25 @@ Future<void> main() async {
             'id': snapshotAttendanceId,
             'check_in_time': snapshot?['check_in_time'],
           };
-          print('📦 Bootstrap resume from device snapshot: $snapshotAttendanceId');
+          print(
+            '📦 Bootstrap resume from device snapshot: $snapshotAttendanceId',
+          );
         }
       }
 
       if (activeAttendance != null) {
         final attendanceId = activeAttendance['id'] as String?;
-        await PulseTrackingService().startTracking(employeeId, attendanceId: attendanceId);
+        await PulseTrackingService().startTracking(
+          employeeId,
+          attendanceId: attendanceId,
+        );
 
         if (!kIsWeb && Platform.isIOS) {
           final branchId = activeAttendance['branch_id']?.toString();
-          if (attendanceId != null && attendanceId.isNotEmpty && branchId != null && branchId.isNotEmpty) {
+          if (attendanceId != null &&
+              attendanceId.isNotEmpty &&
+              branchId != null &&
+              branchId.isNotEmpty) {
             await WorkManagerPulseService.instance.startPeriodicPulses(
               employeeId: employeeId,
               attendanceId: attendanceId,
@@ -158,10 +165,12 @@ Future<void> main() async {
             );
             print('🍎 iOS periodic background pulses resumed from bootstrap');
           } else {
-            print('⚠️ iOS bootstrap resume skipped periodic pulses (missing branch/attendance id)');
+            print(
+              '⚠️ iOS bootstrap resume skipped periodic pulses (missing branch/attendance id)',
+            );
           }
         }
-        
+
         if (!kIsWeb && Platform.isAndroid) {
           await ForegroundAttendanceService.instance.startTracking(
             employeeId: employeeId,
@@ -190,7 +199,9 @@ class OldiesApp extends StatelessWidget {
 
     final theme = baseTheme.copyWith(
       textTheme: GoogleFonts.tajawalTextTheme(baseTheme.textTheme),
-      primaryTextTheme: GoogleFonts.tajawalTextTheme(baseTheme.primaryTextTheme),
+      primaryTextTheme: GoogleFonts.tajawalTextTheme(
+        baseTheme.primaryTextTheme,
+      ),
       colorScheme: baseTheme.colorScheme,
       appBarTheme: baseTheme.appBarTheme.copyWith(
         titleTextStyle: GoogleFonts.tajawal(
@@ -209,7 +220,10 @@ class OldiesApp extends StatelessWidget {
       locale: const Locale('ar', 'EG'),
       supportedLocales: const [Locale('ar', 'EG'), Locale('ar')],
       builder: (context, child) {
-        return Directionality(textDirection: TextDirection.rtl, child: child ?? const SizedBox.shrink());
+        return Directionality(
+          textDirection: TextDirection.rtl,
+          child: child ?? const SizedBox.shrink(),
+        );
       },
       localizationsDelegates: const [
         GlobalMaterialLocalizations.delegate,
@@ -225,11 +239,15 @@ class OldiesApp extends StatelessWidget {
       onGenerateRoute: (settings) {
         if (settings.name == HomeScreen.routeName) {
           final employeeId = settings.arguments as String?;
-          return MaterialPageRoute(builder: (_) => HomeScreen(employeeId: employeeId ?? ''));
+          return MaterialPageRoute(
+            builder: (_) => HomeScreen(employeeId: employeeId ?? ''),
+          );
         }
         if (settings.name == EmployeeMainScreen.routeName) {
           final employeeId = settings.arguments as String?;
-          return MaterialPageRoute(builder: (_) => EmployeeMainScreen(employeeId: employeeId ?? ''));
+          return MaterialPageRoute(
+            builder: (_) => EmployeeMainScreen(employeeId: employeeId ?? ''),
+          );
         }
         return null;
       },
