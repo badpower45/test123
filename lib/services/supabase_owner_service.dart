@@ -16,7 +16,9 @@ class SupabaseOwnerService {
 
       var query = _supabase
           .from('employees')
-          .select('*, attendance!left(id, date, check_in_time, check_out_time, total_hours, status)')
+          .select(
+            '*, attendance!left(id, date, check_in_time, check_out_time, total_hours, status)',
+          )
           .eq('is_active', true);
 
       if (branchName != null) {
@@ -24,10 +26,10 @@ class SupabaseOwnerService {
       }
 
       final response = await query;
-      
+
       // Process to include attendance info
       final List<Map<String, dynamic>> employeesWithStatus = [];
-      
+
       for (final employee in response as List) {
         final attendanceList = employee['attendance'] as List?;
         final todayAttendance = attendanceList?.firstWhere(
@@ -38,7 +40,8 @@ class SupabaseOwnerService {
         employeesWithStatus.add({
           ...employee,
           'current_attendance': todayAttendance,
-          'is_checked_in': todayAttendance != null &&
+          'is_checked_in':
+              todayAttendance != null &&
               todayAttendance['check_out_time'] == null &&
               todayAttendance['status'] == 'active',
         });
@@ -81,7 +84,7 @@ class SupabaseOwnerService {
         'check_in_time': today.toUtc().toIso8601String(),
         'notes': reason ?? 'تسجيل حضور يدوي',
       };
-      
+
       if (latitude != null) insertData['check_in_latitude'] = latitude;
       if (longitude != null) insertData['check_in_longitude'] = longitude;
 
@@ -99,7 +102,10 @@ class SupabaseOwnerService {
   }
 
   /// Simple manual check-in without location (for compatibility)
-  static Future<void> simpleManualCheckIn(String employeeId, {String? reason}) async {
+  static Future<void> simpleManualCheckIn(
+    String employeeId, {
+    String? reason,
+  }) async {
     await manualCheckIn(employeeId: employeeId, reason: reason);
   }
 
@@ -120,13 +126,13 @@ class SupabaseOwnerService {
           .select()
           .eq('employee_id', employeeId)
           .eq('date', todayDate);
-      
+
       // Filter for records without check_out_time
       Map<String, dynamic> attendance;
       try {
-        attendance = (attendanceList as List).cast<Map<String, dynamic>>().firstWhere(
-          (att) => att['check_out_time'] == null,
-        );
+        attendance = (attendanceList as List)
+            .cast<Map<String, dynamic>>()
+            .firstWhere((att) => att['check_out_time'] == null);
       } catch (e) {
         throw Exception('الموظف غير مسجل حضور اليوم');
       }
@@ -144,9 +150,10 @@ class SupabaseOwnerService {
       final updateData = <String, dynamic>{
         'check_out_time': today.toUtc().toIso8601String(),
         'total_hours': totalHours,
-        'notes': (attendance['notes'] ?? '') + (reason != null ? ' | $reason' : ''),
+        'notes':
+            (attendance['notes'] ?? '') + (reason != null ? ' | $reason' : ''),
       };
-      
+
       if (latitude != null) updateData['check_out_latitude'] = latitude;
       if (longitude != null) updateData['check_out_longitude'] = longitude;
 
@@ -163,7 +170,10 @@ class SupabaseOwnerService {
   }
 
   /// Simple manual check-out without location (for compatibility)
-  static Future<void> simpleManualCheckOut(String employeeId, {String? reason}) async {
+  static Future<void> simpleManualCheckOut(
+    String employeeId, {
+    String? reason,
+  }) async {
     await manualCheckOut(employeeId: employeeId, reason: reason);
   }
 
@@ -237,14 +247,18 @@ class SupabaseOwnerService {
           attendanceRecordId = attendance['id']?.toString();
           if (attendance['check_in_time'] != null) {
             try {
-              checkInTime = DateTime.parse(attendance['check_in_time'].toString());
+              checkInTime = DateTime.parse(
+                attendance['check_in_time'].toString(),
+              );
             } catch (e) {
               checkInTime = null;
             }
           }
           if (attendance['check_out_time'] != null) {
             try {
-              checkOutTime = DateTime.parse(attendance['check_out_time'].toString());
+              checkOutTime = DateTime.parse(
+                attendance['check_out_time'].toString(),
+              );
             } catch (e) {
               checkOutTime = null;
             }
@@ -312,8 +326,16 @@ class SupabaseOwnerService {
       final employees = await employeeQuery;
 
       // Get attendance for the month
-      final startDate = DateTime(year, month, 1).toIso8601String().split('T')[0];
-      final endDate = DateTime(year, month + 1, 0).toIso8601String().split('T')[0];
+      final startDate = DateTime(
+        year,
+        month,
+        1,
+      ).toIso8601String().split('T')[0];
+      final endDate = DateTime(
+        year,
+        month + 1,
+        0,
+      ).toIso8601String().split('T')[0];
 
       final attendance = await _supabase
           .from('attendance')
@@ -335,17 +357,22 @@ class SupabaseOwnerService {
 
       for (final employee in employees as List) {
         final employeeId = employee['id'] as String;
-        final monthlySalary = (employee['monthly_salary'] as num?)?.toDouble() ?? 0;
-        
+        final monthlySalary =
+            (employee['monthly_salary'] as num?)?.toDouble() ?? 0;
+
         // Get employee's attendance
-        final empAttendance = (attendance as List).where((att) => att['employee_id'] == employeeId).toList();
+        final empAttendance = (attendance as List)
+            .where((att) => att['employee_id'] == employeeId)
+            .toList();
         final totalHours = empAttendance.fold<double>(
           0,
           (sum, att) => sum + ((att['total_hours'] as num?)?.toDouble() ?? 0),
         );
 
         // Get employee's advances
-        final empAdvances = (advances as List).where((adv) => adv['employee_id'] == employeeId).toList();
+        final empAdvances = (advances as List)
+            .where((adv) => adv['employee_id'] == employeeId)
+            .toList();
         final totalAdvances = empAdvances.fold<double>(
           0,
           (sum, adv) => sum + ((adv['amount'] as num?)?.toDouble() ?? 0),
@@ -402,21 +429,25 @@ class SupabaseOwnerService {
           .select()
           .eq('date', today);
 
-        final activeEmployeeIds = (totalEmployees as List)
+      final activeEmployeeIds = (totalEmployees as List)
           .map((emp) => emp['id']?.toString())
           .whereType<String>()
           .toSet();
 
-        final todayAttendanceList = (todayAttendance as List);
-        final currentlyPresent = (allTodayAttendance as List)
-          .where((att) =>
-            att['check_out_time'] == null &&
-            att['status'] == 'active' &&
-            activeEmployeeIds.contains(att['employee_id']?.toString()))
+      final todayAttendanceList = (todayAttendance as List);
+      final currentlyPresent = (allTodayAttendance as List)
+          .where(
+            (att) =>
+                att['check_out_time'] == null &&
+                att['status'] == 'active' &&
+                activeEmployeeIds.contains(att['employee_id']?.toString()),
+          )
           .toList();
 
-        final todayAttendanceActive = todayAttendanceList
-          .where((att) => activeEmployeeIds.contains(att['employee_id']?.toString()))
+      final todayAttendanceActive = todayAttendanceList
+          .where(
+            (att) => activeEmployeeIds.contains(att['employee_id']?.toString()),
+          )
           .toList();
 
       // Pending requests
@@ -442,9 +473,10 @@ class SupabaseOwnerService {
         'pending_leave_requests': (pendingLeave as List).length,
         'pending_attendance_requests': (pendingAttendance as List).length,
         'pending_advance_requests': (pendingAdvances as List).length,
-        'total_pending_requests': (pendingLeave as List).length + 
-                                 (pendingAttendance as List).length + 
-                                 (pendingAdvances as List).length,
+        'total_pending_requests':
+            (pendingLeave as List).length +
+            (pendingAttendance as List).length +
+            (pendingAdvances as List).length,
       };
     } catch (e) {
       print('Get dashboard stats error: $e');
@@ -469,14 +501,16 @@ class SupabaseOwnerService {
               .select('id')
               .eq('branch', branchName)
               .eq('is_active', true);
-          
+
           employeeIdsInBranch = (employeesInBranch as List)
               .map((e) => e['id'] as String)
               .where((id) => id.isNotEmpty)
               .toList();
-          
-          print('🔍 [Attendance Table] Found ${employeeIdsInBranch.length} employees in branch: $branchName');
-          
+
+          print(
+            '🔍 [Attendance Table] Found ${employeeIdsInBranch.length} employees in branch: $branchName',
+          );
+
           if (employeeIdsInBranch.isEmpty) {
             // لا يوجد موظفين في هذا الفرع
             return [];
@@ -489,15 +523,23 @@ class SupabaseOwnerService {
 
       var query = _supabase
           .from('daily_attendance_summary')
-          .select('*, employees!inner(id, full_name, branch, role, hourly_rate)');
+          .select(
+            '*, employees!inner(id, full_name, branch, role, hourly_rate)',
+          );
 
       if (startDate != null) {
-        query = query.gte('attendance_date', startDate.toIso8601String().split('T')[0]);
+        query = query.gte(
+          'attendance_date',
+          startDate.toIso8601String().split('T')[0],
+        );
       }
       if (endDate != null) {
-        query = query.lte('attendance_date', endDate.toIso8601String().split('T')[0]);
+        query = query.lte(
+          'attendance_date',
+          endDate.toIso8601String().split('T')[0],
+        );
       }
-      
+
       // فلترة حسب الفرع باستخدام employee_id
       // في Supabase Dart SDK، نستخدم or مع multiple eq
       if (employeeIdsInBranch != null && employeeIdsInBranch.isNotEmpty) {
@@ -505,16 +547,18 @@ class SupabaseOwnerService {
           query = query.eq('employee_id', employeeIdsInBranch.first);
         } else {
           // استخدام or مع multiple eq
-          query = query.or(employeeIdsInBranch.map((id) => 'employee_id.eq.$id').join(','));
+          query = query.or(
+            employeeIdsInBranch.map((id) => 'employee_id.eq.$id').join(','),
+          );
         }
       }
-      
+
       if (employeeId != null) {
         query = query.eq('employee_id', employeeId);
       }
 
       final response = await query.order('attendance_date', ascending: false);
-      final records = (response as List).cast<Map<String, dynamic>>();
+      final records = List<Map<String, dynamic>>.from(response as List<dynamic>);
 
       if (records.isNotEmpty) {
         return _withComputedDailySalary(records);
@@ -523,33 +567,46 @@ class SupabaseOwnerService {
       // Fallback to legacy attendance table if summary is empty
       var legacyQuery = _supabase
           .from('attendance')
-          .select('*, employees!inner(id, full_name, branch, role, hourly_rate)');
+          .select(
+            '*, employees!inner(id, full_name, branch, role, hourly_rate)',
+          );
 
       if (startDate != null) {
-        legacyQuery = legacyQuery.gte('date', startDate.toIso8601String().split('T')[0]);
+        legacyQuery = legacyQuery.gte(
+          'date',
+          startDate.toIso8601String().split('T')[0],
+        );
       }
       if (endDate != null) {
-        legacyQuery = legacyQuery.lte('date', endDate.toIso8601String().split('T')[0]);
+        legacyQuery = legacyQuery.lte(
+          'date',
+          endDate.toIso8601String().split('T')[0],
+        );
       }
-      
+
       // فلترة حسب الفرع باستخدام employee_id
       // في Supabase Dart SDK، نستخدم or مع multiple eq
       if (employeeIdsInBranch != null && employeeIdsInBranch.isNotEmpty) {
         if (employeeIdsInBranch.length == 1) {
-          legacyQuery = legacyQuery.eq('employee_id', employeeIdsInBranch.first);
+          legacyQuery = legacyQuery.eq(
+            'employee_id',
+            employeeIdsInBranch.first,
+          );
         } else {
           // استخدام or مع multiple eq
-          legacyQuery = legacyQuery.or(employeeIdsInBranch.map((id) => 'employee_id.eq.$id').join(','));
+          legacyQuery = legacyQuery.or(
+            employeeIdsInBranch.map((id) => 'employee_id.eq.$id').join(','),
+          );
         }
       }
-      
+
       if (employeeId != null) {
         legacyQuery = legacyQuery.eq('employee_id', employeeId);
       }
 
       final legacyResponse = await legacyQuery.order('date', ascending: false);
       return _withComputedDailySalary(
-        (legacyResponse as List).cast<Map<String, dynamic>>(),
+        List<Map<String, dynamic>>.from(legacyResponse as List<dynamic>),
         isLegacy: true,
       );
     } catch (e) {
@@ -565,7 +622,8 @@ class SupabaseOwnerService {
     return records.map((record) {
       final map = Map<String, dynamic>.from(record);
 
-      if (!map.containsKey('daily_salary') || (map['daily_salary'] as num?) == null) {
+      if (!map.containsKey('daily_salary') ||
+          (map['daily_salary'] as num?) == null) {
         final totalHours = (map['total_hours'] as num?)?.toDouble() ?? 0;
         double hourlyRate = 0;
 
@@ -713,7 +771,9 @@ class SupabaseOwnerService {
         };
       }).toList();
 
-      final formattedAttendance = (pendingAttendanceRequests as List).map((req) {
+      final formattedAttendance = (pendingAttendanceRequests as List).map((
+        req,
+      ) {
         final employee = req['employees'] as Map<String, dynamic>?;
         return {
           'id': req['id'],
@@ -743,7 +803,8 @@ class SupabaseOwnerService {
           'absences': formattedAbsences,
           'breakRequests': formattedBreaks,
           'summary': {
-            'totalPendingRequests': formattedAttendance.length +
+            'totalPendingRequests':
+                formattedAttendance.length +
                 formattedLeaveRequests.length +
                 formattedAdvances.length +
                 formattedAbsences.length +
@@ -797,7 +858,7 @@ class SupabaseOwnerService {
         final isActive = emp['is_active'] == true;
         if (isActive) activeEmployees++;
         if (emp['role'] == 'manager') managersCount++;
-        
+
         final hourlyRate = (emp['hourly_rate'] as num?)?.toDouble() ?? 0;
         final monthlySalary = (emp['monthly_salary'] as num?)?.toDouble() ?? 0;
         totalHourlyRateAssigned += hourlyRate;
@@ -822,16 +883,14 @@ class SupabaseOwnerService {
 
       return {
         'success': true,
-        'owner': {
-          'id': ownerRecord['id'],
-          'name': ownerRecord['full_name'],
-        },
+        'owner': {'id': ownerRecord['id'], 'name': ownerRecord['full_name']},
         'employees': formattedEmployees,
         'summary': {
           'totalEmployees': formattedEmployees.length,
           'activeEmployees': activeEmployees,
           'managersCount': managersCount,
-          'totalHourlyRateAssigned': (totalHourlyRateAssigned * 100).round() / 100,
+          'totalHourlyRateAssigned':
+              (totalHourlyRateAssigned * 100).round() / 100,
           'totalMonthlySalary': (totalMonthlySalary * 100).round() / 100,
         },
       };
@@ -850,6 +909,7 @@ class SupabaseOwnerService {
     String? branch,
     String? branchId,
     double? hourlyRate,
+    double? leaveAllowance,
     bool? active,
     String? shiftStartTime,
     String? shiftEndTime,
@@ -863,6 +923,7 @@ class SupabaseOwnerService {
       if (branch != null) updates['branch'] = branch;
       if (branchId != null) updates['branch_id'] = branchId;
       if (hourlyRate != null) updates['hourly_rate'] = hourlyRate;
+      if (leaveAllowance != null) updates['leave_allowance'] = leaveAllowance;
       if (active != null) updates['is_active'] = active;
       if (shiftStartTime != null) updates['shift_start_time'] = shiftStartTime;
       if (shiftEndTime != null) updates['shift_end_time'] = shiftEndTime;
@@ -876,10 +937,7 @@ class SupabaseOwnerService {
           .select()
           .single();
 
-      return {
-        'success': true,
-        'employee': response,
-      };
+      return {'success': true, 'employee': response};
     } catch (e) {
       print('Update employee error: $e');
       throw Exception('فشل تحديث الموظف: $e');
@@ -893,23 +951,35 @@ class SupabaseOwnerService {
     try {
       // Delete related records first
       await _supabase.from('attendance').delete().eq('employee_id', employeeId);
-      await _supabase.from('attendance_requests').delete().eq('employee_id', employeeId);
-      await _supabase.from('leave_requests').delete().eq('employee_id', employeeId);
-      await _supabase.from('salary_advances').delete().eq('employee_id', employeeId);
-      await _supabase.from('absence_notifications').delete().eq('employee_id', employeeId);
-      
+      await _supabase
+          .from('attendance_requests')
+          .delete()
+          .eq('employee_id', employeeId);
+      await _supabase
+          .from('leave_requests')
+          .delete()
+          .eq('employee_id', employeeId);
+      await _supabase
+          .from('salary_advances')
+          .delete()
+          .eq('employee_id', employeeId);
+      await _supabase
+          .from('absence_notifications')
+          .delete()
+          .eq('employee_id', employeeId);
+
       // Try to delete from break_requests if exists
       try {
-        await _supabase.from('break_requests').delete().eq('employee_id', employeeId);
+        await _supabase
+            .from('break_requests')
+            .delete()
+            .eq('employee_id', employeeId);
       } catch (_) {}
 
       // Delete the employee
       await _supabase.from('employees').delete().eq('id', employeeId);
 
-      return {
-        'success': true,
-        'message': 'تم حذف الموظف بنجاح',
-      };
+      return {'success': true, 'message': 'تم حذف الموظف بنجاح'};
     } catch (e) {
       print('Delete employee error: $e');
       throw Exception('فشل حذف الموظف: $e');
@@ -925,6 +995,7 @@ class SupabaseOwnerService {
     String? branchId,
     String? branch,
     required double hourlyRate,
+    double? leaveAllowance,
     String? shiftStartTime,
     String? shiftEndTime,
     String? shiftType,
@@ -951,6 +1022,7 @@ class SupabaseOwnerService {
             'branch_id': branchId,
             'branch': branch,
             'hourly_rate': hourlyRate,
+            'leave_allowance': leaveAllowance ?? 100,
             'shift_start_time': shiftStartTime,
             'shift_end_time': shiftEndTime,
             'shift_type': shiftType,
@@ -960,10 +1032,7 @@ class SupabaseOwnerService {
           .select()
           .single();
 
-      return {
-        'success': true,
-        'employee': response,
-      };
+      return {'success': true, 'employee': response};
     } catch (e) {
       print('Create employee error: $e');
       if (e.toString().contains('معرف الموظف مستخدم')) {
@@ -1022,10 +1091,7 @@ class SupabaseOwnerService {
       return {
         'success': true,
         'payroll': payroll,
-        'period': {
-          'start': startDate,
-          'end': endDate,
-        },
+        'period': {'start': startDate, 'end': endDate},
       };
     } catch (e) {
       print('Get payroll summary error: $e');

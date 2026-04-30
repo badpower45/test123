@@ -342,13 +342,13 @@ class _AttendanceRequestCard extends StatelessWidget {
             Row(
               children: [
                 Icon(
-                  request.requestType == 'check_in' ? Icons.login : Icons.logout,
+                  request.requestType == AttendanceRequestType.checkIn ? Icons.login : Icons.logout,
                   color: AppColors.primaryOrange,
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    request.requestType == 'check_in' ? 'تصحيح حضور' : 'تصحيح انصراف',
+                    request.requestType == AttendanceRequestType.checkIn ? 'تصحيح حضور' : 'تصحيح انصراف',
                     style: const TextStyle(
                       fontWeight: FontWeight.w500,
                       color: AppColors.textPrimary,

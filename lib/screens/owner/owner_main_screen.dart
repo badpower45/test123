@@ -1,14 +1,9 @@
 // Comprehensive Owner Management System
 // This screen provides complete management functionality for owners
 
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
-
-import '../../constants/api_endpoints.dart';
-import '../../models/attendance_summary.dart';
-import '../../models/employee_attendance_status.dart';
 import '../../services/branch_manager_api_service.dart';
 import '../../services/owner_api_service.dart';
 import '../../services/branch_api_service.dart';
@@ -61,7 +56,9 @@ class _OwnerMainScreenState extends State<OwnerMainScreen> {
   void _handleOwnerInfo(Map<String, dynamic>? owner) {
     if (owner == null) return;
     final fetchedName = owner['name']?.toString();
-    if (fetchedName != null && fetchedName.isNotEmpty && fetchedName != _ownerName) {
+    if (fetchedName != null &&
+        fetchedName.isNotEmpty &&
+        fetchedName != _ownerName) {
       setState(() {
         _ownerName = fetchedName;
       });
@@ -73,7 +70,9 @@ class _OwnerMainScreenState extends State<OwnerMainScreen> {
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
-        title: Text(_ownerName?.isNotEmpty == true ? _ownerName! : 'لوحة المالك'),
+        title: Text(
+          _ownerName?.isNotEmpty == true ? _ownerName! : 'لوحة المالك',
+        ),
         backgroundColor: AppColors.primaryOrange,
         foregroundColor: Colors.white,
         actions: [
@@ -119,10 +118,7 @@ class _OwnerMainScreenState extends State<OwnerMainScreen> {
           ),
         ],
       ),
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _tabs,
-      ),
+      body: IndexedStack(index: _currentIndex, children: _tabs),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
         onTap: (index) => setState(() => _currentIndex = index),
@@ -130,11 +126,20 @@ class _OwnerMainScreenState extends State<OwnerMainScreen> {
         unselectedItemColor: Colors.grey,
         type: BottomNavigationBarType.fixed,
         items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.dashboard), label: 'الطلبات'),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.dashboard),
+            label: 'الطلبات',
+          ),
           BottomNavigationBarItem(icon: Icon(Icons.people), label: 'الموظفون'),
           BottomNavigationBarItem(icon: Icon(Icons.store), label: 'الفروع'),
-          BottomNavigationBarItem(icon: Icon(Icons.visibility), label: 'الحضور'),
-          BottomNavigationBarItem(icon: Icon(Icons.payments), label: 'المرتبات'),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.visibility),
+            label: 'الحضور',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.payments),
+            label: 'المرتبات',
+          ),
         ],
       ),
       floatingActionButton: _getFloatingActionButton(),
@@ -204,11 +209,15 @@ class _OwnerDashboardTabState extends State<_OwnerDashboardTab> {
   @override
   void initState() {
     super.initState();
-    _dashboardFuture = SupabaseOwnerService.getOwnerDashboard(ownerId: widget.ownerId);
+    _dashboardFuture = SupabaseOwnerService.getOwnerDashboard(
+      ownerId: widget.ownerId,
+    );
   }
 
   Future<void> _refresh() async {
-    final future = SupabaseOwnerService.getOwnerDashboard(ownerId: widget.ownerId);
+    final future = SupabaseOwnerService.getOwnerDashboard(
+      ownerId: widget.ownerId,
+    );
     setState(() {
       _dashboardFuture = future;
     });
@@ -219,7 +228,9 @@ class _OwnerDashboardTabState extends State<_OwnerDashboardTab> {
     if (value is List) {
       return value
           .whereType<Map>()
-          .map((e) => e.map((key, dynamic val) => MapEntry(key.toString(), val)))
+          .map(
+            (e) => e.map((key, dynamic val) => MapEntry(key.toString(), val)),
+          )
           .map((e) => Map<String, dynamic>.from(e))
           .toList();
     }
@@ -236,7 +247,11 @@ class _OwnerDashboardTabState extends State<_OwnerDashboardTab> {
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('تم تنفيذ ${action == 'approve' ? 'الموافقة' : 'الرفض'} بنجاح')),
+        SnackBar(
+          content: Text(
+            'تم تنفيذ ${action == 'approve' ? 'الموافقة' : 'الرفض'} بنجاح',
+          ),
+        ),
       );
       await _refresh();
     } catch (error) {
@@ -252,7 +267,8 @@ class _OwnerDashboardTabState extends State<_OwnerDashboardTab> {
 
   Widget _buildSummary(Map<String, dynamic> summary) {
     final pending = (summary['totalPendingRequests'] as num?)?.toInt() ?? 0;
-    final attendance = (summary['attendanceRequestsCount'] as num?)?.toInt() ?? 0;
+    final attendance =
+        (summary['attendanceRequestsCount'] as num?)?.toInt() ?? 0;
     final leave = (summary['leaveRequestsCount'] as num?)?.toInt() ?? 0;
     final advances = (summary['advancesCount'] as num?)?.toInt() ?? 0;
     final absences = (summary['absencesCount'] as num?)?.toInt() ?? 0;
@@ -263,12 +279,24 @@ class _OwnerDashboardTabState extends State<_OwnerDashboardTab> {
         spacing: 12,
         runSpacing: 12,
         children: [
-          _SummaryChip(label: 'إجمالي المعلقات', value: pending, color: AppColors.primaryOrange),
+          _SummaryChip(
+            label: 'إجمالي المعلقات',
+            value: pending,
+            color: AppColors.primaryOrange,
+          ),
           _SummaryChip(label: 'الحضور', value: attendance, color: Colors.blue),
           _SummaryChip(label: 'الإجازات', value: leave, color: Colors.teal),
           _SummaryChip(label: 'السلف', value: advances, color: Colors.green),
-          _SummaryChip(label: 'الغياب', value: absences, color: Colors.redAccent),
-          _SummaryChip(label: 'الاستراحات', value: breaks, color: Colors.deepPurple),
+          _SummaryChip(
+            label: 'الغياب',
+            value: absences,
+            color: Colors.redAccent,
+          ),
+          _SummaryChip(
+            label: 'الاستراحات',
+            value: breaks,
+            color: Colors.deepPurple,
+          ),
         ],
       ),
     );
@@ -292,13 +320,23 @@ class _OwnerDashboardTabState extends State<_OwnerDashboardTab> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
               const SizedBox(height: 12),
-              ...requests.map((request) => _RequestTile(
-                    request: request,
-                    onApprove: () => _actOnRequest(type, '${request['id']}', 'approve'),
-                    onReject: () => _actOnRequest(type, '${request['id']}', 'reject'),
-                  )),
+              ...requests.map(
+                (request) => _RequestTile(
+                  request: request,
+                  onApprove: () =>
+                      _actOnRequest(type, '${request['id']}', 'approve'),
+                  onReject: () =>
+                      _actOnRequest(type, '${request['id']}', 'reject'),
+                ),
+              ),
             ],
           ),
         ),
@@ -321,7 +359,11 @@ class _OwnerDashboardTabState extends State<_OwnerDashboardTab> {
               physics: const AlwaysScrollableScrollPhysics(),
               children: [
                 const SizedBox(height: 120),
-                Icon(Icons.error_outline, size: 64, color: AppColors.error.withOpacity(0.8)),
+                Icon(
+                  Icons.error_outline,
+                  size: 64,
+                  color: AppColors.error.withOpacity(0.8),
+                ),
                 const SizedBox(height: 16),
                 Center(child: Text(snapshot.error.toString())),
                 const SizedBox(height: 16),
@@ -345,7 +387,8 @@ class _OwnerDashboardTabState extends State<_OwnerDashboardTab> {
               ],
             );
           }
-          final summary = dashboard['summary'] as Map<String, dynamic>? ?? const {};
+          final summary =
+              dashboard['summary'] as Map<String, dynamic>? ?? const {};
           final leaveRequests = _asRequestList(dashboard['leaveRequests']);
           final advanceRequests = _asRequestList(dashboard['advances']);
           final absenceNotifications = _asRequestList(dashboard['absences']);
@@ -355,10 +398,26 @@ class _OwnerDashboardTabState extends State<_OwnerDashboardTab> {
             children: [
               if (owner != null) _OwnerInfoCard(owner: owner),
               _buildSummary(summary),
-              _buildRequestsSection(title: 'طلبات الإجازة من المديرين', type: 'leave', requests: leaveRequests),
-              _buildRequestsSection(title: 'طلبات السلف من المديرين', type: 'advance', requests: advanceRequests),
-              _buildRequestsSection(title: 'طلبات الاستراحة (البريك)', type: 'break', requests: breakRequests),
-              _buildRequestsSection(title: 'تنبيهات الغياب للمديرين', type: 'absence', requests: absenceNotifications),
+              _buildRequestsSection(
+                title: 'طلبات الإجازة من المديرين',
+                type: 'leave',
+                requests: leaveRequests,
+              ),
+              _buildRequestsSection(
+                title: 'طلبات السلف من المديرين',
+                type: 'advance',
+                requests: advanceRequests,
+              ),
+              _buildRequestsSection(
+                title: 'طلبات الاستراحة (البريك)',
+                type: 'break',
+                requests: breakRequests,
+              ),
+              _buildRequestsSection(
+                title: 'تنبيهات الغياب للمديرين',
+                type: 'absence',
+                requests: absenceNotifications,
+              ),
               const SizedBox(height: 24),
             ],
           );
@@ -384,11 +443,15 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
   @override
   void initState() {
     super.initState();
-    _employeesFuture = SupabaseOwnerService.getOwnerEmployees(ownerId: widget.ownerId);
+    _employeesFuture = SupabaseOwnerService.getOwnerEmployees(
+      ownerId: widget.ownerId,
+    );
   }
 
   Future<void> _refresh() async {
-    final future = SupabaseOwnerService.getOwnerEmployees(ownerId: widget.ownerId);
+    final future = SupabaseOwnerService.getOwnerEmployees(
+      ownerId: widget.ownerId,
+    );
     setState(() {
       _employeesFuture = future;
     });
@@ -396,8 +459,16 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
   }
 
   Future<void> _editEmployee(Map<String, dynamic> employee) async {
-    final nameController = TextEditingController(text: employee['fullName']?.toString() ?? '');
-    final hourlyRateController = TextEditingController(text: employee['hourlyRate']?.toString() ?? '');
+    final nameController = TextEditingController(
+      text: employee['fullName']?.toString() ?? '',
+    );
+    final hourlyRateController = TextEditingController(
+      text: employee['hourlyRate']?.toString() ?? '',
+    );
+    final leaveAllowanceController = TextEditingController(
+      text: (employee['leaveAllowance'] ?? employee['leave_allowance'] ?? 100)
+          .toString(),
+    );
 
     // Parse existing shift times
     TimeOfDay? shiftStart;
@@ -405,13 +476,19 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
     if (employee['shiftStartTime'] != null) {
       final parts = employee['shiftStartTime'].toString().split(':');
       if (parts.length == 2) {
-        shiftStart = TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1]));
+        shiftStart = TimeOfDay(
+          hour: int.parse(parts[0]),
+          minute: int.parse(parts[1]),
+        );
       }
     }
     if (employee['shiftEndTime'] != null) {
       final parts = employee['shiftEndTime'].toString().split(':');
       if (parts.length == 2) {
-        shiftEnd = TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1]));
+        shiftEnd = TimeOfDay(
+          hour: int.parse(parts[0]),
+          minute: int.parse(parts[1]),
+        );
       }
     }
     String shiftType = employee['shiftType']?.toString() ?? 'AM';
@@ -423,6 +500,7 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
         employee: employee,
         nameController: nameController,
         hourlyRateController: hourlyRateController,
+        leaveAllowanceController: leaveAllowanceController,
         initialShiftStart: shiftStart,
         initialShiftEnd: shiftEnd,
         initialShiftType: shiftType,
@@ -436,6 +514,7 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
         employeeId: '${employee['id']}',
         fullName: result['fullName'],
         hourlyRate: result['hourlyRate'],
+        leaveAllowance: result['leaveAllowance'],
         shiftStartTime: result['shiftStartTime'],
         shiftEndTime: result['shiftEndTime'],
         shiftType: result['shiftType'],
@@ -462,7 +541,9 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('تأكيد الحذف'),
-        content: Text('هل أنت متأكد من حذف الموظف "$employeeName"؟\n\nسيتم حذف جميع البيانات المرتبطة به.'),
+        content: Text(
+          'هل أنت متأكد من حذف الموظف "$employeeName"؟\n\nسيتم حذف جميع البيانات المرتبطة به.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -482,9 +563,9 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
     try {
       await SupabaseOwnerService.deleteEmployee(employeeId: employeeId);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تم حذف الموظف بنجاح')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('تم حذف الموظف بنجاح')));
       await _refresh();
     } catch (error) {
       if (!mounted) return;
@@ -501,7 +582,9 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
     if (value == null) {
       return '—';
     }
-    final parsed = value is num ? value.toDouble() : double.tryParse(value.toString());
+    final parsed = value is num
+        ? value.toDouble()
+        : double.tryParse(value.toString());
     if (parsed == null) {
       return value.toString();
     }
@@ -512,19 +595,39 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
     final totalEmployees = (summary['totalEmployees'] as num?)?.toInt() ?? 0;
     final active = (summary['activeEmployees'] as num?)?.toInt() ?? 0;
     final managers = (summary['managersCount'] as num?)?.toInt() ?? 0;
-    final totalHourly = (summary['totalHourlyRateAssigned'] as num?)?.toDouble() ?? 0;
-    final totalMonthly = (summary['totalMonthlySalary'] as num?)?.toDouble() ?? 0;
+    final totalHourly =
+        (summary['totalHourlyRateAssigned'] as num?)?.toDouble() ?? 0;
+    final totalMonthly =
+        (summary['totalMonthlySalary'] as num?)?.toDouble() ?? 0;
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Wrap(
         spacing: 12,
         runSpacing: 12,
         children: [
-          _SummaryChip(label: 'إجمالي الموظفين', value: totalEmployees, color: Colors.blueGrey),
+          _SummaryChip(
+            label: 'إجمالي الموظفين',
+            value: totalEmployees,
+            color: Colors.blueGrey,
+          ),
           _SummaryChip(label: 'النشطون', value: active, color: Colors.green),
-          _SummaryChip(label: 'عدد المديرين', value: managers, color: Colors.deepPurple),
-          _SummaryChip(label: 'إجمالي أسعار الساعة', value: totalHourly, color: Colors.orangeAccent, isCurrency: true),
-          _SummaryChip(label: 'إجمالي الرواتب الشهرية', value: totalMonthly, color: Colors.teal, isCurrency: true),
+          _SummaryChip(
+            label: 'عدد المديرين',
+            value: managers,
+            color: Colors.deepPurple,
+          ),
+          _SummaryChip(
+            label: 'إجمالي أسعار الساعة',
+            value: totalHourly,
+            color: Colors.orangeAccent,
+            isCurrency: true,
+          ),
+          _SummaryChip(
+            label: 'إجمالي الرواتب الشهرية',
+            value: totalMonthly,
+            color: Colors.teal,
+            isCurrency: true,
+          ),
         ],
       ),
     );
@@ -545,16 +648,27 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
               physics: const AlwaysScrollableScrollPhysics(),
               children: [
                 const SizedBox(height: 120),
-                Icon(Icons.error_outline, size: 64, color: AppColors.error.withOpacity(0.8)),
+                Icon(
+                  Icons.error_outline,
+                  size: 64,
+                  color: AppColors.error.withOpacity(0.8),
+                ),
                 const SizedBox(height: 16),
                 Center(child: Text(snapshot.error.toString())),
               ],
             );
           }
           final data = snapshot.data ?? const {};
-          final employees = (data['employees'] as List?)?.whereType<Map>().map(Map<String, dynamic>.from).toList() ?? const [];
+          final employees =
+              (data['employees'] as List?)
+                  ?.whereType<Map>()
+                  .map(Map<String, dynamic>.from)
+                  .toList() ??
+              const [];
           final summary = data['summary'] as Map<String, dynamic>? ?? const {};
-          final owner = data['owner'] is Map ? Map<String, dynamic>.from(data['owner'] as Map) : null;
+          final owner = data['owner'] is Map
+              ? Map<String, dynamic>.from(data['owner'] as Map)
+              : null;
           return ListView(
             physics: const AlwaysScrollableScrollPhysics(),
             children: [
@@ -567,21 +681,35 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
                 final branch = employee['branch']?.toString() ?? '';
                 final hourlyRate = _formatCurrency(employee['hourlyRate']);
                 return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 6,
+                  ),
                   child: Card(
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                     child: ListTile(
                       leading: CircleAvatar(
-                        backgroundColor: AppColors.primaryOrange.withOpacity(0.15),
+                        backgroundColor: AppColors.primaryOrange.withOpacity(
+                          0.15,
+                        ),
                         foregroundColor: AppColors.primaryOrange,
-                        child: Text(name.isNotEmpty ? name.substring(0, 1) : '?'),
+                        child: Text(
+                          name.isNotEmpty ? name.substring(0, 1) : '?',
+                        ),
                       ),
                       title: Text(name),
                       subtitle: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('الدور: $role • الفرع: ${branch.isEmpty ? 'غير محدد' : branch}'),
-                          Text('سعر الساعة: $hourlyRate جنيه', style: TextStyle(fontSize: 12)),
+                          Text(
+                            'الدور: $role • الفرع: ${branch.isEmpty ? 'غير محدد' : branch}',
+                          ),
+                          Text(
+                            'سعر الساعة: $hourlyRate جنيه',
+                            style: TextStyle(fontSize: 12),
+                          ),
                         ],
                       ),
                       trailing: Row(
@@ -649,7 +777,9 @@ class _OwnerBranchesTabState extends State<_OwnerBranchesTab> {
 
   String _formatCurrency(dynamic value) {
     if (value == null) return '—';
-    final parsed = value is num ? value.toDouble() : double.tryParse(value.toString());
+    final parsed = value is num
+        ? value.toDouble()
+        : double.tryParse(value.toString());
     if (parsed == null) return value.toString();
     return parsed.toStringAsFixed(parsed.truncateToDouble() == parsed ? 0 : 2);
   }
@@ -669,7 +799,11 @@ class _OwnerBranchesTabState extends State<_OwnerBranchesTab> {
               physics: const AlwaysScrollableScrollPhysics(),
               children: [
                 const SizedBox(height: 120),
-                Icon(Icons.error_outline, size: 64, color: AppColors.error.withOpacity(0.8)),
+                Icon(
+                  Icons.error_outline,
+                  size: 64,
+                  color: AppColors.error.withOpacity(0.8),
+                ),
                 const SizedBox(height: 16),
                 Center(child: Text(snapshot.error.toString())),
               ],
@@ -688,7 +822,10 @@ class _OwnerBranchesTabState extends State<_OwnerBranchesTab> {
                       children: [
                         Icon(Icons.store, size: 64, color: Colors.grey),
                         SizedBox(height: 16),
-                        Text('لا توجد فروع بعد', style: TextStyle(fontSize: 18)),
+                        Text(
+                          'لا توجد فروع بعد',
+                          style: TextStyle(fontSize: 18),
+                        ),
                         SizedBox(height: 8),
                         Text('اضغط على زر إضافة فرع لبدء إنشاء الفروع'),
                       ],
@@ -696,7 +833,13 @@ class _OwnerBranchesTabState extends State<_OwnerBranchesTab> {
                   ),
                 )
               else
-                ...branches.map((branch) => _BranchCard(branch: branch, onRefresh: _refresh, ownerId: widget.ownerId)),
+                ...branches.map(
+                  (branch) => _BranchCard(
+                    branch: branch,
+                    onRefresh: _refresh,
+                    ownerId: widget.ownerId,
+                  ),
+                ),
             ],
           );
         },
@@ -713,7 +856,11 @@ class _OwnerBranchesTabState extends State<_OwnerBranchesTab> {
         const SizedBox(height: 24),
         const Text(
           'جدول الموظفين',
-          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.primaryOrange),
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: AppColors.primaryOrange,
+          ),
         ),
         const SizedBox(height: 16),
         Card(
@@ -726,19 +873,49 @@ class _OwnerBranchesTabState extends State<_OwnerBranchesTab> {
               dataRowColor: MaterialStateProperty.all(Colors.white),
               columns: const [
                 DataColumn(
-                  label: Text('الاسم', style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.primaryOrange)),
+                  label: Text(
+                    'الاسم',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.primaryOrange,
+                    ),
+                  ),
                 ),
                 DataColumn(
-                  label: Text('الدور', style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.primaryOrange)),
+                  label: Text(
+                    'الدور',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.primaryOrange,
+                    ),
+                  ),
                 ),
                 DataColumn(
-                  label: Text('الفرع', style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.primaryOrange)),
+                  label: Text(
+                    'الفرع',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.primaryOrange,
+                    ),
+                  ),
                 ),
                 DataColumn(
-                  label: Text('سعر الساعة', style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.primaryOrange)),
+                  label: Text(
+                    'سعر الساعة',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.primaryOrange,
+                    ),
+                  ),
                 ),
                 DataColumn(
-                  label: Text('الحالة', style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.primaryOrange)),
+                  label: Text(
+                    'الحالة',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.primaryOrange,
+                    ),
+                  ),
                 ),
               ],
               rows: employees.map((employee) {
@@ -749,21 +926,51 @@ class _OwnerBranchesTabState extends State<_OwnerBranchesTab> {
                 final isActive = employee['active'] == true;
                 return DataRow(
                   cells: [
-                    DataCell(Text(name, style: const TextStyle(color: AppColors.textPrimary))),
-                    DataCell(Text(role, style: const TextStyle(color: AppColors.textPrimary))),
-                    DataCell(Text(branchName, style: const TextStyle(color: AppColors.textPrimary))),
-                    DataCell(Text(hourlyRate, style: const TextStyle(color: AppColors.primaryOrange, fontWeight: FontWeight.bold))),
+                    DataCell(
+                      Text(
+                        name,
+                        style: const TextStyle(color: AppColors.textPrimary),
+                      ),
+                    ),
+                    DataCell(
+                      Text(
+                        role,
+                        style: const TextStyle(color: AppColors.textPrimary),
+                      ),
+                    ),
+                    DataCell(
+                      Text(
+                        branchName,
+                        style: const TextStyle(color: AppColors.textPrimary),
+                      ),
+                    ),
+                    DataCell(
+                      Text(
+                        hourlyRate,
+                        style: const TextStyle(
+                          color: AppColors.primaryOrange,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
                     DataCell(
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
                         decoration: BoxDecoration(
-                          color: isActive ? AppColors.success.withOpacity(0.1) : AppColors.error.withOpacity(0.1),
+                          color: isActive
+                              ? AppColors.success.withOpacity(0.1)
+                              : AppColors.error.withOpacity(0.1),
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Text(
                           isActive ? 'نشط' : 'غير نشط',
                           style: TextStyle(
-                            color: isActive ? AppColors.success : AppColors.error,
+                            color: isActive
+                                ? AppColors.success
+                                : AppColors.error,
                             fontWeight: FontWeight.bold,
                             fontSize: 12,
                           ),
@@ -825,7 +1032,10 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
     if (reason == null) return;
 
     try {
-      await SupabaseOwnerService.simpleManualCheckOut(employeeId, reason: reason);
+      await SupabaseOwnerService.simpleManualCheckOut(
+        employeeId,
+        reason: reason,
+      );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -850,7 +1060,10 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
     if (reason == null) return;
 
     try {
-      await SupabaseOwnerService.simpleManualCheckIn(employeeId, reason: reason);
+      await SupabaseOwnerService.simpleManualCheckIn(
+        employeeId,
+        reason: reason,
+      );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -898,8 +1111,13 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
             child: const Text('إلغاء'),
           ),
           ElevatedButton(
-            onPressed: () => Navigator.pop(context, controller.text.trim().isEmpty ? '' : controller.text.trim()),
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryOrange),
+            onPressed: () => Navigator.pop(
+              context,
+              controller.text.trim().isEmpty ? '' : controller.text.trim(),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryOrange,
+            ),
             child: const Text('تأكيد'),
           ),
         ],
@@ -956,7 +1174,11 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
               physics: const AlwaysScrollableScrollPhysics(),
               children: [
                 const SizedBox(height: 120),
-                Icon(Icons.error_outline, size: 64, color: AppColors.error.withOpacity(0.8)),
+                Icon(
+                  Icons.error_outline,
+                  size: 64,
+                  color: AppColors.error.withOpacity(0.8),
+                ),
                 const SizedBox(height: 16),
                 Center(child: Text(snapshot.error.toString())),
               ],
@@ -967,7 +1189,9 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
             return const Center(child: Text('لا توجد بيانات'));
           }
 
-          final employeesList = (result['employees'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+          final employeesList =
+              (result['employees'] as List?)?.cast<Map<String, dynamic>>() ??
+              [];
           final summary = result['summary'] as Map<String, dynamic>? ?? {};
           final presentCount = (summary['presentCount'] as num?)?.toInt() ?? 0;
           final absentCount = (summary['absentCount'] as num?)?.toInt() ?? 0;
@@ -1010,7 +1234,10 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
               const SizedBox(height: 24),
 
               // Employee List
-              const Text('قائمة الموظفين', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const Text(
+                'قائمة الموظفين',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
               const SizedBox(height: 12),
 
               ...employeesList.map((employee) {
@@ -1021,15 +1248,21 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
                 final status = employee['status']?.toString() ?? 'absent';
                 final checkInTimeStr = employee['checkInTime']?.toString();
                 final checkOutTimeStr = employee['checkOutTime']?.toString();
-                final checkInTime = checkInTimeStr != null ? DateTime.tryParse(checkInTimeStr) : null;
-                final checkOutTime = checkOutTimeStr != null ? DateTime.tryParse(checkOutTimeStr) : null;
+                final checkInTime = checkInTimeStr != null
+                    ? DateTime.tryParse(checkInTimeStr)
+                    : null;
+                final checkOutTime = checkOutTimeStr != null
+                    ? DateTime.tryParse(checkOutTimeStr)
+                    : null;
                 final isPresent = status == 'present';
                 final isAbsent = status == 'absent';
                 final isCheckedOut = status == 'checked_out';
 
                 return Card(
                   margin: const EdgeInsets.only(bottom: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                   child: Padding(
                     padding: const EdgeInsets.all(16),
                     child: Column(
@@ -1060,7 +1293,10 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
                               ),
                             ),
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 6,
+                              ),
                               decoration: BoxDecoration(
                                 color: _getStatusColor(status).withOpacity(0.1),
                                 borderRadius: BorderRadius.circular(16),
@@ -1130,7 +1366,8 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
                             if (isAbsent || isCheckedOut)
                               Expanded(
                                 child: ElevatedButton.icon(
-                                  onPressed: () => _manualCheckIn(employeeId, employeeName),
+                                  onPressed: () =>
+                                      _manualCheckIn(employeeId, employeeName),
                                   icon: const Icon(Icons.login),
                                   label: const Text('تسجيل حضور'),
                                   style: ElevatedButton.styleFrom(
@@ -1142,7 +1379,8 @@ class _OwnerPresenceTabState extends State<_OwnerPresenceTab> {
                             if (isPresent)
                               Expanded(
                                 child: ElevatedButton.icon(
-                                  onPressed: () => _manualCheckOut(employeeId, employeeName),
+                                  onPressed: () =>
+                                      _manualCheckOut(employeeId, employeeName),
                                   icon: const Icon(Icons.logout),
                                   label: const Text('تسجيل انصراف'),
                                   style: ElevatedButton.styleFrom(
@@ -1187,7 +1425,7 @@ class _OwnerPayrollTabState extends State<_OwnerPayrollTab> {
     super.initState();
     // النظام الجديد: من يوم 16 إلى يوم 15 الشهر القادم
     final now = DateTime.now();
-    
+
     if (now.day >= 16) {
       // من 16 الشهر الحالي إلى 15 الشهر القادم
       _startDate = DateTime(now.year, now.month, 16);
@@ -1197,11 +1435,12 @@ class _OwnerPayrollTabState extends State<_OwnerPayrollTab> {
       _startDate = DateTime(now.year, now.month - 1, 16);
       _endDate = DateTime(now.year, now.month, 15);
     }
-    
+
     _employeesFuture = _loadEmployees();
   }
 
-  String _formatDate(DateTime date) => '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+  String _formatDate(DateTime date) =>
+      '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
 
   Future<List<Map<String, dynamic>>> _loadEmployees() async {
     try {
@@ -1210,10 +1449,12 @@ class _OwnerPayrollTabState extends State<_OwnerPayrollTab> {
         startDate: _formatDate(_startDate),
         endDate: _formatDate(_endDate),
       );
-      final payroll = (payrollData['payroll'] as List?)
-          ?.whereType<Map>()
-          .map(Map<String, dynamic>.from)
-          .toList() ?? [];
+      final payroll =
+          (payrollData['payroll'] as List?)
+              ?.whereType<Map>()
+              .map(Map<String, dynamic>.from)
+              .toList() ??
+          [];
       return payroll;
     } catch (e) {
       throw Exception('فشل تحميل بيانات الرواتب: $e');
@@ -1259,11 +1500,11 @@ class _OwnerPayrollTabState extends State<_OwnerPayrollTab> {
   void _showEmployeeDetails(Map<String, dynamic> employee) {
     final employeeId = employee['id']?.toString();
     final employeeName = employee['name']?.toString() ?? 'موظف';
-    
+
     if (employeeId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('معرف الموظف غير موجود')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('معرف الموظف غير موجود')));
       return;
     }
 
@@ -1307,7 +1548,7 @@ class _OwnerPayrollTabState extends State<_OwnerPayrollTab> {
               ],
             ),
           ),
-          
+
           // Simple Employee Table
           Expanded(
             child: FutureBuilder<List<Map<String, dynamic>>>(
@@ -1321,21 +1562,25 @@ class _OwnerPayrollTabState extends State<_OwnerPayrollTab> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.error_outline, size: 64, color: AppColors.error.withOpacity(0.8)),
+                        Icon(
+                          Icons.error_outline,
+                          size: 64,
+                          color: AppColors.error.withOpacity(0.8),
+                        ),
                         const SizedBox(height: 16),
                         Text('${snapshot.error}'),
                       ],
                     ),
                   );
                 }
-                
+
                 final employees = snapshot.data ?? [];
                 if (employees.isEmpty) {
                   return const Center(
                     child: Text('لا توجد بيانات رواتب في الفترة المختارة'),
                   );
                 }
-                
+
                 return ListView(
                   physics: const AlwaysScrollableScrollPhysics(),
                   padding: const EdgeInsets.all(16),
@@ -1348,19 +1593,59 @@ class _OwnerPayrollTabState extends State<_OwnerPayrollTab> {
                             AppColors.primaryOrange.withOpacity(0.1),
                           ),
                           columns: const [
-                            DataColumn(label: Text('اسم الموظف', style: TextStyle(fontWeight: FontWeight.bold))),
-                            DataColumn(label: Text('الدور', style: TextStyle(fontWeight: FontWeight.bold))),
-                            DataColumn(label: Text('الإجمالي', style: TextStyle(fontWeight: FontWeight.bold))),
-                            DataColumn(label: Text('السُلف', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red))),
-                            DataColumn(label: Text('الصافي', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green))),
+                            DataColumn(
+                              label: Text(
+                                'اسم الموظف',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            DataColumn(
+                              label: Text(
+                                'الدور',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            DataColumn(
+                              label: Text(
+                                'الإجمالي',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            DataColumn(
+                              label: Text(
+                                'السُلف',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.red,
+                                ),
+                              ),
+                            ),
+                            DataColumn(
+                              label: Text(
+                                'الصافي',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.green,
+                                ),
+                              ),
+                            ),
                           ],
                           rows: employees.map((employee) {
-                            final name = employee['name']?.toString() ?? 'غير معروف';
+                            final name =
+                                employee['name']?.toString() ?? 'غير معروف';
                             final role = employee['role']?.toString() ?? '-';
-                            final total = (employee['totalComputedPay'] as num?)?.toDouble() ?? 0;
-                            final advances = (employee['totalAdvances'] as num?)?.toDouble() ?? 0;
-                            final netSalary = (employee['netSalary'] as num?)?.toDouble() ?? 0;
-                            
+                            final total =
+                                (employee['totalComputedPay'] as num?)
+                                    ?.toDouble() ??
+                                0;
+                            final advances =
+                                (employee['totalAdvances'] as num?)
+                                    ?.toDouble() ??
+                                0;
+                            final netSalary =
+                                (employee['netSalary'] as num?)?.toDouble() ??
+                                0;
+
                             return DataRow(
                               cells: [
                                 DataCell(
@@ -1374,7 +1659,9 @@ class _OwnerPayrollTabState extends State<_OwnerPayrollTab> {
                                 DataCell(
                                   Text(
                                     '${total.toStringAsFixed(2)} ج',
-                                    style: const TextStyle(fontWeight: FontWeight.w500),
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w500,
+                                    ),
                                   ),
                                   onTap: () => _showEmployeeDetails(employee),
                                 ),
@@ -1438,7 +1725,7 @@ class _EmployeePayrollDetails extends StatelessWidget {
     final hourlyPay = (employee['hourlyPay'] as num?)?.toDouble() ?? 0;
     final pulsePay = (employee['pulsePay'] as num?)?.toDouble() ?? 0;
     final total = (employee['totalComputedPay'] as num?)?.toDouble() ?? 0;
-    
+
     return Container(
       padding: const EdgeInsets.all(24),
       height: MediaQuery.of(context).size.height * 0.7,
@@ -1452,7 +1739,11 @@ class _EmployeePayrollDetails extends StatelessWidget {
                 backgroundColor: AppColors.primaryOrange,
                 child: Text(
                   name.isNotEmpty ? name[0].toUpperCase() : '?',
-                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
+                  style: const TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
                 ),
               ),
               const SizedBox(width: 16),
@@ -1462,7 +1753,10 @@ class _EmployeePayrollDetails extends StatelessWidget {
                   children: [
                     Text(
                       name,
-                      style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     Text(
                       '$role - $branch',
@@ -1480,29 +1774,45 @@ class _EmployeePayrollDetails extends StatelessWidget {
           const SizedBox(height: 24),
           const Divider(),
           const SizedBox(height: 16),
-          
+
           Text(
             'ملخص المرتب',
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 16),
-          
+
           _DetailRow(label: 'الفترة', value: '$startDate إلى $endDate'),
-          _DetailRow(label: 'ساعات العمل', value: '${workHours.toStringAsFixed(2)} ساعة'),
-          _DetailRow(label: 'سعر الساعة', value: '${hourlyRate.toStringAsFixed(2)} جنيه'),
-          _DetailRow(label: 'أجر الساعات', value: '${hourlyPay.toStringAsFixed(2)} جنيه'),
-          _DetailRow(label: 'أجر النبضات', value: '${pulsePay.toStringAsFixed(2)} جنيه'),
+          _DetailRow(
+            label: 'ساعات العمل',
+            value: '${workHours.toStringAsFixed(2)} ساعة',
+          ),
+          _DetailRow(
+            label: 'سعر الساعة',
+            value: '${hourlyRate.toStringAsFixed(2)} جنيه',
+          ),
+          _DetailRow(
+            label: 'أجر الساعات',
+            value: '${hourlyPay.toStringAsFixed(2)} جنيه',
+          ),
+          _DetailRow(
+            label: 'أجر النبضات',
+            value: '${pulsePay.toStringAsFixed(2)} جنيه',
+          ),
           const Divider(height: 32),
           _DetailRow(
             label: 'المبلغ الكلي',
             value: '${total.toStringAsFixed(2)} جنيه',
             isTotal: true,
           ),
-          
+
           const SizedBox(height: 24),
           const Text(
             'ملاحظة: التفاصيل اليومية (التاريخ، وقت الحضور، وقت الانصراف، بدل الإجازة، الخصومات، السلف) ستكون متاحة قريبًا.',
-            style: TextStyle(fontSize: 12, color: Colors.grey, fontStyle: FontStyle.italic),
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.grey,
+              fontStyle: FontStyle.italic,
+            ),
           ),
         ],
       ),
@@ -1565,11 +1875,12 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
   final _nameController = TextEditingController();
   final _pinController = TextEditingController();
   final _hourlyRateController = TextEditingController();
+  final _leaveAllowanceController = TextEditingController(text: '100');
   late Future<List<Map<String, dynamic>>> _branchesFuture;
-  String? _selectedBranchId;  // Changed to store UUID
-  String? _selectedBranchName;  // Optional: store name
-  bool _isManager = false;  // NEW: Is this employee a manager?
-  
+  String? _selectedBranchId; // Changed to store UUID
+  String? _selectedBranchName; // Optional: store name
+  bool _isManager = false; // NEW: Is this employee a manager?
+
   // Shift times
   TimeOfDay? _shiftStartTime;
   TimeOfDay? _shiftEndTime;
@@ -1587,6 +1898,7 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
     _nameController.dispose();
     _pinController.dispose();
     _hourlyRateController.dispose();
+    _leaveAllowanceController.dispose();
     super.dispose();
   }
 
@@ -1595,15 +1907,19 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
 
     try {
       final hourlyRate = double.parse(_hourlyRateController.text.trim());
-      
+      final leaveAllowance =
+          double.tryParse(_leaveAllowanceController.text.trim()) ?? 100;
+
       // Format shift times as HH:mm strings
       String? shiftStart;
       String? shiftEnd;
       if (_shiftStartTime != null) {
-        shiftStart = '${_shiftStartTime!.hour.toString().padLeft(2, '0')}:${_shiftStartTime!.minute.toString().padLeft(2, '0')}';
+        shiftStart =
+            '${_shiftStartTime!.hour.toString().padLeft(2, '0')}:${_shiftStartTime!.minute.toString().padLeft(2, '0')}';
       }
       if (_shiftEndTime != null) {
-        shiftEnd = '${_shiftEndTime!.hour.toString().padLeft(2, '0')}:${_shiftEndTime!.minute.toString().padLeft(2, '0')}';
+        shiftEnd =
+            '${_shiftEndTime!.hour.toString().padLeft(2, '0')}:${_shiftEndTime!.minute.toString().padLeft(2, '0')}';
       }
 
       await SupabaseOwnerService.createEmployee(
@@ -1614,6 +1930,7 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
         branchId: _selectedBranchId,
         branch: _selectedBranchName,
         hourlyRate: hourlyRate,
+        leaveAllowance: leaveAllowance,
         shiftStartTime: shiftStart,
         shiftEndTime: shiftEnd,
         shiftType: _shiftType,
@@ -1636,7 +1953,11 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
       if (!mounted) return;
       Navigator.pop(context, true);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_isManager ? 'تم إضافة المدير بنجاح' : 'تم إضافة الموظف بنجاح')),
+        SnackBar(
+          content: Text(
+            _isManager ? 'تم إضافة المدير بنجاح' : 'تم إضافة الموظف بنجاح',
+          ),
+        ),
       );
     } catch (error) {
       if (!mounted) return;
@@ -1716,6 +2037,17 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
               ),
               const SizedBox(height: 16),
 
+              TextFormField(
+                controller: _leaveAllowanceController,
+                decoration: const InputDecoration(
+                  labelText: 'بدل الإجازة (جنيه)',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.number,
+                validator: (value) => value?.isEmpty == true ? 'مطلوب' : null,
+              ),
+              const SizedBox(height: 16),
+
               FutureBuilder<List<Map<String, dynamic>>>(
                 future: _branchesFuture,
                 builder: (context, snapshot) {
@@ -1733,10 +2065,14 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
                       border: OutlineInputBorder(),
                     ),
                     items: [
-                      const DropdownMenuItem(value: null, child: Text('اختر الفرع')),
+                      const DropdownMenuItem(
+                        value: null,
+                        child: Text('اختر الفرع'),
+                      ),
                       ...branches.map((branch) {
                         final branchId = branch['id']?.toString();
-                        final branchName = branch['name']?.toString() ?? 'فرع بدون اسم';
+                        final branchName =
+                            branch['name']?.toString() ?? 'فرع بدون اسم';
                         return DropdownMenuItem(
                           value: branchId,
                           child: Text(branchName),
@@ -1752,13 +2088,15 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
                             (b) => b['id']?.toString() == value,
                             orElse: () => {},
                           );
-                          _selectedBranchName = selectedBranch['name']?.toString();
+                          _selectedBranchName = selectedBranch['name']
+                              ?.toString();
                         } else {
                           _selectedBranchName = null;
                         }
                       });
                     },
-                    validator: (value) => value == null || value.isEmpty ? 'مطلوب' : null,
+                    validator: (value) =>
+                        value == null || value.isEmpty ? 'مطلوب' : null,
                   );
                 },
               ),
@@ -1767,7 +2105,9 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
               // Manager Checkbox
               CheckboxListTile(
                 title: const Text('تعيين كمدير للفرع'),
-                subtitle: const Text('إذا تم التحديد، سيكون هذا الموظف مدير الفرع المختار'),
+                subtitle: const Text(
+                  'إذا تم التحديد، سيكون هذا الموظف مدير الفرع المختار',
+                ),
                 value: _isManager,
                 onChanged: (value) {
                   setState(() {
@@ -1819,7 +2159,8 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
                 onTap: () async {
                   final time = await showTimePicker(
                     context: context,
-                    initialTime: _shiftStartTime ?? const TimeOfDay(hour: 9, minute: 0),
+                    initialTime:
+                        _shiftStartTime ?? const TimeOfDay(hour: 9, minute: 0),
                   );
                   if (time != null) {
                     setState(() {
@@ -1838,7 +2179,9 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
                         ? '${_shiftStartTime!.hour.toString().padLeft(2, '0')}:${_shiftStartTime!.minute.toString().padLeft(2, '0')}'
                         : 'اختر وقت البداية',
                     style: TextStyle(
-                      color: _shiftStartTime != null ? Colors.black : Colors.grey,
+                      color: _shiftStartTime != null
+                          ? Colors.black
+                          : Colors.grey,
                     ),
                   ),
                 ),
@@ -1850,7 +2193,8 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
                 onTap: () async {
                   final time = await showTimePicker(
                     context: context,
-                    initialTime: _shiftEndTime ?? const TimeOfDay(hour: 17, minute: 0),
+                    initialTime:
+                        _shiftEndTime ?? const TimeOfDay(hour: 17, minute: 0),
                   );
                   if (time != null) {
                     setState(() {
@@ -1883,7 +2227,10 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
                   backgroundColor: AppColors.primaryOrange,
                   padding: const EdgeInsets.symmetric(vertical: 16),
                 ),
-                child: const Text('إضافة الموظف', style: TextStyle(fontSize: 16)),
+                child: const Text(
+                  'إضافة الموظف',
+                  style: TextStyle(fontSize: 16),
+                ),
               ),
             ],
           ),
@@ -1891,7 +2238,6 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
       ),
     );
   }
-
 }
 
 // Add Branch Sheet
@@ -1930,13 +2276,13 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
       final position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
       );
-      
+
       setState(() {
         _latitudeController.text = position.latitude.toStringAsFixed(7);
         _longitudeController.text = position.longitude.toStringAsFixed(7);
         _locationSet = true;
       });
-      
+
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -1967,11 +2313,11 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
       context,
       MaterialPageRoute(
         builder: (context) => BranchLocationPickerScreen(
-          initialLatitude: _latitudeController.text.isNotEmpty 
-              ? double.tryParse(_latitudeController.text) 
+          initialLatitude: _latitudeController.text.isNotEmpty
+              ? double.tryParse(_latitudeController.text)
               : null,
-          initialLongitude: _longitudeController.text.isNotEmpty 
-              ? double.tryParse(_longitudeController.text) 
+          initialLongitude: _longitudeController.text.isNotEmpty
+              ? double.tryParse(_longitudeController.text)
               : null,
           initialRadius: _currentRadius,
         ),
@@ -1992,7 +2338,7 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
   Future<void> _getCurrentWifiBssid() async {
     try {
       final wifiBSSID = await WiFiService.getCurrentWifiBssidValidated();
-      
+
       if (wifiBSSID.isNotEmpty) {
         setState(() {
           _wifiNameController.text = wifiBSSID;
@@ -2009,7 +2355,9 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('لم يتم العثور على شبكة Wi-Fi. تأكد من الاتصال بالشبكة'),
+            content: Text(
+              'لم يتم العثور على شبكة Wi-Fi. تأكد من الاتصال بالشبكة',
+            ),
             backgroundColor: Colors.orange,
           ),
         );
@@ -2027,7 +2375,7 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
-    
+
     if (!_locationSet) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -2041,17 +2389,23 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
     try {
       await BranchApiService.createBranch(
         name: _nameController.text.trim(),
-        wifiBssid: _wifiNameController.text.trim().isEmpty ? null : _wifiNameController.text.trim(),
-        latitude: _latitudeController.text.trim().isEmpty ? null : double.parse(_latitudeController.text.trim()),
-        longitude: _longitudeController.text.trim().isEmpty ? null : double.parse(_longitudeController.text.trim()),
+        wifiBssid: _wifiNameController.text.trim().isEmpty
+            ? null
+            : _wifiNameController.text.trim(),
+        latitude: _latitudeController.text.trim().isEmpty
+            ? null
+            : double.parse(_latitudeController.text.trim()),
+        longitude: _longitudeController.text.trim().isEmpty
+            ? null
+            : double.parse(_longitudeController.text.trim()),
         geofenceRadius: _currentRadius.toInt(),
       );
 
       if (!mounted) return;
       Navigator.pop(context, true);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('✓ تم إضافة الفرع بنجاح')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('✓ تم إضافة الفرع بنجاح')));
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -2144,7 +2498,9 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: _locationSet ? Colors.green.shade50 : Colors.orange.shade50,
+                  color: _locationSet
+                      ? Colors.green.shade50
+                      : Colors.orange.shade50,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
                     color: _locationSet ? Colors.green : Colors.orange,
@@ -2162,11 +2518,15 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          _locationSet ? 'تم تحديد الموقع بنجاح ✓' : 'حدد موقع الفرع',
+                          _locationSet
+                              ? 'تم تحديد الموقع بنجاح ✓'
+                              : 'حدد موقع الفرع',
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.bold,
-                            color: _locationSet ? Colors.green.shade900 : Colors.orange.shade900,
+                            color: _locationSet
+                                ? Colors.green.shade900
+                                : Colors.orange.shade900,
                           ),
                         ),
                       ],
@@ -2175,11 +2535,17 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
                       const SizedBox(height: 12),
                       Text(
                         'خط العرض: ${_latitudeController.text}',
-                        style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
+                        style: TextStyle(
+                          color: Colors.grey.shade700,
+                          fontSize: 13,
+                        ),
                       ),
                       Text(
                         'خط الطول: ${_longitudeController.text}',
-                        style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
+                        style: TextStyle(
+                          color: Colors.grey.shade700,
+                          fontSize: 13,
+                        ),
                       ),
                     ],
                     const SizedBox(height: 12),
@@ -2215,7 +2581,7 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
                   ],
                 ),
               ),
-              
+
               const SizedBox(height: 16),
 
               // Radius Slider Section
@@ -2240,7 +2606,10 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
                           ),
                         ),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 6,
+                          ),
                           decoration: BoxDecoration(
                             color: AppColors.primaryOrange,
                             borderRadius: BorderRadius.circular(20),
@@ -2257,7 +2626,7 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
                       ],
                     ),
                     const SizedBox(height: 16),
-                    
+
                     // Visual representation
                     SizedBox(
                       height: 120,
@@ -2286,13 +2655,19 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
                               color: AppColors.primaryOrange,
                               boxShadow: [
                                 BoxShadow(
-                                  color: AppColors.primaryOrange.withOpacity(0.5),
+                                  color: AppColors.primaryOrange.withOpacity(
+                                    0.5,
+                                  ),
                                   blurRadius: 8,
                                   spreadRadius: 2,
                                 ),
                               ],
                             ),
-                            child: const Icon(Icons.location_on, size: 12, color: Colors.white),
+                            child: const Icon(
+                              Icons.location_on,
+                              size: 12,
+                              color: Colors.white,
+                            ),
                           ),
                           // Radius line
                           Positioned(
@@ -2306,9 +2681,9 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
                         ],
                       ),
                     ),
-                    
+
                     const SizedBox(height: 12),
-                    
+
                     // Slider
                     Slider(
                       value: _currentRadius,
@@ -2324,7 +2699,7 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
                         });
                       },
                     ),
-                    
+
                     // Quick select buttons
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -2335,7 +2710,7 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
                         _buildRadiusQuickButton(300),
                       ],
                     ),
-                    
+
                     const SizedBox(height: 8),
                     Text(
                       'اختر المسافة المناسبة للموظفين لتسجيل الحضور',
@@ -2417,7 +2792,10 @@ class _AddBranchSheetState extends State<_AddBranchSheet> {
                   backgroundColor: AppColors.primaryOrange,
                   padding: const EdgeInsets.symmetric(vertical: 16),
                 ),
-                child: const Text('إضافة الفرع', style: TextStyle(fontSize: 16)),
+                child: const Text(
+                  'إضافة الفرع',
+                  style: TextStyle(fontSize: 16),
+                ),
               ),
             ],
           ),
@@ -2483,12 +2861,18 @@ class _RequestTile extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(request['employeeName'] ?? request['employeeId'] ?? '',
-                    style: const TextStyle(fontWeight: FontWeight.bold)),
-                Text(request['status']?.toString() ?? '', style: const TextStyle(color: AppColors.textSecondary)),
+                Text(
+                  request['employeeName'] ?? request['employeeId'] ?? '',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  request['status']?.toString() ?? '',
+                  style: const TextStyle(color: AppColors.textSecondary),
+                ),
               ],
             ),
-            if (request['reason'] != null && request['reason'].toString().isNotEmpty)
+            if (request['reason'] != null &&
+                request['reason'].toString().isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(request['reason'].toString()),
@@ -2501,7 +2885,10 @@ class _RequestTile extends StatelessWidget {
                     onPressed: onApprove,
                     icon: const Icon(Icons.check),
                     label: const Text('موافقة'),
-                    style: ElevatedButton.styleFrom(backgroundColor: AppColors.success, foregroundColor: Colors.white),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.success,
+                      foregroundColor: Colors.white,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -2510,7 +2897,10 @@ class _RequestTile extends StatelessWidget {
                     onPressed: onReject,
                     icon: const Icon(Icons.close),
                     label: const Text('رفض'),
-                    style: ElevatedButton.styleFrom(backgroundColor: AppColors.error, foregroundColor: Colors.white),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.error,
+                      foregroundColor: Colors.white,
+                    ),
                   ),
                 ),
               ],
@@ -2557,7 +2947,11 @@ class _OwnerInfoCard extends StatelessWidget {
 }
 
 class _BranchCard extends StatefulWidget {
-  const _BranchCard({required this.branch, required this.onRefresh, required this.ownerId});
+  const _BranchCard({
+    required this.branch,
+    required this.onRefresh,
+    required this.ownerId,
+  });
 
   final Map<String, dynamic> branch;
   final VoidCallback onRefresh;
@@ -2590,16 +2984,30 @@ class _BranchCardState extends State<_BranchCard> {
               children: [
                 Icon(Icons.store, color: AppColors.primaryOrange),
                 const SizedBox(width: 8),
-                Text(widget.branch['name'] ?? '', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                Text(
+                  widget.branch['name'] ?? '',
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 8),
-            if (widget.branch['wifiBssid'] != null) Text('الواي فاي: ${widget.branch['wifiBssid']}'),
-            if (widget.branch['latitude'] != null && widget.branch['longitude'] != null)
-              Text('الموقع: ${widget.branch['latitude']}, ${widget.branch['longitude']}'),
-            if (widget.branch['geofenceRadius'] != null) Text('نصف القطر: ${widget.branch['geofenceRadius']} متر'),
+            if (widget.branch['wifiBssid'] != null)
+              Text('الواي فاي: ${widget.branch['wifiBssid']}'),
+            if (widget.branch['latitude'] != null &&
+                widget.branch['longitude'] != null)
+              Text(
+                'الموقع: ${widget.branch['latitude']}, ${widget.branch['longitude']}',
+              ),
+            if (widget.branch['geofenceRadius'] != null)
+              Text('نصف القطر: ${widget.branch['geofenceRadius']} متر'),
             const SizedBox(height: 8),
-            const Text('الموظفون المعينون:', style: TextStyle(fontWeight: FontWeight.bold)),
+            const Text(
+              'الموظفون المعينون:',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
             FutureBuilder<List<Map<String, dynamic>>>(
               future: _employeesFuture,
               builder: (context, snapshot) {
@@ -2614,7 +3022,11 @@ class _BranchCardState extends State<_BranchCard> {
                   return const Text('لا يوجد موظفون معينون');
                 }
                 return Column(
-                  children: employees.map((emp) => Text('- ${emp['fullName']} (${emp['role']})')).toList(),
+                  children: employees
+                      .map(
+                        (emp) => Text('- ${emp['fullName']} (${emp['role']})'),
+                      )
+                      .toList(),
                 );
               },
             ),
@@ -2659,7 +3071,9 @@ class _BranchCardState extends State<_BranchCard> {
       builder: (context) => AlertDialog(
         title: const Text('تعيين مدير للفرع'),
         content: FutureBuilder<Map<String, dynamic>>(
-          future: SupabaseOwnerService.getOwnerEmployees(ownerId: widget.ownerId),
+          future: SupabaseOwnerService.getOwnerEmployees(
+            ownerId: widget.ownerId,
+          ),
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const CircularProgressIndicator();
@@ -2668,14 +3082,25 @@ class _BranchCardState extends State<_BranchCard> {
               return Text('خطأ: ${snapshot.error}');
             }
             final data = snapshot.data;
-            final employees = (data?['employees'] as List?)?.whereType<Map>().map(Map<String, dynamic>.from).toList() ?? [];
-            final managers = employees.where((emp) => emp['role'] == 'manager').toList();
+            final employees =
+                (data?['employees'] as List?)
+                    ?.whereType<Map>()
+                    .map(Map<String, dynamic>.from)
+                    .toList() ??
+                [];
+            final managers = employees
+                .where((emp) => emp['role'] == 'manager')
+                .toList();
             return DropdownButton<String>(
               hint: const Text('اختر مدير'),
-              items: managers.map((manager) => DropdownMenuItem(
-                value: manager['id'] as String,
-                child: Text(manager['fullName'] as String),
-              )).toList(),
+              items: managers
+                  .map(
+                    (manager) => DropdownMenuItem(
+                      value: manager['id'] as String,
+                      child: Text(manager['fullName'] as String),
+                    ),
+                  )
+                  .toList(),
               onChanged: (value) async {
                 if (value != null) {
                   try {
@@ -2685,13 +3110,15 @@ class _BranchCardState extends State<_BranchCard> {
                     );
                     Navigator.pop(context);
                     setState(() {
-                      _employeesFuture = BranchApiService.getBranchEmployees(widget.branch['id']);
+                      _employeesFuture = BranchApiService.getBranchEmployees(
+                        widget.branch['id'],
+                      );
                     });
                     widget.onRefresh();
                   } catch (error) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('خطأ: $error')),
-                    );
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(SnackBar(content: Text('خطأ: $error')));
                   }
                 }
               },
@@ -2699,7 +3126,10 @@ class _BranchCardState extends State<_BranchCard> {
           },
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('إلغاء')),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('إلغاء'),
+          ),
         ],
       ),
     );
@@ -2723,7 +3153,9 @@ class _BranchCardState extends State<_BranchCard> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('تأكيد حذف الفرع'),
-        content: Text('هل أنت متأكد من حذف فرع "$branchName"؟\n\nسيتم إزالة الفرع ولن يتمكن الموظفون المعينون به من تسجيل الحضور حتى يعاد تعيينهم لفرع آخر.'),
+        content: Text(
+          'هل أنت متأكد من حذف فرع "$branchName"؟\n\nسيتم إزالة الفرع ولن يتمكن الموظفون المعينون به من تسجيل الحضور حتى يعاد تعيينهم لفرع آخر.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
@@ -2732,7 +3164,9 @@ class _BranchCardState extends State<_BranchCard> {
           TextButton(
             onPressed: () async {
               try {
-                await BranchApiService.deleteBranch(branchId: widget.branch['id']);
+                await BranchApiService.deleteBranch(
+                  branchId: widget.branch['id'],
+                );
                 Navigator.pop(context);
                 widget.onRefresh();
                 if (!mounted) return;
@@ -2764,6 +3198,7 @@ class _EditEmployeeDialog extends StatefulWidget {
     required this.employee,
     required this.nameController,
     required this.hourlyRateController,
+    required this.leaveAllowanceController,
     this.initialShiftStart,
     this.initialShiftEnd,
     required this.initialShiftType,
@@ -2773,6 +3208,7 @@ class _EditEmployeeDialog extends StatefulWidget {
   final Map<String, dynamic> employee;
   final TextEditingController nameController;
   final TextEditingController hourlyRateController;
+  final TextEditingController leaveAllowanceController;
   final TimeOfDay? initialShiftStart;
   final TimeOfDay? initialShiftEnd;
   final String initialShiftType;
@@ -2839,8 +3275,20 @@ class _EditEmployeeDialogState extends State<_EditEmployeeDialog> {
             const SizedBox(height: 16),
             TextField(
               controller: widget.hourlyRateController,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               decoration: const InputDecoration(labelText: 'سعر الساعة (جنيه)'),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: widget.leaveAllowanceController,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: const InputDecoration(
+                labelText: 'بدل الإجازة (جنيه)',
+              ),
             ),
             const SizedBox(height: 16),
             // Branch selection dropdown
@@ -2851,7 +3299,10 @@ class _EditEmployeeDialogState extends State<_EditEmployeeDialog> {
                   return const Center(child: CircularProgressIndicator());
                 }
                 if (snapshot.hasError) {
-                  return Text('خطأ في تحميل الفروع: ${snapshot.error}', style: TextStyle(color: Colors.red, fontSize: 12));
+                  return Text(
+                    'خطأ في تحميل الفروع: ${snapshot.error}',
+                    style: TextStyle(color: Colors.red, fontSize: 12),
+                  );
                 }
                 final branches = snapshot.data ?? [];
                 return DropdownButtonFormField<String>(
@@ -2861,10 +3312,14 @@ class _EditEmployeeDialogState extends State<_EditEmployeeDialog> {
                     border: OutlineInputBorder(),
                   ),
                   items: [
-                    const DropdownMenuItem(value: null, child: Text('بدون فرع')),
+                    const DropdownMenuItem(
+                      value: null,
+                      child: Text('بدون فرع'),
+                    ),
                     ...branches.map((branch) {
                       final branchId = branch['id']?.toString();
-                      final branchName = branch['name']?.toString() ?? 'فرع بدون اسم';
+                      final branchName =
+                          branch['name']?.toString() ?? 'فرع بدون اسم';
                       return DropdownMenuItem(
                         value: branchId,
                         child: Text(branchName),
@@ -2882,7 +3337,10 @@ class _EditEmployeeDialogState extends State<_EditEmployeeDialog> {
             const SizedBox(height: 16),
             const Divider(),
             const SizedBox(height: 8),
-            Text('مواعيد الشيفت:', style: Theme.of(context).textTheme.titleSmall),
+            Text(
+              'مواعيد الشيفت:',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
               value: _shiftType,
@@ -2923,12 +3381,17 @@ class _EditEmployeeDialogState extends State<_EditEmployeeDialog> {
         TextButton(
           onPressed: () {
             final name = widget.nameController.text.trim();
-            final hourlyRate = double.tryParse(widget.hourlyRateController.text.trim());
+            final hourlyRate = double.tryParse(
+              widget.hourlyRateController.text.trim(),
+            );
+            final leaveAllowance = double.tryParse(
+              widget.leaveAllowanceController.text.trim(),
+            );
 
             if (name.isEmpty) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('الاسم مطلوب')),
-              );
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(const SnackBar(content: Text('الاسم مطلوب')));
               return;
             }
 
@@ -2939,11 +3402,21 @@ class _EditEmployeeDialogState extends State<_EditEmployeeDialog> {
               return;
             }
 
+            if (leaveAllowance == null || leaveAllowance < 0) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('يرجى إدخال بدل إجازة صالح')),
+              );
+              return;
+            }
+
             Navigator.pop(context, {
               'fullName': name,
               'hourlyRate': hourlyRate,
+              'leaveAllowance': leaveAllowance,
               'branchId': _selectedBranchId,
-              'shiftStartTime': _shiftStart != null ? _formatTime(_shiftStart) : null,
+              'shiftStartTime': _shiftStart != null
+                  ? _formatTime(_shiftStart)
+                  : null,
               'shiftEndTime': _shiftEnd != null ? _formatTime(_shiftEnd) : null,
               'shiftType': _shiftType,
             });

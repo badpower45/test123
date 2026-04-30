@@ -441,6 +441,7 @@ class _OwnerEmployeesScreenState extends State<OwnerEmployeesScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'owner_employees_fab',
         onPressed: _showAddEmployeeDialog,
         icon: const Icon(Icons.person_add),
         label: const Text('إضافة موظف'),
@@ -962,6 +963,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
   late TextEditingController _nameController;
   late TextEditingController _pinController;
   late TextEditingController _hourlyRateController;
+  late TextEditingController _leaveAllowanceController;
   TimeOfDay? _shiftStartTime;
   TimeOfDay? _shiftEndTime;
 
@@ -979,6 +981,11 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
     _pinController = TextEditingController(text: emp?.pin ?? '');
     _hourlyRateController = TextEditingController(
       text: emp?.hourlyRate != null ? emp!.hourlyRate.toString() : '',
+    );
+    _leaveAllowanceController = TextEditingController(
+      text: emp?.leaveAllowance != null
+          ? emp!.leaveAllowance.toString()
+          : '100',
     );
 
     // Parse shift times
@@ -1008,6 +1015,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
     _nameController.dispose();
     _pinController.dispose();
     _hourlyRateController.dispose();
+    _leaveAllowanceController.dispose();
     super.dispose();
   }
 
@@ -1033,6 +1041,8 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
         'role': _selectedRole,
         'branch': _selectedBranch,
         'hourly_rate': double.tryParse(_hourlyRateController.text.trim()) ?? 0,
+        'leave_allowance':
+            double.tryParse(_leaveAllowanceController.text.trim()) ?? 100,
         'shift_start_time': _shiftStartTime != null
             ? '${_shiftStartTime!.hour.toString().padLeft(2, '0')}:${_shiftStartTime!.minute.toString().padLeft(2, '0')}'
             : null,
@@ -1221,6 +1231,28 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                   validator: (value) {
                     if (value == null || value.trim().isEmpty) {
                       return 'يرجى إدخال سعر الساعة';
+                    }
+                    if (double.tryParse(value) == null) {
+                      return 'يرجى إدخال رقم صحيح';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+
+                // Leave Allowance
+                TextFormField(
+                  controller: _leaveAllowanceController,
+                  decoration: const InputDecoration(
+                    labelText: 'بدل الإجازة',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.card_giftcard),
+                    suffixText: 'ج.م',
+                  ),
+                  keyboardType: TextInputType.number,
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'يرجى إدخال بدل الإجازة';
                     }
                     if (double.tryParse(value) == null) {
                       return 'يرجى إدخال رقم صحيح';

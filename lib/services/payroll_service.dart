@@ -7,9 +7,17 @@ class PayrollService {
   Future<List<Map<String, dynamic>>> getBranchPayrollSummary() async {
     try {
       // Get current month cycle for all branches
-      final startOfMonth = DateTime(DateTime.now().year, DateTime.now().month, 1);
-      final endOfMonth = DateTime(DateTime.now().year, DateTime.now().month + 1, 0);
-      
+      final startOfMonth = DateTime(
+        DateTime.now().year,
+        DateTime.now().month,
+        1,
+      );
+      final endOfMonth = DateTime(
+        DateTime.now().year,
+        DateTime.now().month + 1,
+        0,
+      );
+
       final response = await _supabase
           .from('payroll_cycles')
           .select('''
@@ -59,7 +67,7 @@ class PayrollService {
         return approvedList;
       }
 
-        final created = await _supabase
+      final created = await _supabase
           .from('salary_advances')
           .select('id, amount, status, created_at, approved_at')
           .eq('employee_id', employeeId)
@@ -68,7 +76,7 @@ class PayrollService {
           .lte('created_at', '${endIsoDate}T23:59:59.999Z')
           .order('created_at', ascending: true);
 
-        return List<Map<String, dynamic>>.from(created);
+      return List<Map<String, dynamic>>.from(created);
     } catch (e) {
       print('Error fetching approved advances: $e');
       return [];
@@ -76,7 +84,9 @@ class PayrollService {
   }
 
   // 2. Get employees payroll for a specific branch cycle
-  Future<List<Map<String, dynamic>>> getBranchEmployeesPayroll(String cycleId) async {
+  Future<List<Map<String, dynamic>>> getBranchEmployeesPayroll(
+    String cycleId,
+  ) async {
     try {
       final response = await _supabase
           .from('employee_payrolls')
@@ -113,32 +123,55 @@ class PayrollService {
   }) async {
     try {
       print('📊 Fetching attendance report for employee: $employeeId');
-      print('   📅 Date range: ${startDate.toIso8601String().split('T')[0]} to ${endDate.toIso8601String().split('T')[0]}');
-      
+      print(
+        '   📅 Date range: ${startDate.toIso8601String().split('T')[0]} to ${endDate.toIso8601String().split('T')[0]}',
+      );
+
+      final employeeResp = await _supabase
+          .from('employees')
+          .select('hourly_rate')
+          .eq('id', employeeId)
+          .maybeSingle();
+
+      final employeeHourlyRate = (employeeResp?['hourly_rate'] is num)
+          ? (employeeResp?['hourly_rate'] as num).toDouble()
+          : double.tryParse(employeeResp?['hourly_rate']?.toString() ?? '') ??
+                0.0;
+
       final response = await _supabase
-        .from('daily_attendance_summary')
-        .select('*')
-        .eq('employee_id', employeeId)
-        .gte('attendance_date', startDate.toIso8601String().split('T')[0])
-        .lte('attendance_date', endDate.toIso8601String().split('T')[0])
-        .order('attendance_date', ascending: true);
+          .from('daily_attendance_summary')
+          .select('*')
+          .eq('employee_id', employeeId)
+          .gte('attendance_date', startDate.toIso8601String().split('T')[0])
+          .lte('attendance_date', endDate.toIso8601String().split('T')[0])
+          .order('attendance_date', ascending: true);
 
       final data = List<Map<String, dynamic>>.from(response);
       print('   ✅ Found ${data.length} attendance records');
 
       // If no data in daily_attendance_summary, try to get from attendance table
       if (data.isEmpty) {
-        print('   ⚠️ No data in daily_attendance_summary, checking attendance table...');
+        print(
+          '   ⚠️ No data in daily_attendance_summary, checking attendance table...',
+        );
+
+        final startDateStr = startDate.toIso8601String().split('T')[0];
+        final endDateStr = endDate.toIso8601String().split('T')[0];
+
         final attendanceResponse = await _supabase
             .from('attendance')
             .select('*')
             .eq('employee_id', employeeId)
-            .gte('check_in_time', startDate.toIso8601String())
-            .lte('check_in_time', endDate.add(const Duration(days: 1)).toIso8601String())
-            .order('check_in_time', ascending: true);
+            .gte('date', startDateStr)
+            .lte('date', endDateStr)
+            .order('date', ascending: true);
 
-        final attendanceData = List<Map<String, dynamic>>.from(attendanceResponse);
-        print('   📋 Found ${attendanceData.length} records in attendance table');
+        final attendanceData = List<Map<String, dynamic>>.from(
+          attendanceResponse,
+        );
+        print(
+          '   📋 Found ${attendanceData.length} records in attendance table',
+        );
 
         // Convert attendance records to daily_attendance_summary format
         final convertedData = <Map<String, dynamic>>[];
@@ -152,7 +185,7 @@ class PayrollService {
 
           final dateStr = checkInTime != null
               ? checkInTime.toIso8601String().split('T')[0]
-              : (record['attendance_date'] ?? '--');
+              : (record['date'] ?? record['attendance_date'] ?? '--');
           // Store full ISO timestamp so TimeUtils can handle Cairo timezone conversion
           final checkInTimeStr = checkInTime != null
               ? checkInTime.toIso8601String()
@@ -166,7 +199,8 @@ class PayrollService {
             if (record['work_hours'] is num) {
               workHours = (record['work_hours'] as num).toDouble();
             } else {
-              workHours = double.tryParse(record['work_hours'].toString()) ?? 0.0;
+              workHours =
+                  double.tryParse(record['work_hours'].toString()) ?? 0.0;
             }
           } else if (checkInTime != null && checkOutTime != null) {
             // Calculate from times if work_hours is not available
@@ -175,9 +209,9 @@ class PayrollService {
 
           final hourlyRate = record['hourly_rate'] != null
               ? ((record['hourly_rate'] is num)
-                  ? (record['hourly_rate'] as num).toDouble()
-                  : double.tryParse(record['hourly_rate'].toString()) ?? 0.0)
-              : 0.0;
+                    ? (record['hourly_rate'] as num).toDouble()
+                    : double.tryParse(record['hourly_rate'].toString()) ?? 0.0)
+              : employeeHourlyRate;
 
           convertedData.add({
             'employee_id': employeeId,
@@ -197,19 +231,26 @@ class PayrollService {
 
       // Ensure check_in_time and check_out_time are always present in daily_attendance_summary data
       for (final row in data) {
-        bool missingCheckIn = row['check_in_time'] == null || row['check_in_time'].toString().isEmpty || row['check_in_time'] == '--';
-        bool missingCheckOut = row['check_out_time'] == null || row['check_out_time'].toString().isEmpty || row['check_out_time'] == '--';
+        bool missingCheckIn =
+            row['check_in_time'] == null ||
+            row['check_in_time'].toString().isEmpty ||
+            row['check_in_time'] == '--';
+        bool missingCheckOut =
+            row['check_out_time'] == null ||
+            row['check_out_time'].toString().isEmpty ||
+            row['check_out_time'] == '--';
 
         if (missingCheckIn || missingCheckOut) {
           // Try to fetch from attendance table for this employee and date
           final attendanceResp = await _supabase
               .from('attendance')
-              .select('check_in_time, check_out_time')
+              .select('check_in_time, check_out_time, work_hours, hourly_rate')
               .eq('employee_id', employeeId)
-              .gte('check_in_time', row['attendance_date'] + 'T00:00:00')
-              .lte('check_in_time', row['attendance_date'] + 'T23:59:59')
+              .eq('date', row['attendance_date'])
               .order('check_in_time', ascending: true);
-          final attendanceList = List<Map<String, dynamic>>.from(attendanceResp);
+          final attendanceList = List<Map<String, dynamic>>.from(
+            attendanceResp,
+          );
           if (attendanceList.isNotEmpty) {
             final att = attendanceList.first;
             // Store full ISO timestamp so TimeUtils can handle Cairo timezone conversion
@@ -219,12 +260,39 @@ class PayrollService {
             if (missingCheckOut && att['check_out_time'] != null) {
               row['check_out_time'] = att['check_out_time'].toString();
             }
+            // Also fill in work hours and hourly rate if missing
+            if ((row['total_hours'] ?? 0) == 0 && att['work_hours'] != null) {
+              row['total_hours'] = att['work_hours'];
+            }
+            if ((row['hourly_rate'] ?? 0) == 0) {
+              if (att['hourly_rate'] != null) {
+                row['hourly_rate'] = att['hourly_rate'];
+              } else {
+                row['hourly_rate'] = employeeHourlyRate;
+              }
+            }
           }
         }
-        row['check_in_time'] = (row['check_in_time'] != null && row['check_in_time'].toString().isNotEmpty)
+        if ((row['hourly_rate'] ?? 0) == 0) {
+          row['hourly_rate'] = employeeHourlyRate;
+        }
+        if ((row['daily_salary'] ?? 0) == 0) {
+          final hours = (row['total_hours'] is num)
+              ? (row['total_hours'] as num).toDouble()
+              : double.tryParse(row['total_hours']?.toString() ?? '') ?? 0.0;
+          final rate = (row['hourly_rate'] is num)
+              ? (row['hourly_rate'] as num).toDouble()
+              : double.tryParse(row['hourly_rate']?.toString() ?? '') ?? 0.0;
+          row['daily_salary'] = hours * rate;
+        }
+        row['check_in_time'] =
+            (row['check_in_time'] != null &&
+                row['check_in_time'].toString().isNotEmpty)
             ? row['check_in_time']
             : '--';
-        row['check_out_time'] = (row['check_out_time'] != null && row['check_out_time'].toString().isNotEmpty)
+        row['check_out_time'] =
+            (row['check_out_time'] != null &&
+                row['check_out_time'].toString().isNotEmpty)
             ? row['check_out_time']
             : '--';
       }
@@ -257,51 +325,71 @@ class PayrollService {
         startDate: startDate,
         endDate: endDate,
       );
-      
-      // Get deductions for this period
-      final deductionsResponse = await _supabase
-        .from('deductions')
-        .select('*')
-        .eq('employee_id', employeeId)
-        .gte('deduction_date', startDate.toIso8601String().split('T')[0])
-        .lte('deduction_date', endDate.toIso8601String().split('T')[0]);
-      
-      final deductions = List<Map<String, dynamic>>.from(deductionsResponse);
 
+      // Get deductions for this period
       // Get leave requests for this period
       final leavesResponse = await _supabase
-        .from('leave_requests')
-        .select('*')
-        .eq('employee_id', employeeId)
-        .eq('status', 'approved')
-        .gte('start_date', startDate.toIso8601String().split('T')[0])
-        .lte('end_date', endDate.toIso8601String().split('T')[0]);
-      
+          .from('leave_requests')
+          .select('*')
+          .eq('employee_id', employeeId)
+          .eq('status', 'approved')
+          .gte('start_date', startDate.toIso8601String().split('T')[0])
+          .lte('end_date', endDate.toIso8601String().split('T')[0]);
+
       final leaves = List<Map<String, dynamic>>.from(leavesResponse);
+
+      // Get bonuses and manual deductions for this period
+      final bonusesResponse = await _supabase
+          .from('bonuses')
+          .select('*')
+          .eq('employee_id', employeeId)
+          .gte('bonus_date', startDate.toIso8601String().split('T')[0])
+          .lte('bonus_date', endDate.toIso8601String().split('T')[0]);
+
+      final deductionsResponse = await _supabase
+          .from('deductions')
+          .select('*')
+          .eq('employee_id', employeeId)
+          .gte('deduction_date', startDate.toIso8601String().split('T')[0])
+          .lte('deduction_date', endDate.toIso8601String().split('T')[0]);
+
+      final bonuses = List<Map<String, dynamic>>.from(bonusesResponse);
+      final deductions = List<Map<String, dynamic>>.from(deductionsResponse);
 
       // Build table rows
       final tableRows = <Map<String, dynamic>>[];
       double totalWorkHours = 0.0;
       double totalAdvances = 0.0;
       double totalLeaveAllowances = 0.0;
+      double totalBonuses = 0.0;
       double totalDeductions = 0.0;
+      double totalPenalties = 0.0;
       double grossSalary = 0.0;
 
       // Create a map of dates to track data
       final dateMap = <String, Map<String, dynamic>>{};
-      
+
+      double _asDouble(dynamic value) {
+        if (value is num) return value.toDouble();
+        return double.tryParse(value?.toString() ?? '') ?? 0.0;
+      }
+
       // Fill attendance data
       for (var record in attendanceRecords) {
-        final date = record['attendance_date'] as String;
-        final hours = (record['total_hours'] ?? 0.0) is num
-            ? (record['total_hours'] as num).toDouble()
-            : double.tryParse(record['total_hours'].toString()) ?? 0.0;
-        final hourlyRate = (record['hourly_rate'] ?? 0.0) is num
-            ? (record['hourly_rate'] as num).toDouble()
-            : double.tryParse(record['hourly_rate'].toString()) ?? 0.0;
+        final date =
+            record['attendance_date']?.toString() ??
+            record['date']?.toString() ??
+            '--';
+        final hours = _asDouble(record['total_hours']);
+        final hourlyRate = _asDouble(record['hourly_rate']);
+        final leaveAllowance = _asDouble(record['leave_allowance']);
+        final isOnLeave = record['is_on_leave'] == true || leaveAllowance > 0.0;
 
         totalWorkHours += hours;
         grossSalary += hours * hourlyRate;
+        if (leaveAllowance > 0) {
+          totalLeaveAllowances += leaveAllowance;
+        }
 
         // ✅ Times are now full ISO strings - display as-is (TimeUtils will handle in UI)
         final checkInTime = record['check_in_time'] as String? ?? '--';
@@ -312,10 +400,13 @@ class PayrollService {
           'checkIn': checkInTime,
           'checkOut': checkOutTime,
           'workHours': hours.toStringAsFixed(2),
+          'dailySalary': (hours * hourlyRate).toStringAsFixed(2),
           'advances': '0.00',
-          'leaveAllowance': '0.00',
+          'leaveAllowance': leaveAllowance.toStringAsFixed(2),
+          'bonuses': '0.00',
           'deductions': '0.00',
-          'hasLeave': false,
+          'penalties': '0.00',
+          'hasLeave': isOnLeave,
         };
       }
 
@@ -325,14 +416,30 @@ class PayrollService {
             ? (advance['amount'] as num).toDouble()
             : double.tryParse(advance['amount'].toString()) ?? 0.0;
         totalAdvances += amount;
-        
+
         // Try to map to a date (use approved_at or created_at)
         final dateStr = advance['approved_at'] != null
             ? (advance['approved_at'] as String).split('T')[0]
             : (advance['created_at'] as String).split('T')[0];
-        
+
         if (dateMap.containsKey(dateStr)) {
           dateMap[dateStr]!['advances'] = amount.toStringAsFixed(2);
+        }
+      }
+
+      // Add bonuses
+      for (var bonus in bonuses) {
+        final amount = (bonus['amount'] ?? 0.0) is num
+            ? (bonus['amount'] as num).toDouble()
+            : double.tryParse(bonus['amount'].toString()) ?? 0.0;
+        totalBonuses += amount;
+
+        final dateStr = (bonus['bonus_date'] ?? bonus['created_at'] ?? '')
+            .toString()
+            .split('T')[0];
+        if (dateMap.containsKey(dateStr)) {
+          final existing = double.tryParse(dateMap[dateStr]!['bonuses']) ?? 0.0;
+          dateMap[dateStr]!['bonuses'] = (existing + amount).toStringAsFixed(2);
         }
       }
 
@@ -341,12 +448,34 @@ class PayrollService {
         final amount = (deduction['amount'] ?? 0.0) is num
             ? (deduction['amount'] as num).toDouble()
             : double.tryParse(deduction['amount'].toString()) ?? 0.0;
+
+        final typeValue =
+            (deduction['deduction_type'] ?? deduction['type'] ?? '')
+                .toString()
+                .toLowerCase();
+        final isPenalty =
+            typeValue.contains('penalty') ||
+            typeValue.contains('جزاء') ||
+            typeValue.contains('disciplinary');
+
         totalDeductions += amount;
-        
+        if (isPenalty) {
+          totalPenalties += amount;
+        }
+
         final dateStr = (deduction['deduction_date'] as String).split('T')[0];
         if (dateMap.containsKey(dateStr)) {
-          final existing = double.tryParse(dateMap[dateStr]!['deductions']) ?? 0.0;
-          dateMap[dateStr]!['deductions'] = (existing + amount).toStringAsFixed(2);
+          final existing =
+              double.tryParse(dateMap[dateStr]!['deductions']) ?? 0.0;
+          dateMap[dateStr]!['deductions'] = (existing + amount).toStringAsFixed(
+            2,
+          );
+          if (isPenalty) {
+            final existingPenalty =
+                double.tryParse(dateMap[dateStr]!['penalties']) ?? 0.0;
+            dateMap[dateStr]!['penalties'] = (existingPenalty + amount)
+                .toStringAsFixed(2);
+          }
         }
       }
 
@@ -355,13 +484,15 @@ class PayrollService {
         // ✅ FIX: Safe date parsing for leaves
         final startDateStr = leave['start_date']?.toString();
         final endDateStr = leave['end_date']?.toString();
-        
-        if (startDateStr == null || startDateStr.isEmpty || 
-            endDateStr == null || endDateStr.isEmpty) {
+
+        if (startDateStr == null ||
+            startDateStr.isEmpty ||
+            endDateStr == null ||
+            endDateStr.isEmpty) {
           print('⚠️ Skipping leave with invalid dates: $leave');
           continue;
         }
-        
+
         DateTime leaveStart;
         DateTime leaveEnd;
         try {
@@ -371,33 +502,38 @@ class PayrollService {
           print('⚠️ Error parsing leave dates: $e');
           continue;
         }
-        
+
         // Calculate leave allowance (assuming daily rate based on hourly_rate * 8 hours)
         // We'll need to get the employee's hourly rate
         final employeeData = await _supabase
-          .from('employees')
-          .select('hourly_rate, shift_start_time, shift_end_time')
-          .eq('id', employeeId)
-          .single();
-        
+            .from('employees')
+            .select('hourly_rate, shift_start_time, shift_end_time')
+            .eq('id', employeeId)
+            .single();
+
         final hourlyRate = (employeeData['hourly_rate'] ?? 0.0) is num
             ? (employeeData['hourly_rate'] as num).toDouble()
             : double.tryParse(employeeData['hourly_rate'].toString()) ?? 0.0;
-        
+
         // Calculate shift hours
         double shiftHours = 8.0; // default
-        if (employeeData['shift_start_time'] != null && employeeData['shift_end_time'] != null) {
+        if (employeeData['shift_start_time'] != null &&
+            employeeData['shift_end_time'] != null) {
           final startTime = _parseTime(employeeData['shift_start_time']);
           final endTime = _parseTime(employeeData['shift_end_time']);
           if (startTime != null && endTime != null) {
             shiftHours = endTime.difference(startTime).inMinutes / 60.0;
           }
         }
-        
+
         final dailyAllowance = hourlyRate * shiftHours;
-        
+
         // Mark each day of leave
-        for (var date = leaveStart; date.isBefore(leaveEnd.add(const Duration(days: 1))); date = date.add(const Duration(days: 1))) {
+        for (
+          var date = leaveStart;
+          date.isBefore(leaveEnd.add(const Duration(days: 1)));
+          date = date.add(const Duration(days: 1))
+        ) {
           final dateStr = date.toIso8601String().split('T')[0];
           if (!dateMap.containsKey(dateStr)) {
             dateMap[dateStr] = {
@@ -405,16 +541,24 @@ class PayrollService {
               'checkIn': '--',
               'checkOut': '--',
               'workHours': '0.00',
+              'dailySalary': '0.00',
               'advances': '0.00',
               'leaveAllowance': dailyAllowance.toStringAsFixed(2),
               'deductions': '0.00',
+              'penalties': '0.00',
               'hasLeave': true,
             };
+            totalLeaveAllowances += dailyAllowance;
           } else {
-            dateMap[dateStr]!['leaveAllowance'] = dailyAllowance.toStringAsFixed(2);
+            final existing =
+                double.tryParse(dateMap[dateStr]!['leaveAllowance']) ?? 0.0;
             dateMap[dateStr]!['hasLeave'] = true;
+            if (existing <= 0) {
+              dateMap[dateStr]!['leaveAllowance'] = dailyAllowance
+                  .toStringAsFixed(2);
+              totalLeaveAllowances += dailyAllowance;
+            }
           }
-          totalLeaveAllowances += dailyAllowance;
         }
       }
 
@@ -425,7 +569,12 @@ class PayrollService {
       }
 
       // Calculate summary
-      final netAfterAdvances = grossSalary + totalLeaveAllowances - totalAdvances - totalDeductions;
+      final netAfterAdvances =
+          grossSalary +
+          totalLeaveAllowances +
+          totalBonuses -
+          totalAdvances -
+          totalDeductions;
 
       return {
         'tableRows': tableRows,
@@ -434,7 +583,9 @@ class PayrollService {
           'totalWorkHours': totalWorkHours.toStringAsFixed(2),
           'totalAdvances': totalAdvances.toStringAsFixed(2),
           'totalLeaveAllowances': totalLeaveAllowances.toStringAsFixed(2),
+          'totalBonuses': totalBonuses.toStringAsFixed(2),
           'totalDeductions': totalDeductions.toStringAsFixed(2),
+          'totalPenalties': totalPenalties.toStringAsFixed(2),
           'grossSalary': grossSalary.toStringAsFixed(2),
           'netAfterAdvances': netAfterAdvances.toStringAsFixed(2),
         },
@@ -449,7 +600,9 @@ class PayrollService {
           'totalWorkHours': '0.00',
           'totalAdvances': '0.00',
           'totalLeaveAllowances': '0.00',
+          'totalBonuses': '0.00',
           'totalDeductions': '0.00',
+          'totalPenalties': '0.00',
           'grossSalary': '0.00',
           'netAfterAdvances': '0.00',
         },
@@ -502,12 +655,11 @@ class PayrollService {
     required List<String> employeeIds,
   }) async {
     try {
-      // Call database function for each employee
       for (final employeeId in employeeIds) {
-        await _supabase.rpc('calculate_employee_payroll', params: {
-          'p_payroll_cycle_id': cycleId,
-          'p_employee_id': employeeId,
-        });
+        await _supabase.rpc(
+          'calculate_employee_payroll',
+          params: {'p_payroll_cycle_id': cycleId, 'p_employee_id': employeeId},
+        );
       }
 
       // Update cycle total
@@ -539,11 +691,14 @@ class PayrollService {
     required String paidBy,
   }) async {
     try {
-      await _supabase.from('payroll_cycles').update({
-        'status': 'paid',
-        'paid_at': DateTime.now().toIso8601String(),
-        'paid_by': paidBy,
-      }).eq('id', cycleId);
+      await _supabase
+          .from('payroll_cycles')
+          .update({
+            'status': 'paid',
+            'paid_at': DateTime.now().toIso8601String(),
+            'paid_by': paidBy,
+          })
+          .eq('id', cycleId);
 
       return true;
     } catch (e) {
@@ -559,10 +714,13 @@ class PayrollService {
   }) async {
     try {
       // Update employee payroll
-      await _supabase.from('employee_payrolls').update({
-        'status': 'paid',
-        'paid_at': DateTime.now().toIso8601String(),
-      }).eq('id', payrollId);
+      await _supabase
+          .from('employee_payrolls')
+          .update({
+            'status': 'paid',
+            'paid_at': DateTime.now().toIso8601String(),
+          })
+          .eq('id', payrollId);
 
       // Recalculate cycle total (only unpaid employees)
       final unpaidPayrolls = await _supabase
@@ -598,7 +756,7 @@ class PayrollService {
   }) async {
     try {
       double totalHours = 0;
-      
+
       if (checkInTime != null && checkOutTime != null) {
         final checkIn = _parseTime(checkInTime);
         final checkOut = _parseTime(checkOutTime);
@@ -655,13 +813,13 @@ class PayrollService {
   }) async {
     try {
       final supabase = Supabase.instance.client;
-      
+
       // Get all employees
       final employeesResponse = await supabase
           .from('employees')
           .select('id, fullName, branch, hourlyRate, isActive')
           .eq('isActive', true);
-      
+
       final employees = List<Map<String, dynamic>>.from(employeesResponse);
       final List<Map<String, dynamic>> result = [];
 
@@ -680,7 +838,9 @@ class PayrollService {
             .lte('attendance_date', endDate.toIso8601String().split('T')[0])
             .order('attendance_date', ascending: true);
 
-        final attendanceRecords = List<Map<String, dynamic>>.from(attendanceResponse);
+        final attendanceRecords = List<Map<String, dynamic>>.from(
+          attendanceResponse,
+        );
 
         // Calculate summary
         double totalHours = 0;
@@ -691,15 +851,19 @@ class PayrollService {
         for (var record in attendanceRecords) {
           totalHours += (record['total_hours'] as num?)?.toDouble() ?? 0;
           totalAdvances += (record['advance_amount'] as num?)?.toDouble() ?? 0;
-          totalDeductions += (record['deduction_amount'] as num?)?.toDouble() ?? 0;
+          totalDeductions +=
+              (record['deduction_amount'] as num?)?.toDouble() ?? 0;
           if (record['is_absent'] == true) {
             absenceDays++;
           }
         }
 
         final baseSalary = totalHours * hourlyRate;
-        final leaveAllowance = (absenceDays > 0 && absenceDays < 3) ? 100.0 : 0.0;
-        final netSalary = baseSalary + leaveAllowance - totalAdvances - totalDeductions;
+        final leaveAllowance = (absenceDays > 0 && absenceDays < 3)
+            ? 100.0
+            : 0.0;
+        final netSalary =
+            baseSalary + leaveAllowance - totalAdvances - totalDeductions;
 
         result.add({
           'employee_id': employeeId,
@@ -723,6 +887,40 @@ class PayrollService {
     } catch (e) {
       print('Error getting all employees attendance report: $e');
       return [];
+    }
+  }
+
+  // Calculate leave allowance using edge function
+  Future<double> calculateLeaveAllowance({
+    required String employeeId,
+    int? month,
+    int? year,
+  }) async {
+    try {
+      print('📊 Calculating leave allowance for employee: $employeeId');
+
+      final response = await _supabase.functions.invoke(
+        'calculate-leave-allowance',
+        body: {
+          'employee_id': employeeId,
+          if (month != null) 'month': month,
+          if (year != null) 'year': year,
+        },
+      );
+
+      // FunctionResponse.data returns dynamic, cast to Map
+      if (response.data is Map) {
+        final data = response.data as Map<String, dynamic>;
+        final allowance = (data['leave_allowance'] as num?)?.toDouble() ?? 0.0;
+        print('✅ Leave allowance calculated: $allowance');
+        return allowance;
+      }
+
+      print('⚠️ No response from edge function, returning default 0');
+      return 0.0;
+    } catch (e) {
+      print('❌ Error calculating leave allowance: $e');
+      return 0.0;
     }
   }
 

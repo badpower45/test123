@@ -9,6 +9,7 @@ import 'login_screen.dart';
 import 'owner/owner_main_screen_new.dart';
 import 'employee/employee_main_screen.dart';
 import 'branch_manager_screen.dart';
+import 'hr/hr_main_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -77,10 +78,15 @@ class _SplashScreenState extends State<SplashScreen>
           ownerId: employeeId,
           ownerName: fullName,
         );
-      } else if (role.toLowerCase() == 'admin' || role.toLowerCase() == 'hr') {
+      } else if (role.toLowerCase() == 'admin') {
         targetScreen = BranchManagerScreen(
           managerId: employeeId,
           branchName: branch,
+        );
+      } else if (role.toLowerCase() == 'hr') {
+        targetScreen = HRMainScreen(
+          hrId: employeeId,
+          hrName: fullName,
         );
       } else if (role.toLowerCase() == 'manager') {
         targetScreen = EmployeeMainScreen(

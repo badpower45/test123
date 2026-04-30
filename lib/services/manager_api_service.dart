@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import '../constants/api_endpoints.dart';
 import '../models/absence_notification_details.dart';
 import 'supabase_function_client.dart';
+import 'supabase_requests_service.dart';
 
 class ManagerApiService {
   static Future<List<AbsenceNotificationDetails>> getAbsenceNotifications(String managerId) async {
@@ -98,7 +99,7 @@ class ManagerApiService {
         : result ?? {};
   }
 
-  /// دالة لمراجعة (قبول/رفض) طلبات الاستراحة
+  /// دالة لمراجعة (قبول/رفض) طلبات الإجازة
   static Future<Map<String, dynamic>> reviewLeaveRequest({
     required String requestId,
     required String managerId,
@@ -109,17 +110,19 @@ class ManagerApiService {
       throw Exception('معرف طلب الإجازة أو معرف المدير مطلوب');
     }
 
-    final result = await SupabaseFunctionClient.post('branch-request-action', {
-      'type': 'leave',
-      'id': requestId,
-      'action': approve ? 'approve' : 'reject',
-      'reviewerId': managerId,
-      if (notes != null) 'notes': notes,
-    });
+    // ✅ Use Supabase directly instead of broken edge function
+    final success = await SupabaseRequestsService.reviewLeaveRequest(
+      requestId: requestId,
+      reviewedBy: managerId,
+      status: approve ? 'approved' : 'rejected',
+      reviewNotes: notes,
+    );
 
-    return (result ?? {})['data'] is Map<String, dynamic>
-        ? Map<String, dynamic>.from((result ?? {})['data'] as Map)
-        : result ?? {};
+    if (!success) {
+      throw Exception(approve ? 'فشل الموافقة على طلب الإجازة' : 'فشل رفض طلب الإجازة');
+    }
+
+    return {'success': true};
   }
 
   // دالة لمراجعة (قبول/رفض) طلبات السلف
@@ -133,17 +136,19 @@ class ManagerApiService {
       throw Exception('معرف طلب السلفة أو معرف المدير مطلوب');
     }
 
-    final result = await SupabaseFunctionClient.post('branch-request-action', {
-      'type': 'advance',
-      'id': advanceId,
-      'action': approve ? 'approve' : 'reject',
-      'reviewerId': managerId,
-      if (notes != null) 'notes': notes,
-    });
+    // ✅ Use Supabase directly instead of broken edge function
+    final success = await SupabaseRequestsService.reviewSalaryAdvanceRequest(
+      requestId: advanceId,
+      approvedBy: managerId,
+      status: approve ? 'approved' : 'rejected',
+      notes: notes,
+    );
 
-    return (result ?? {})['data'] is Map<String, dynamic>
-        ? Map<String, dynamic>.from((result ?? {})['data'] as Map)
-        : result ?? {};
+    if (!success) {
+      throw Exception(approve ? 'فشل الموافقة على طلب السلفة' : 'فشل رفض طلب السلفة');
+    }
+
+    return {'success': true};
   }
 
   // دالة لمراجعة (قبول/رفض) طلبات الحضور
@@ -157,16 +162,18 @@ class ManagerApiService {
       throw Exception('معرف طلب الحضور أو معرف المدير مطلوب');
     }
 
-    final result = await SupabaseFunctionClient.post('branch-request-action', {
-      'type': 'attendance',
-      'id': requestId,
-      'action': approve ? 'approve' : 'reject',
-      'reviewerId': managerId,
-      if (notes != null) 'notes': notes,
-    });
+    // ✅ Use Supabase directly instead of broken edge function
+    final success = await SupabaseRequestsService.reviewAttendanceRequest(
+      requestId: requestId,
+      reviewedBy: managerId,
+      status: approve ? 'approved' : 'rejected',
+      reviewNotes: notes,
+    );
 
-    return (result ?? {})['data'] is Map<String, dynamic>
-        ? Map<String, dynamic>.from((result ?? {})['data'] as Map)
-        : result ?? {};
+    if (!success) {
+      throw Exception(approve ? 'فشل الموافقة على طلب الحضور' : 'فشل رفض طلب الحضور');
+    }
+
+    return {'success': true};
   }
 }

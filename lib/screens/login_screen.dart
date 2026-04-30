@@ -10,6 +10,7 @@ import '../screens/branch_manager_screen.dart';
 import '../screens/employee/employee_main_screen.dart';
 import '../screens/employee/onboarding/employee_onboarding_flow.dart';
 import '../screens/owner/owner_main_screen_new.dart';
+import '../screens/hr/hr_main_screen.dart';
 import '../services/auth_service.dart';
 import '../services/device_service.dart';
 import '../services/blv/blv_manager.dart';
@@ -145,17 +146,29 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ),
         );
-      } else if (employee.role == EmployeeRole.admin ||
-          employee.role == EmployeeRole.hr) {
-        // Admin/HR goes to branch manager dashboard directly
+      } else if (employee.role == EmployeeRole.admin) {
+        // Admin goes to branch manager dashboard directly
         print(
-          '🔍 NAVIGATION DEBUG - Navigating to BranchManagerScreen (admin/hr)',
+          '🔍 NAVIGATION DEBUG - Navigating to BranchManagerScreen (admin)',
         );
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (_) => BranchManagerScreen(
               managerId: employee.id,
               branchName: employee.branch,
+            ),
+          ),
+        );
+      } else if (employee.role == EmployeeRole.hr) {
+        // HR goes to HR dashboard with global access
+        print(
+          '🔍 NAVIGATION DEBUG - Navigating to HRMainScreen (hr)',
+        );
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => HRMainScreen(
+              hrId: employee.id,
+              hrName: employee.fullName,
             ),
           ),
         );

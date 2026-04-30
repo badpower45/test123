@@ -101,20 +101,19 @@ class _OwnerSalariesScreenState extends State<OwnerSalariesScreen> {
 
         final payment = paymentByEmployee[employeeId];
         final paidAmount = (payment?['net_amount'] as num?)?.toDouble() ?? 0.0;
-        final periodNet = paidAmount > 0
-            ? paidAmount
-            : (periodNetByEmployee[employeeId] ?? 0.0);
+        final calculatedNet = periodNetByEmployee[employeeId] ?? paidAmount;
 
         list.add({
           'id': employeeId,
           'full_name': emp['full_name'] ?? 'غير معروف',
           'role': emp['role'] ?? '—',
           'branch': emp['branch'] ?? '—',
-          'current_salary': periodNet,
+          'current_salary': calculatedNet,
           'is_paid': payment != null,
           'paid_amount': paidAmount,
           'paid_at': payment?['paid_at'],
           'payment_id': payment?['id'],
+          'calculated_salary': calculatedNet,
         });
       }
 
@@ -201,32 +200,8 @@ class _OwnerSalariesScreenState extends State<OwnerSalariesScreen> {
       periodEnd,
       client,
     );
-
-    final result = <String, double>{};
-    const chunkSize = 10;
-
-    for (int index = 0; index < employeeIds.length; index += chunkSize) {
-      final end = math.min(index + chunkSize, employeeIds.length);
-      final chunk = employeeIds.sublist(index, end);
-
-      final chunkEntries = await Future.wait(
-        chunk.map((employeeId) async {
-          final net = await _loadEmployeePeriodNet(
-            employeeId,
-            periodStart,
-            periodEnd,
-            fallbackMap[employeeId] ?? 0.0,
-          );
-          return MapEntry(employeeId, net);
-        }),
-      );
-
-      for (final entry in chunkEntries) {
-        result[entry.key] = entry.value;
-      }
-    }
-
-    return result;
+    // Keep list view aligned with the detailed report calculation.
+    return fallbackMap;
   }
 
   Future<Map<String, double>> _loadFallbackPeriodNetMap(
@@ -236,6 +211,8 @@ class _OwnerSalariesScreenState extends State<OwnerSalariesScreen> {
     SupabaseClient client,
   ) async {
     try {
+      // 🔍 First, try loading from daily_attendance_summary
+      print('📊 [Salaries] Querying daily_attendance_summary...');
       final attendanceResp = await client
           .from('daily_attendance_summary')
           .select(
@@ -246,21 +223,114 @@ class _OwnerSalariesScreenState extends State<OwnerSalariesScreen> {
           .lte('attendance_date', periodEnd);
 
       final netByEmployee = <String, double>{};
-      for (final row in (attendanceResp as List)) {
+      
+      // If we got data from daily_attendance_summary, use it
+      if ((attendanceResp as List).isNotEmpty) {
+        print('✅ [Salaries] Found ${(attendanceResp).length} records in daily_attendance_summary');
+        for (final row in attendanceResp) {
+          final employeeId = row['employee_id']?.toString() ?? '';
+          if (employeeId.isEmpty) continue;
+
+          final daySalary = _asDouble(row['daily_salary']);
+          final advances = _asDouble(row['advance_amount']);
+          final deductions = _asDouble(row['deduction_amount']);
+
+          // Leave allowance is informational only (not included in net).
+          netByEmployee[employeeId] =
+            (netByEmployee[employeeId] ?? 0.0) + daySalary - advances - deductions;
+        }
+        return netByEmployee;
+      }
+      
+      // 🔄 Fallback: If daily_attendance_summary is empty, query attendance table directly
+      print('⚠️ [Salaries] No data in daily_attendance_summary, querying attendance table...');
+      final attendanceRecords = await client
+          .from('attendance')
+          .select('employee_id, work_hours')
+          .inFilter('employee_id', employeeIds)
+          .gte('date', periodStart)
+          .lte('date', periodEnd)
+          .eq('status', 'completed');
+
+      // Also fetch employees to get hourly rates
+      final employeesData = await client
+          .from('employees')
+          .select('id, hourly_rate')
+          .inFilter('id', employeeIds);
+
+      final hourlyRateByEmployee = <String, double>{};
+      for (final emp in (employeesData as List)) {
+        final empId = emp['id']?.toString() ?? '';
+        hourlyRateByEmployee[empId] = _asDouble(emp['hourly_rate']);
+      }
+
+      // Get approved advances within period
+      final advancesResp = await client
+          .from('salary_advances')
+          .select('employee_id, amount, approved_at, created_at, status')
+          .inFilter('employee_id', employeeIds)
+          .eq('status', 'approved');
+
+      final advancesByEmployee = <String, double>{};
+      for (final row in (advancesResp as List)) {
         final employeeId = row['employee_id']?.toString() ?? '';
         if (employeeId.isEmpty) continue;
+        final approvedAt = row['approved_at']?.toString();
+        final createdAt = row['created_at']?.toString();
+        final dateValue = (approvedAt != null && approvedAt.isNotEmpty)
+            ? approvedAt
+            : (createdAt ?? '');
+        if (dateValue.isEmpty) continue;
+        final dateOnly = dateValue.split('T')[0];
+        if (dateOnly.compareTo(periodStart) < 0 || dateOnly.compareTo(periodEnd) > 0) {
+          continue;
+        }
+        final amount = _asDouble(row['amount']);
+        advancesByEmployee[employeeId] =
+            (advancesByEmployee[employeeId] ?? 0.0) + amount;
+      }
 
-        final daySalary = _asDouble(row['daily_salary']);
-        final advances = _asDouble(row['advance_amount']);
-        final leaveAllowance = _asDouble(row['leave_allowance']);
-        final deductions = _asDouble(row['deduction_amount']);
+      // Get deductions within period
+      final deductionsResp = await client
+          .from('deductions')
+          .select('employee_id, amount, deduction_date')
+          .inFilter('employee_id', employeeIds)
+          .gte('deduction_date', periodStart)
+          .lte('deduction_date', periodEnd);
+
+      final deductionsByEmployee = <String, double>{};
+      for (final row in (deductionsResp as List)) {
+        final employeeId = row['employee_id']?.toString() ?? '';
+        if (employeeId.isEmpty) continue;
+        final amount = _asDouble(row['amount']);
+        deductionsByEmployee[employeeId] =
+            (deductionsByEmployee[employeeId] ?? 0.0) + amount;
+      }
+
+      // Calculate totals from attendance table
+      for (final record in (attendanceRecords as List)) {
+        final employeeId = record['employee_id']?.toString() ?? '';
+        if (employeeId.isEmpty) continue;
+
+        final workHours = _asDouble(record['work_hours']);
+        final hourlyRate = hourlyRateByEmployee[employeeId] ?? 0.0;
+        final dailySalary = workHours * hourlyRate;
 
         netByEmployee[employeeId] =
-            (netByEmployee[employeeId] ?? 0.0) +
-            daySalary +
-            leaveAllowance -
-            advances -
-            deductions;
+            (netByEmployee[employeeId] ?? 0.0) + dailySalary;
+      }
+
+      // Apply advances/deductions once per employee
+      for (final employeeId in employeeIds) {
+        final advances = advancesByEmployee[employeeId] ?? 0.0;
+        final deductions = deductionsByEmployee[employeeId] ?? 0.0;
+        if (!netByEmployee.containsKey(employeeId)) continue;
+        netByEmployee[employeeId] =
+            (netByEmployee[employeeId] ?? 0.0) - advances - deductions;
+      }
+
+      if (netByEmployee.isNotEmpty) {
+        print('✅ [Salaries] Calculated ${netByEmployee.length} employees from attendance table');
       }
       return netByEmployee;
     } catch (e) {
@@ -472,6 +542,11 @@ class _OwnerSalariesScreenState extends State<OwnerSalariesScreen> {
         backgroundColor: AppColors.primaryOrange,
         foregroundColor: Colors.white,
         actions: [
+          IconButton(
+            onPressed: _loading || _payingAll ? null : _pickDateRange,
+            icon: const Icon(Icons.date_range),
+            tooltip: 'اختيار فترة',
+          ),
           IconButton(
             onPressed: _loading || _payingAll ? null : _load,
             icon: const Icon(Icons.refresh),
@@ -743,6 +818,43 @@ class _OwnerSalariesScreenState extends State<OwnerSalariesScreen> {
       'start': DateTime(now.year, now.month, 16),
       'end': DateTime(now.year, now.month + 1, 0),
     };
+  }
+
+  Future<void> _pickDateRange() async {
+    final now = DateTime.now();
+    final initialStart = _periodStart;
+    final initialEnd = _periodEnd;
+
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020, 1, 1),
+      lastDate: now,
+      initialDateRange: DateTimeRange(start: initialStart, end: initialEnd),
+      helpText: 'اختر فترة الرواتب',
+      cancelText: 'إلغاء',
+      confirmText: 'تأكيد',
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: AppColors.primaryOrange,
+              onPrimary: Colors.white,
+              surface: Colors.white,
+              onSurface: Colors.black,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (picked != null) {
+      setState(() {
+        _periodStart = picked.start;
+        _periodEnd = picked.end;
+      });
+      _load();
+    }
   }
 
   String _periodLabel() {

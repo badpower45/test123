@@ -239,6 +239,7 @@ class _OwnerBranchesScreenState extends State<OwnerBranchesScreen> {
                       ),
                     ),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'owner_branches_fab',
         onPressed: _showAddBranchDialog,
         icon: const Icon(Icons.add_business),
         label: const Text('إضافة فرع'),

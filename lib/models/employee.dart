@@ -22,6 +22,7 @@ class Employee extends HiveObject {
     this.isActive = true,
     this.branch = 'المركز الرئيسي',
     this.hourlyRate = 0,
+    this.leaveAllowance = 100,
     this.shiftStartTime,
     this.shiftEndTime,
     this.address,
@@ -30,9 +31,9 @@ class Employee extends HiveObject {
     this.phone,
     DateTime? createdAt,
     DateTime? updatedAt,
-  })  : permissions = permissions ?? <EmployeePermission>[],
-        createdAt = createdAt ?? DateTime.now().toUtc(),
-        updatedAt = updatedAt ?? DateTime.now().toUtc();
+  }) : permissions = permissions ?? <EmployeePermission>[],
+       createdAt = createdAt ?? DateTime.now().toUtc(),
+       updatedAt = updatedAt ?? DateTime.now().toUtc();
 
   String id;
   String fullName;
@@ -42,6 +43,7 @@ class Employee extends HiveObject {
   bool isActive;
   String branch;
   double hourlyRate; // سعر الساعة
+  double leaveAllowance; // بدل الإجازة لكل موظف
   String? shiftStartTime; // وقت بداية الشيفت (e.g., "09:00")
   String? shiftEndTime; // وقت نهاية الشيفت (e.g., "17:00")
   String? address;
@@ -66,11 +68,15 @@ class Employee extends HiveObject {
       isActive: json['is_active'] as bool? ?? true,
       branch: json['branch'] as String? ?? 'المركز الرئيسي',
       hourlyRate: (json['hourly_rate'] as num?)?.toDouble() ?? 0,
+      leaveAllowance:
+          (json['leave_allowance'] as num?)?.toDouble() ??
+          (json['leaveAllowance'] as num?)?.toDouble() ??
+          100,
       shiftStartTime: json['shift_start_time'] as String?,
       shiftEndTime: json['shift_end_time'] as String?,
       address: json['address'] as String?,
-      birthDate: json['birth_date'] != null 
-          ? DateTime.tryParse(json['birth_date'] as String) 
+      birthDate: json['birth_date'] != null
+          ? DateTime.tryParse(json['birth_date'] as String)
           : null,
       email: json['email'] as String?,
       phone: json['phone'] as String?,
@@ -92,6 +98,7 @@ class Employee extends HiveObject {
       'is_active': isActive,
       'branch': branch,
       'hourly_rate': hourlyRate,
+      'leave_allowance': leaveAllowance,
       'shift_start_time': shiftStartTime,
       'shift_end_time': shiftEndTime,
       'address': address,
@@ -135,6 +142,7 @@ class EmployeeAdapter extends TypeAdapter<Employee> {
     final permissionsRaw = (fields[4] as List?)?.cast<int>() ?? <int>[];
     final branch = fields[8] as String? ?? 'المركز الرئيسي';
     final hourlyRate = (fields[9] as num?)?.toDouble() ?? 0;
+    final leaveAllowance = (fields[17] as num?)?.toDouble() ?? 100;
     final shiftStart = fields[15] as String?;
     final shiftEnd = fields[16] as String?;
     return Employee(
@@ -143,21 +151,28 @@ class EmployeeAdapter extends TypeAdapter<Employee> {
       pin: fields[2] as String,
       role: EmployeeRole.values[_safeEnumIndex(roleIndex, EmployeeRole.values)],
       permissions: permissionsRaw
-          .where((index) => index >= 0 && index < EmployeePermission.values.length)
+          .where(
+            (index) => index >= 0 && index < EmployeePermission.values.length,
+          )
           .map((index) => EmployeePermission.values[index])
           .toList(),
       isActive: fields[5] as bool? ?? true,
       branch: branch,
       hourlyRate: hourlyRate,
+      leaveAllowance: leaveAllowance,
       shiftStartTime: shiftStart,
       shiftEndTime: shiftEnd,
       address: fields[10] as String?,
-      birthDate: fields[11] != null ? DateTime.tryParse(fields[11] as String) : null,
+      birthDate: fields[11] != null
+          ? DateTime.tryParse(fields[11] as String)
+          : null,
       email: fields[12] as String?,
       phone: fields[13] as String?,
-      createdAt: DateTime.tryParse(fields[6] as String? ?? '') ??
+      createdAt:
+          DateTime.tryParse(fields[6] as String? ?? '') ??
           DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
-      updatedAt: DateTime.tryParse(fields[7] as String? ?? '') ??
+      updatedAt:
+          DateTime.tryParse(fields[7] as String? ?? '') ??
           DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
     );
   }
@@ -165,7 +180,7 @@ class EmployeeAdapter extends TypeAdapter<Employee> {
   @override
   void write(BinaryWriter writer, Employee obj) {
     writer
-      ..writeByte(16)
+      ..writeByte(17)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -197,7 +212,9 @@ class EmployeeAdapter extends TypeAdapter<Employee> {
       ..writeByte(15)
       ..write(obj.shiftStartTime)
       ..writeByte(16)
-      ..write(obj.shiftEndTime);
+      ..write(obj.shiftEndTime)
+      ..writeByte(17)
+      ..write(obj.leaveAllowance);
   }
 }
 

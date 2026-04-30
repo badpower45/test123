@@ -538,7 +538,7 @@ class SupabaseRequestsService {
     String? managerId,
   }) async {
     try {
-        var query = _supabase
+      var query = _supabase
           .from('attendance_requests')
           .select('*, employees:employees!attendance_requests_employee_id_fkey(id, full_name, branch, role)');
 
@@ -547,12 +547,20 @@ class SupabaseRequestsService {
       }
       if (managerId != null) {
         query = query.eq('assigned_manager_id', managerId);
-      } else if (branchName != null) {
-        query = query.eq('employees.branch', branchName);
       }
 
       final response = await query.order('created_at', ascending: false);
-      return (response as List).cast<Map<String, dynamic>>();
+      var list = (response as List).cast<Map<String, dynamic>>();
+
+      // ✅ Filter by branch on client side (Supabase doesn't support filtering on joined columns)
+      if (branchName != null && managerId == null) {
+        list = list.where((item) {
+          final emp = item['employees'] as Map<String, dynamic>?;
+          return emp?['branch'] == branchName;
+        }).toList();
+      }
+
+      return list;
     } catch (e) {
       print('Get all attendance requests error: $e');
       return [];
@@ -566,7 +574,7 @@ class SupabaseRequestsService {
     String? managerId,
   }) async {
     try {
-        var query = _supabase
+      var query = _supabase
           .from('leave_requests')
           .select('*, employees:employees!leave_requests_employee_id_fkey(id, full_name, branch, role)');
 
@@ -575,12 +583,20 @@ class SupabaseRequestsService {
       }
       if (managerId != null) {
         query = query.eq('assigned_manager_id', managerId);
-      } else if (branchName != null) {
-        query = query.eq('employees.branch', branchName);
       }
 
       final response = await query.order('created_at', ascending: false);
-      return (response as List).cast<Map<String, dynamic>>();
+      var list = (response as List).cast<Map<String, dynamic>>();
+
+      // ✅ Filter by branch on client side (Supabase doesn't support filtering on joined columns)
+      if (branchName != null && managerId == null) {
+        list = list.where((item) {
+          final emp = item['employees'] as Map<String, dynamic>?;
+          return emp?['branch'] == branchName;
+        }).toList();
+      }
+
+      return list;
     } catch (e) {
       print('Get all leave requests error: $e');
       return [];
@@ -594,7 +610,7 @@ class SupabaseRequestsService {
     String? managerId,
   }) async {
     try {
-        var query = _supabase
+      var query = _supabase
           .from('salary_advances')
           .select('*, employees:employees!salary_advances_employee_id_fkey(id, full_name, branch, role, monthly_salary)');
 
@@ -603,12 +619,20 @@ class SupabaseRequestsService {
       }
       if (managerId != null) {
         query = query.eq('assigned_manager_id', managerId);
-      } else if (branchName != null) {
-        query = query.eq('employees.branch', branchName);
       }
 
       final response = await query.order('created_at', ascending: false);
-      return (response as List).cast<Map<String, dynamic>>();
+      var list = (response as List).cast<Map<String, dynamic>>();
+
+      // ✅ Filter by branch on client side
+      if (branchName != null && managerId == null) {
+        list = list.where((item) {
+          final emp = item['employees'] as Map<String, dynamic>?;
+          return emp?['branch'] == branchName;
+        }).toList();
+      }
+
+      return list;
     } catch (e) {
       print('Get all salary advance requests error: $e');
       return [];

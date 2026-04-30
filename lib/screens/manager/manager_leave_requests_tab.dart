@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../../models/detailed_leave_request.dart';
 import '../../services/manager_api_service.dart';
 import '../../services/supabase_attendance_service.dart';
-import '../../services/branch_manager_api_service.dart';
+import '../../services/supabase_requests_service.dart';
 import '../../theme/app_colors.dart';
 
 class ManagerLeaveRequestsTab extends StatefulWidget {
@@ -53,24 +53,17 @@ class _ManagerLeaveRequestsTabState extends State<ManagerLeaveRequestsTab> {
       if (branchName == null || branchName.toString().isEmpty) {
         throw Exception('المدير غير مرتبط بفرع');
       }
-      
-      // Use Supabase Edge Function to get branch requests
-      final requestsData = await BranchManagerApiService.getBranchRequests(branchName);
-      
-      if (requestsData['success'] == true) {
-        final leaveRequests = requestsData['leaveRequests'] as List? ?? [];
-        setState(() {
-          _requests = leaveRequests
-              .map((json) => DetailedLeaveRequest.fromJson(json))
-              .toList();
-          _isLoading = false;
-        });
-      } else {
-        setState(() {
-          _requests = [];
-          _isLoading = false;
-        });
-      }
+
+      // ✅ Use Supabase directly instead of broken edge function
+      final rawList = await SupabaseRequestsService.getAllLeaveRequestsWithEmployees(
+        status: 'pending',
+        branchName: branchName,
+      );
+
+      setState(() {
+        _requests = rawList.map((json) => DetailedLeaveRequest.fromJson(json)).toList();
+        _isLoading = false;
+      });
     } catch (e) {
       print('❌ Error loading leave requests: $e');
       setState(() {
@@ -90,35 +83,77 @@ class _ManagerLeaveRequestsTabState extends State<ManagerLeaveRequestsTab> {
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تمت الموافقة على الطلب بنجاح'), backgroundColor: AppColors.success),
+        const SnackBar(
+          content: Text('تمت الموافقة على الطلب بنجاح'),
+          backgroundColor: AppColors.success,
+        ),
       );
       _loadRequests();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('فشل الموافقة: ${e.toString()}'), backgroundColor: AppColors.error),
+        SnackBar(
+          content: Text('فشل الموافقة: ${e.toString()}'),
+          backgroundColor: AppColors.error,
+        ),
       );
     }
   }
 
   Future<void> _rejectRequest(String requestId) async {
+    final notesController = TextEditingController();
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('رفض طلب الإجازة'),
+        content: TextField(
+          controller: notesController,
+          decoration: const InputDecoration(
+            labelText: 'سبب الرفض (اختياري)',
+            border: OutlineInputBorder(),
+          ),
+          maxLines: 3,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('إلغاء'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.error),
+            child: const Text('رفض'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
     try {
       await ManagerApiService.reviewLeaveRequest(
         requestId: requestId,
         managerId: widget.managerId,
         approve: false,
-        notes: 'تم رفض الطلب',
+        notes: notesController.text.trim().isEmpty ? 'تم رفض الطلب' : notesController.text.trim(),
       );
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تم رفض الطلب'), backgroundColor: AppColors.error),
+        const SnackBar(
+          content: Text('تم رفض الطلب'),
+          backgroundColor: AppColors.error,
+        ),
       );
       _loadRequests();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('فشل الرفض: ${e.toString()}'), backgroundColor: AppColors.error),
+        SnackBar(
+          content: Text('فشل الرفض: ${e.toString()}'),
+          backgroundColor: AppColors.error,
+        ),
       );
     }
   }
@@ -131,104 +166,185 @@ class _ManagerLeaveRequestsTabState extends State<ManagerLeaveRequestsTab> {
 
     if (_error != null) {
       return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text('خطأ: $_error'),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: _loadRequests,
-              child: const Text('إعادة المحاولة'),
-            ),
-          ],
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, size: 56, color: AppColors.error),
+              const SizedBox(height: 12),
+              Text(
+                _error!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: AppColors.textSecondary),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _loadRequests,
+                style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryOrange),
+                child: const Text('إعادة المحاولة'),
+              ),
+            ],
+          ),
         ),
       );
     }
 
     if (_requests.isEmpty) {
       return const Center(
-        child: Text('لا توجد طلبات إجازة معلقة'),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.inbox, size: 56, color: AppColors.textTertiary),
+            SizedBox(height: 12),
+            Text(
+              'لا توجد طلبات إجازة معلقة',
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 16),
+            ),
+          ],
+        ),
       );
     }
 
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: _requests.length,
-      itemBuilder: (context, index) {
-        final request = _requests[index];
-        return Card(
-          margin: const EdgeInsets.only(bottom: 12),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Icon(Icons.person, size: 20),
-                    const SizedBox(width: 8),
-                    Text(
-                      request.employeeId,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
+    return RefreshIndicator(
+      onRefresh: _loadRequests,
+      child: ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: _requests.length,
+        itemBuilder: (context, index) {
+          final request = _requests[index];
+          return Card(
+            margin: const EdgeInsets.only(bottom: 12),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const CircleAvatar(
+                        radius: 18,
+                        backgroundColor: AppColors.primaryOrange,
+                        child: Icon(Icons.person, color: Colors.white, size: 20),
                       ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              request.employeeName,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
+                            if (request.branchName != null)
+                              Text(
+                                request.branchName!,
+                                style: const TextStyle(
+                                  color: AppColors.textSecondary,
+                                  fontSize: 12,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: AppColors.warning.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Text(
+                          'معلق',
+                          style: TextStyle(
+                            color: AppColors.warning,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const Divider(height: 20),
+                  Row(
+                    children: [
+                      const Icon(Icons.calendar_today, size: 16, color: AppColors.textSecondary),
+                      const SizedBox(width: 8),
+                      Text(
+                        '${_formatDate(request.startDate)} - ${_formatDate(request.endDate)}',
+                        style: const TextStyle(color: AppColors.textPrimary),
+                      ),
+                      const Spacer(),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: AppColors.primaryOrange.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          '${request.daysCount} يوم',
+                          style: const TextStyle(
+                            color: AppColors.primaryOrange,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (request.reason != null && request.reason!.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(Icons.note, size: 16, color: AppColors.textSecondary),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            request.reason!,
+                            style: const TextStyle(color: AppColors.textSecondary),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    const Icon(Icons.calendar_today, size: 16),
-                    const SizedBox(width: 8),
-                    Text('${request.startDate} - ${request.endDate}'),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    const Icon(Icons.event_available, size: 16),
-                    const SizedBox(width: 8),
-                    Text('${request.daysCount} يوم'),
-                  ],
-                ),
-                if (request.reason != null) ...[
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 12),
                   Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.end,
                     children: [
-                      const Icon(Icons.note, size: 16),
+                      OutlinedButton(
+                        onPressed: () => _rejectRequest(request.requestId),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppColors.error,
+                          side: const BorderSide(color: AppColors.error),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                        child: const Text('رفض'),
+                      ),
                       const SizedBox(width: 8),
-                      Expanded(child: Text(request.reason!)),
+                      ElevatedButton(
+                        onPressed: () => _approveRequest(request.requestId),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.success,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                        child: const Text('موافقة'),
+                      ),
                     ],
                   ),
                 ],
-                const SizedBox(height: 12),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    TextButton(
-                      onPressed: () => _rejectRequest(request.requestId),
-                      style: TextButton.styleFrom(
-                        foregroundColor: AppColors.error,
-                      ),
-                      child: const Text('رفض'),
-                    ),
-                    const SizedBox(width: 8),
-                    ElevatedButton(
-                      onPressed: () => _approveRequest(request.requestId),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.success,
-                      ),
-                      child: const Text('موافقة'),
-                    ),
-                  ],
-                ),
-              ],
+              ),
             ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
+
+  String _formatDate(DateTime date) =>
+      '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
 }

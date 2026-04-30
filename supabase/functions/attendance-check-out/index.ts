@@ -629,20 +629,28 @@ serve(async (req: Request) => {
         employee_id: employeeId,
         attendance_date: attendanceDate,
         check_out_time: checkOutTimeStr,
-        total_hours: totalHoursNum.toString(),
-        hourly_rate: hourlyRate.toString(),
-        daily_salary: dailySalary.toString(),
+        total_hours: totalHoursNum,
+        hourly_rate: hourlyRate,
+        daily_salary: dailySalary,
         is_absent: false,
       };
 
-      const { error: upsertErr } = await supabase
+      console.log('[attendance-check-out] 📝 Attempting upsert with payload:', JSON.stringify(upsertPayload));
+
+      const { error: upsertErr, data: upsertData } = await supabase
         .from('daily_attendance_summary')
-        .upsert(upsertPayload, { onConflict: 'employee_id,attendance_date' });
+        .upsert(upsertPayload, { onConflict: 'employee_id,attendance_date' })
+        .select();
+        
       if (upsertErr) {
-        console.warn('[attendance-check-out] daily_attendance_summary upsert failed', upsertErr.message);
-        console.warn('[attendance-check-out] Upsert error details:', JSON.stringify(upsertErr));
+        console.error('[attendance-check-out] ❌ daily_attendance_summary upsert failed');
+        console.error('[attendance-check-out] Error message:', upsertErr.message);
+        console.error('[attendance-check-out] Error code:', upsertErr.code);
+        console.error('[attendance-check-out] Error details:', JSON.stringify(upsertErr));
+        console.error('[attendance-check-out] Tried to upsert:', JSON.stringify(upsertPayload));
       } else {
         console.log('[attendance-check-out] ✅ daily_attendance_summary updated successfully');
+        console.log('[attendance-check-out] Upserted data:', JSON.stringify(upsertData));
       }
     } catch (e) {
       console.warn('[attendance-check-out] daily_attendance_summary upsert exception', (e as Error).message);

@@ -371,20 +371,16 @@ class RequestsApiService {
 
   static Future<List<AttendanceRequest>> fetchAttendanceRequests(
       String employeeId) async {
-    final uri = Uri.parse(attendanceRequestsEndpoint).replace(
-      queryParameters: {'employee_id': employeeId},
-    );
-    final response = await http.get(uri);
-    final body = _decodeBody(response.body);
-
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      final list = body['requests'] ?? body;
-      return (list as List)
-          .map((item) =>
-              AttendanceRequest.fromJson(Map<String, dynamic>.from(item as Map)))
-          .toList();
+    try {
+      // ✅ Use Supabase directly instead of old HTTP API
+      final items = await SupabaseRequestsService.getAttendanceRequests(
+        employeeId: employeeId,
+        includeAll: true, // show all statuses for the employee
+      );
+      return items.map((item) => AttendanceRequest.fromJson(item)).toList();
+    } catch (e) {
+      throw Exception('تعذر تحميل طلبات الحضور: $e');
     }
-    throw Exception(body['error'] ?? 'تعذر تحميل طلبات الحضور (${response.statusCode})');
   }
 
   static Future<Map<String, dynamic>> getComprehensiveReport({

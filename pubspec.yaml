@@ -66,6 +66,8 @@ dependencies:
   battery_plus: ^6.0.2  # Battery level & charging status
   noise_meter: ^5.0.1  # Ambient sound level
   wifi_scan: ^0.4.1  # WiFi network scanning
+  pdf: ^3.12.0
+  printing: ^5.14.3
 
 dev_dependencies:
   flutter_test:

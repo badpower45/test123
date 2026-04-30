@@ -75,11 +75,12 @@ class SupabaseFunctionClient {
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
         if (responseBody is Map<String, dynamic>) {
-          // ✅ Return response even if success is false - let caller handle it
-          // This allows checking for 'attendance' field or 'alreadyCheckedOut' flag
-          if (responseBody['success'] == true ||
-              responseBody['attendance'] != null ||
-              responseBody['alreadyCheckedOut'] == true) {
+          // ✅ Return response for any successful 2xx that doesn't contain an error field.
+          // Covers: success==true, attendance, alreadyCheckedOut, break, breaks, etc.
+          final hasError = responseBody.containsKey('error') &&
+              responseBody['error'] != null &&
+              responseBody['success'] != true;
+          if (!hasError) {
             _log(
               enableLogging,
               '✅ [SupabaseFunctionClient] Success: $functionName',

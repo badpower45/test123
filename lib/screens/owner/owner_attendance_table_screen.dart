@@ -10,10 +10,12 @@ class OwnerAttendanceTableScreen extends StatefulWidget {
   const OwnerAttendanceTableScreen({super.key, this.initialEmployeeId});
 
   @override
-  State<OwnerAttendanceTableScreen> createState() => _OwnerAttendanceTableScreenState();
+  State<OwnerAttendanceTableScreen> createState() =>
+      _OwnerAttendanceTableScreenState();
 }
 
-class _OwnerAttendanceTableScreenState extends State<OwnerAttendanceTableScreen> {
+class _OwnerAttendanceTableScreenState
+    extends State<OwnerAttendanceTableScreen> {
   List<Map<String, dynamic>> _attendanceRecords = [];
   List<Map<String, dynamic>> _branches = [];
   bool _loading = true;
@@ -157,14 +159,20 @@ class _OwnerAttendanceTableScreenState extends State<OwnerAttendanceTableScreen>
                 InkWell(
                   onTap: _pickDateRange,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 14,
+                    ),
                     decoration: BoxDecoration(
                       border: Border.all(color: Colors.grey.shade300),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Row(
                       children: [
-                        const Icon(Icons.date_range, color: AppColors.primaryOrange),
+                        const Icon(
+                          Icons.date_range,
+                          color: AppColors.primaryOrange,
+                        ),
                         const SizedBox(width: 12),
                         Expanded(
                           child: Text(
@@ -186,15 +194,23 @@ class _OwnerAttendanceTableScreenState extends State<OwnerAttendanceTableScreen>
                   decoration: const InputDecoration(
                     labelText: 'الفرع',
                     border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.store, color: AppColors.primaryOrange),
-                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    prefixIcon: Icon(
+                      Icons.store,
+                      color: AppColors.primaryOrange,
+                    ),
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
                   ),
                   items: [
                     const DropdownMenuItem(value: null, child: Text('الكل')),
-                    ..._branches.map((branch) => DropdownMenuItem(
-                          value: branch['name'] as String,
-                          child: Text(branch['name'] as String),
-                        )),
+                    ..._branches.map(
+                      (branch) => DropdownMenuItem(
+                        value: branch['name'] as String,
+                        child: Text(branch['name'] as String),
+                      ),
+                    ),
                   ],
                   onChanged: (value) {
                     setState(() => _selectedBranch = value);
@@ -211,97 +227,158 @@ class _OwnerAttendanceTableScreenState extends State<OwnerAttendanceTableScreen>
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _error != null
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.error_outline, size: 56, color: AppColors.error),
-                            const SizedBox(height: 16),
-                            Text('خطأ: $_error'),
-                            const SizedBox(height: 16),
-                            ElevatedButton(
-                              onPressed: _loadAttendance,
-                              child: const Text('إعادة المحاولة'),
-                            ),
-                          ],
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(
+                          Icons.error_outline,
+                          size: 56,
+                          color: AppColors.error,
                         ),
-                      )
-                    : _attendanceRecords.isEmpty
-                        ? const Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(Icons.inbox, size: 56, color: AppColors.textTertiary),
-                                SizedBox(height: 16),
-                                Text(
-                                  'لا توجد سجلات حضور',
-                                  style: TextStyle(fontSize: 16, color: AppColors.textSecondary),
-                                ),
-                              ],
-                            ),
-                          )
-                        : RefreshIndicator(
-                            onRefresh: _loadAttendance,
-                            child: SingleChildScrollView(
-                              scrollDirection: Axis.vertical,
-                              child: SingleChildScrollView(
-                                scrollDirection: Axis.horizontal,
-                                child: DataTable(
-                                  headingRowColor: WidgetStateProperty.all(
-                                    AppColors.primaryOrange.withOpacity(0.1),
-                                  ),
-                                  columns: const [
-                                    DataColumn(label: Text('التاريخ', style: TextStyle(fontWeight: FontWeight.bold))),
-                                    DataColumn(label: Text('الموظف', style: TextStyle(fontWeight: FontWeight.bold))),
-                                    DataColumn(label: Text('الفرع', style: TextStyle(fontWeight: FontWeight.bold))),
-                                    DataColumn(label: Text('وقت الحضور', style: TextStyle(fontWeight: FontWeight.bold))),
-                                    DataColumn(label: Text('وقت الانصراف', style: TextStyle(fontWeight: FontWeight.bold))),
-                                    DataColumn(label: Text('الحالة', style: TextStyle(fontWeight: FontWeight.bold))),
-                                  ],
-                                  rows: _attendanceRecords.map((record) {
-                                    final employeeData = record['employees'] as Map<String, dynamic>?;
-                                    final employeeName = employeeData?['full_name'] ?? 'غير معروف';
-                                    final branch = employeeData?['branch'] ?? '';
-                                    final date = (record['attendance_date'] ?? record['date']) as String;
-                                    final checkInTime = record['check_in_time'] as String?;
-                                    final checkOutTime = record['check_out_time'] as String?;
-
-                                    final checkInFormatted = _formatTime(checkInTime);
-                                    final checkOutFormatted = _formatTime(checkOutTime);
-
-                                    final isActive = checkOutTime == null || checkOutTime.toString().isEmpty;
-
-                                    return DataRow(
-                                      cells: [
-                                        DataCell(Text(_formatDate(date))),
-                                        DataCell(Text(employeeName)),
-                                        DataCell(Text(branch)),
-                                        DataCell(Text(checkInFormatted)),
-                                        DataCell(Text(checkOutFormatted)),
-                                        DataCell(
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                            decoration: BoxDecoration(
-                                              color: isActive ? AppColors.success.withOpacity(0.1) : Colors.grey.withOpacity(0.1),
-                                              borderRadius: BorderRadius.circular(4),
-                                            ),
-                                            child: Text(
-                                              isActive ? 'حاضر' : 'انصرف',
-                                              style: TextStyle(
-                                                color: isActive ? AppColors.success : Colors.grey,
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.w600,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    );
-                                  }).toList(),
-                                ),
+                        const SizedBox(height: 16),
+                        Text('خطأ: $_error'),
+                        const SizedBox(height: 16),
+                        ElevatedButton(
+                          onPressed: _loadAttendance,
+                          child: const Text('إعادة المحاولة'),
+                        ),
+                      ],
+                    ),
+                  )
+                : _attendanceRecords.isEmpty
+                ? const Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.inbox,
+                          size: 56,
+                          color: AppColors.textTertiary,
+                        ),
+                        SizedBox(height: 16),
+                        Text(
+                          'لا توجد سجلات حضور',
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : RefreshIndicator(
+                    onRefresh: _loadAttendance,
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.vertical,
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: DataTable(
+                          headingRowColor: WidgetStateProperty.all(
+                            AppColors.primaryOrange.withOpacity(0.1),
+                          ),
+                          columns: const [
+                            DataColumn(
+                              label: Text(
+                                'التاريخ',
+                                style: TextStyle(fontWeight: FontWeight.bold),
                               ),
                             ),
-                          ),
+                            DataColumn(
+                              label: Text(
+                                'الموظف',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            DataColumn(
+                              label: Text(
+                                'الفرع',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            DataColumn(
+                              label: Text(
+                                'وقت الحضور',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            DataColumn(
+                              label: Text(
+                                'وقت الانصراف',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            DataColumn(
+                              label: Text(
+                                'الحالة',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ],
+                          rows: _attendanceRecords.map((record) {
+                            final employeeData =
+                                record['employees'] as Map<String, dynamic>?;
+                            final employeeName =
+                                employeeData?['full_name'] ?? 'غير معروف';
+                            final branch = employeeData?['branch'] ?? '';
+                            final dateRaw =
+                                record['attendance_date'] ?? record['date'];
+                            final dateStr = dateRaw?.toString() ?? '';
+                            final checkInTime = record['check_in_time']
+                                ?.toString();
+                            final checkOutTime = record['check_out_time']
+                                ?.toString();
+
+                            String dateFormatted = _formatDate(dateStr);
+                            if (dateFormatted == '-' && dateStr.isNotEmpty) {
+                              dateFormatted = dateStr.split('T').first;
+                            }
+
+                            final checkInFormatted = _formatTime(checkInTime);
+                            final checkOutFormatted = _formatTime(checkOutTime);
+
+                            final isActive =
+                                checkOutTime == null ||
+                                checkOutTime.toString().isEmpty;
+
+                            return DataRow(
+                              cells: [
+                                DataCell(Text(dateFormatted)),
+                                DataCell(Text(employeeName)),
+                                DataCell(Text(branch)),
+                                DataCell(Text(checkInFormatted)),
+                                DataCell(Text(checkOutFormatted)),
+                                DataCell(
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 4,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: isActive
+                                          ? AppColors.success.withOpacity(0.1)
+                                          : Colors.grey.withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      isActive ? 'حاضر' : 'انصرف',
+                                      style: TextStyle(
+                                        color: isActive
+                                            ? AppColors.success
+                                            : Colors.grey,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                    ),
+                  ),
           ),
 
           // Summary Section
@@ -319,10 +396,11 @@ class _OwnerAttendanceTableScreenState extends State<OwnerAttendanceTableScreen>
                   ),
                   _SummaryItem(
                     label: 'الحاضرون الآن',
-                    value: '${_attendanceRecords.where((r) {
-                      final value = r['check_out_time'];
-                      return value == null || (value is String && value.isEmpty);
-                    }).length}',
+                    value:
+                        '${_attendanceRecords.where((r) {
+                          final value = r['check_out_time'];
+                          return value == null || (value is String && value.isEmpty);
+                        }).length}',
                     icon: Icons.person_pin_circle,
                     color: AppColors.success,
                   ),
@@ -347,7 +425,9 @@ class _OwnerAttendanceTableScreenState extends State<OwnerAttendanceTableScreen>
   }
 
   String _calculateAverageHours() {
-    final completedRecords = _attendanceRecords.where((r) => r['total_hours'] != null).toList();
+    final completedRecords = _attendanceRecords
+        .where((r) => r['total_hours'] != null)
+        .toList();
     if (completedRecords.isEmpty) return '0';
 
     final totalHours = completedRecords.fold<double>(
@@ -405,10 +485,7 @@ class _SummaryItem extends StatelessWidget {
         ),
         Text(
           label,
-          style: const TextStyle(
-            fontSize: 12,
-            color: AppColors.textSecondary,
-          ),
+          style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
         ),
       ],
     );

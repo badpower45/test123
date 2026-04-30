@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../../models/detailed_attendance_request.dart';
 import '../../services/manager_api_service.dart';
 import '../../services/supabase_attendance_service.dart';
-import '../../services/branch_manager_api_service.dart';
+import '../../services/supabase_requests_service.dart';
 import '../../theme/app_colors.dart';
 
 class ManagerAttendanceRequestsTab extends StatefulWidget {
@@ -53,24 +53,19 @@ class _ManagerAttendanceRequestsTabState extends State<ManagerAttendanceRequests
       if (branchName == null || branchName.toString().isEmpty) {
         throw Exception('المدير غير مرتبط بفرع');
       }
-      
-      // Use Supabase Edge Function to get branch requests
-      final requestsData = await BranchManagerApiService.getBranchRequests(branchName);
-      
-      if (requestsData['success'] == true) {
-        final attendanceRequests = requestsData['attendanceRequests'] as List? ?? [];
-        setState(() {
-          _requests = attendanceRequests
-              .map((json) => DetailedAttendanceRequest.fromJson(json))
-              .toList();
-          _isLoading = false;
-        });
-      } else {
-        setState(() {
-          _requests = [];
-          _isLoading = false;
-        });
-      }
+
+      // ✅ Use Supabase directly instead of broken edge function
+      final rawList = await SupabaseRequestsService.getAllAttendanceRequestsWithEmployees(
+        status: 'pending',
+        branchName: branchName,
+      );
+
+      setState(() {
+        _requests = rawList
+            .map((json) => DetailedAttendanceRequest.fromJson(json))
+            .toList();
+        _isLoading = false;
+      });
     } catch (e) {
       print('❌ Error loading attendance requests: $e');
       setState(() {
