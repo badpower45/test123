@@ -83,6 +83,25 @@ class _OwnerEmployeePayrollReportPageState
       endDate = DateTime.now();
     }
 
+    // Get persisted leave allowance from employee record as fallback
+    double persistedLeaveAllowance = 100.0; // Default
+    try {
+      final client = Supabase.instance.client;
+      final empResponse = await client
+          .from('employees')
+          .select('leave_allowance')
+          .eq('id', widget.employeeId)
+          .maybeSingle();
+
+      if (empResponse != null && empResponse['leave_allowance'] != null) {
+        persistedLeaveAllowance =
+            (empResponse['leave_allowance'] as num).toDouble();
+        print('✓ Fetched persisted leave allowance: $persistedLeaveAllowance');
+      }
+    } catch (e) {
+      print('⚠️ Could not fetch persisted leave allowance: $e');
+    }
+
     // Calculate leave allowance using edge function
     final now = DateTime.now();
     final currentMonth = now.month;
@@ -94,6 +113,14 @@ class _OwnerEmployeePayrollReportPageState
           month: currentMonth,
           year: currentYear,
         );
+
+    // If edge function returned 0, use persisted value as fallback
+    if (calculatedLeaveAllowance == 0.0) {
+      print(
+        '⚠️ Edge function returned 0, using persisted allowance: $persistedLeaveAllowance',
+      );
+      calculatedLeaveAllowance = persistedLeaveAllowance;
+    }
 
     final legacyData = await _payrollService
         .getEmployeeAttendanceReportLegacyFormat(

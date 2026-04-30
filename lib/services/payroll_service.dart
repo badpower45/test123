@@ -899,6 +899,8 @@ class PayrollService {
     try {
       print('📊 Calculating leave allowance for employee: $employeeId');
 
+      // Try to invoke the edge function
+      print('   Attempting to invoke calculate-leave-allowance function...');
       final response = await _supabase.functions.invoke(
         'calculate-leave-allowance',
         body: {
@@ -908,18 +910,61 @@ class PayrollService {
         },
       );
 
-      // FunctionResponse.data returns dynamic, cast to Map
-      if (response.data is Map) {
-        final data = response.data as Map<String, dynamic>;
-        final allowance = (data['leave_allowance'] as num?)?.toDouble() ?? 0.0;
-        print('✅ Leave allowance calculated: $allowance');
-        return allowance;
+      print('✅ Function invoked successfully');
+      print('   Response type: ${response.runtimeType}');
+      print('   Response: $response');
+
+      // Get the data from response
+      dynamic responseData = response;
+      if (response is Map<String, dynamic>) {
+        responseData = response;
       }
 
-      print('⚠️ No response from edge function, returning default 0');
+      print('   Data type: ${responseData.runtimeType}');
+      print('   Data: $responseData');
+
+      // Extract leave_allowance from response
+      double allowance = 0.0;
+
+      if (responseData is Map<String, dynamic>) {
+        // Check for success flag
+        if (responseData['success'] == true ||
+            responseData['success'] == 'true') {
+          final allowanceValue = responseData['leave_allowance'];
+          if (allowanceValue != null) {
+            allowance = (allowanceValue as num).toDouble();
+            print('✅ Leave allowance extracted: $allowance');
+            return allowance;
+          }
+        } else {
+          print('⚠️ Function returned success=false');
+          print('   Error: ${responseData['error']}');
+        }
+      } else if (responseData is Map) {
+        final allowanceValue = responseData['leave_allowance'];
+        if (allowanceValue != null && allowanceValue is num) {
+          allowance = allowanceValue.toDouble();
+          print('✅ Leave allowance extracted (untyped): $allowance');
+          return allowance;
+        }
+      }
+
+      print('⚠️ Could not extract leave_allowance, returning 0');
+      return 0.0;
+    } on Exception catch (e) {
+      print('❌ Exception calculating leave allowance: $e');
+      print('   Stack: ${StackTrace.current}');
+
+      // Check if it's a function not found error
+      if (e.toString().contains('404') ||
+          e.toString().contains('not found') ||
+          e.toString().contains('Function not found')) {
+        print('⚠️ Edge function not found - using fallback (0.0)');
+      }
+
       return 0.0;
     } catch (e) {
-      print('❌ Error calculating leave allowance: $e');
+      print('❌ Unexpected error calculating leave allowance: $e');
       return 0.0;
     }
   }
