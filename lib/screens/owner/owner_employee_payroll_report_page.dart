@@ -89,17 +89,23 @@ class _OwnerEmployeePayrollReportPageState
       final client = Supabase.instance.client;
       final empResponse = await client
           .from('employees')
-          .select('leave_allowance')
+          .select('leave_allowance, hourly_rate')
           .eq('id', widget.employeeId)
           .maybeSingle();
 
       if (empResponse != null && empResponse['leave_allowance'] != null) {
-        persistedLeaveAllowance =
-            (empResponse['leave_allowance'] as num).toDouble();
+        persistedLeaveAllowance = (empResponse['leave_allowance'] as num)
+            .toDouble();
         print('✓ Fetched persisted leave allowance: $persistedLeaveAllowance');
+      } else {
+        // Column might not exist yet - use default
+        persistedLeaveAllowance = 100.0;
+        print('ℹ️ Using default leave allowance: 100.0');
       }
     } catch (e) {
+      // Column doesn't exist in database - use default
       print('⚠️ Could not fetch persisted leave allowance: $e');
+      persistedLeaveAllowance = 100.0;
     }
 
     // Calculate leave allowance using edge function
@@ -110,6 +116,7 @@ class _OwnerEmployeePayrollReportPageState
     double calculatedLeaveAllowance = await _payrollService
         .calculateLeaveAllowance(
           employeeId: widget.employeeId,
+          employeeName: widget.employeeName,
           month: currentMonth,
           year: currentYear,
         );
@@ -339,6 +346,28 @@ class _OwnerEmployeePayrollReportPageState
                                   'المرتب الأساسي',
                                   '${_totalSalary.toStringAsFixed(0)} ج.م',
                                   Icons.attach_money,
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            // Additional details row
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceAround,
+                              children: [
+                                _buildSummaryItem(
+                                  'بدل الإجازة',
+                                  '${_totalLeaveAllowance.toStringAsFixed(2)} ج.م',
+                                  Icons.card_giftcard,
+                                ),
+                                _buildSummaryItem(
+                                  'المكافآت',
+                                  '${_totalBonuses.toStringAsFixed(2)} ج.م',
+                                  Icons.emoji_events,
+                                ),
+                                _buildSummaryItem(
+                                  'الخصومات',
+                                  '${_totalDeductions.toStringAsFixed(2)} ج.م',
+                                  Icons.remove_circle,
                                 ),
                               ],
                             ),

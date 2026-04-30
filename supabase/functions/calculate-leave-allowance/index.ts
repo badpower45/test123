@@ -53,11 +53,11 @@ serve(async (req: Request) => {
 
   try {
     const body = await req.json();
-    const { employee_id } = body;
+    const { employee_id, employee_name } = body;
 
-    if (!employee_id) {
+    if (!employee_id && !employee_name) {
       return new Response(
-        JSON.stringify({ success: false, error: 'employee_id is required' }),
+        JSON.stringify({ success: false, error: 'employee_id or employee_name is required' }),
         { status: 400, headers: corsHeaders }
       );
     }
@@ -80,22 +80,45 @@ serve(async (req: Request) => {
     const now = getCairoNow();
     const { periodStart, periodEnd } = getCurrentPayrollPeriod(now);
 
-    console.log(`[calculate-leave-allowance] Employee: ${employee_id}, Payroll Period: ${periodStart} to ${periodEnd}`);
+    // Step 1: Find employee by ID or name
+    let employee;
+    let empError;
+    let resolvedEmployeeId = employee_id;
 
-    // Step 1: Get employee's hourly rate
-    const { data: employee, error: empError } = await supabase
-      .from('employees')
-      .select('id, hourly_rate, leave_allowance')
-      .eq('id', employee_id)
-      .maybeSingle();
+    if (employee_id) {
+      // Try to find by ID first
+      const result = await supabase
+        .from('employees')
+        .select('id, hourly_rate, leave_allowance')
+        .eq('id', employee_id)
+        .maybeSingle();
+      employee = result.data;
+      empError = result.error;
+    }
+
+    // If not found by ID, try by name
+    if (!employee && employee_name) {
+      const result = await supabase
+        .from('employees')
+        .select('id, hourly_rate, leave_allowance')
+        .eq('name', employee_name)
+        .maybeSingle();
+      employee = result.data;
+      empError = result.error;
+      if (employee) {
+        resolvedEmployeeId = employee.id;
+      }
+    }
 
     if (empError || !employee) {
       console.error('[calculate-leave-allowance] Employee not found', empError);
       return new Response(
-        JSON.stringify({ success: false, error: 'Employee not found' }),
+        JSON.stringify({ success: false, error: 'Employee not found', details: empError?.message }),
         { status: 404, headers: corsHeaders }
       );
     }
+
+    console.log(`[calculate-leave-allowance] Employee: ${resolvedEmployeeId}, Payroll Period: ${periodStart} to ${periodEnd}`);
 
     const hourlyRate = Number(employee.hourly_rate ?? 100);
     const persistedLeaveAllowance = Number(employee.leave_allowance ?? 100);
@@ -106,7 +129,7 @@ serve(async (req: Request) => {
     const { data: leaves, error: leavesError } = await supabase
       .from('leave_requests')
       .select('id, start_date, end_date, status')
-      .eq('employee_id', employee_id)
+      .eq('employee_id', resolvedEmployeeId)
       .eq('status', 'approved');
 
     if (leavesError) {
@@ -144,7 +167,7 @@ serve(async (req: Request) => {
       const { data: lastWorkDay, error: workDayError } = await supabase
         .from('attendance')
         .select('date, total_hours, work_hours')
-        .eq('employee_id', employee_id)
+        .eq('employee_id', resolvedEmployeeId)
         .lte('date', periodEnd) // on or before period end
         .order('date', { ascending: false })
         .limit(1)
@@ -174,7 +197,7 @@ serve(async (req: Request) => {
     return new Response(
       JSON.stringify({
         success: true,
-        employee_id,
+        employee_id: resolvedEmployeeId,
         period_start: periodStart,
         period_end: periodEnd,
         period_name: periodName,

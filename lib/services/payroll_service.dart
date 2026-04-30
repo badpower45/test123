@@ -893,6 +893,7 @@ class PayrollService {
   // Calculate leave allowance using edge function
   Future<double> calculateLeaveAllowance({
     required String employeeId,
+    String? employeeName,
     int? month,
     int? year,
   }) async {
@@ -905,6 +906,7 @@ class PayrollService {
         'calculate-leave-allowance',
         body: {
           'employee_id': employeeId,
+          if (employeeName != null) 'employee_name': employeeName,
           if (month != null) 'month': month,
           if (year != null) 'year': year,
         },
