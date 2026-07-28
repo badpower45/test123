@@ -76,21 +76,32 @@ class ManagerAttendanceAdminService {
 
       return <String, dynamic>{};
     } catch (error) {
-      if (_shouldUseDirectFallback(error)) {
+      if (_shouldUseDirectFallback(action, error)) {
         return _callDirectFallback(action, payload);
       }
       rethrow;
     }
   }
 
-  static bool _shouldUseDirectFallback(Object error) {
+  static bool _shouldUseDirectFallback(String action, Object error) {
+    if (action == 'get_branch_employees' || action == 'get_monthly_attendance') {
+      return true;
+    }
+
+    if (action == 'update_day_times' ||
+        action == 'delete_day' ||
+        action == 'apply_penalty') {
+      return false;
+    }
+
     final message = error.toString().toLowerCase();
     return message.contains('failed to fetch') ||
         message.contains('clientexception') ||
         message.contains('requested function was not found') ||
         message.contains('function not found') ||
         message.contains('not_found') ||
-        message.contains('404');
+        message.contains('404') ||
+        message.contains('تعذر الوصول');
   }
 
   static Future<Map<String, dynamic>> _callDirectFallback(

@@ -23,15 +23,22 @@ class MainActivity : FlutterActivity() {
     
     private var backgroundPulseMethodChannel: MethodChannel? = null
     
-    // BroadcastReceiver to receive pulses from PersistentPulseService
+    // BroadcastReceiver to receive pulses and auto-checkouts from PersistentPulseService
     private val pulseReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == "com.example.heartbeat.PULSE_RECORDED") {
-                val pulseData = intent.getSerializableExtra("pulse_data") as? HashMap<String, Any>
-                Log.d("MainActivity", "💓 Received pulse from native service: $pulseData")
-                
-                // Forward to Flutter
-                backgroundPulseMethodChannel?.invokeMethod("onPulseRecorded", pulseData)
+            when (intent?.action) {
+                "com.example.heartbeat.PULSE_RECORDED" -> {
+                    val pulseData = intent.getSerializableExtra("pulse_data") as? HashMap<String, Any>
+                    Log.d("MainActivity", "💓 Received pulse from native service: $pulseData")
+                    // Forward to Flutter
+                    backgroundPulseMethodChannel?.invokeMethod("onPulseRecorded", pulseData)
+                }
+                "com.example.heartbeat.AUTO_CHECKOUT_TRIGGERED" -> {
+                    val reason = intent.getStringExtra("reason") ?: "AUTO_CHECKOUT"
+                    Log.d("MainActivity", "🚨 Received auto checkout from native service: $reason")
+                    // Forward to Flutter
+                    backgroundPulseMethodChannel?.invokeMethod("onAutoCheckoutTriggered", reason)
+                }
             }
         }
     }
@@ -39,8 +46,11 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Register BroadcastReceiver for pulses
-        val filter = IntentFilter("com.example.heartbeat.PULSE_RECORDED")
+        // Register BroadcastReceiver for pulses and auto-checkouts
+        val filter = IntentFilter().apply {
+            addAction("com.example.heartbeat.PULSE_RECORDED")
+            addAction("com.example.heartbeat.AUTO_CHECKOUT_TRIGGERED")
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(pulseReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
@@ -84,6 +94,13 @@ class MainActivity : FlutterActivity() {
                         val branchLongitude = call.argument<Double>("branchLongitude") ?: 0.0
                         val branchRadius = call.argument<Double>("branchRadius") ?: 100.0
                         
+                        val shiftEndTimeEpoch = when (val value = call.argument<Any>("shiftEndTimeEpoch")) {
+                            is Long -> value
+                            is Int -> value.toLong()
+                            is Double -> value.toLong()
+                            else -> 0L
+                        }
+                        
                         if (employeeId.isNullOrEmpty() || attendanceId.isNullOrEmpty()) {
                             result.error("INVALID_PARAMS", "Missing employeeId or attendanceId", null)
                             return@setMethodCallHandler
@@ -96,7 +113,8 @@ class MainActivity : FlutterActivity() {
                             "interval" to interval,
                             "branchLatitude" to branchLatitude,
                             "branchLongitude" to branchLongitude,
-                            "branchRadius" to branchRadius
+                            "branchRadius" to branchRadius,
+                            "shiftEndTimeEpoch" to shiftEndTimeEpoch
                         )
                         
                         PersistentPulseService.start(this, params)
@@ -112,6 +130,36 @@ class MainActivity : FlutterActivity() {
                         result.success(true)
                     } catch (e: Exception) {
                         result.error("SERVICE_ERROR", e.message, null)
+                    }
+                }
+                
+                "isIgnoringBatteryOptimizations" -> {
+                    try {
+                        val powerManager = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+                        val isIgnoring = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            powerManager.isIgnoringBatteryOptimizations(packageName)
+                        } else {
+                            true
+                        }
+                        result.success(isIgnoring)
+                    } catch (e: Exception) {
+                        result.error("BATTERY_ERROR", e.message, null)
+                    }
+                }
+                
+                "requestIgnoreBatteryOptimizations" -> {
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                data = android.net.Uri.parse("package:$packageName")
+                            }
+                            startActivity(intent)
+                            result.success(true)
+                        } else {
+                            result.success(true)
+                        }
+                    } catch (e: Exception) {
+                        result.error("BATTERY_ERROR", e.message, null)
                     }
                 }
                 

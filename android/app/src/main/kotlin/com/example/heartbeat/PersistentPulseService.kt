@@ -4,6 +4,7 @@ import android.app.*
 import android.content.Context
 import android.content.Intent
 import android.os.*
+import android.content.pm.ServiceInfo
 import android.util.Log
 import android.location.Location
 import androidx.core.app.NotificationCompat
@@ -41,6 +42,7 @@ class PersistentPulseService : Service() {
     private var attendanceId: String? = null
     private var branchId: String? = null
     private var intervalMinutes: Int = 5
+    private var shiftEndTimeEpoch: Long = 0L
     
     // Branch location for geofence check
     private var branchLatitude: Double = 0.0
@@ -49,6 +51,7 @@ class PersistentPulseService : Service() {
     
     private var pulseCount = 0
     private var lastPulseTime: Long = 0
+    private var serviceStartTime: Long = 0L
     
     // Native modules for location and WiFi
     private lateinit var fastGPS: FastGPSModule
@@ -68,7 +71,13 @@ class PersistentPulseService : Service() {
         private const val EXTRA_BRANCH_LAT = "branchLatitude"
         private const val EXTRA_BRANCH_LNG = "branchLongitude"
         private const val EXTRA_BRANCH_RADIUS = "branchRadius"
+        private const val EXTRA_SHIFT_END_TIME = "shiftEndTimeEpoch"
         private const val PREFS_NAME = "persistent_pulse_service"
+        private const val FLUTTER_PREFS = "FlutterSharedPreferences"
+        private const val FLUTTER_PULSE_ACTIVE_KEY = "flutter.pulse_tracking_active"
+        private const val FLUTTER_LAST_PULSE_TS_KEY = "flutter.last_pulse_timestamp"
+        private const val FLUTTER_SKIP_WINDOW_MS = 4 * 60 * 1000L
+        private const val FLUTTER_STALE_LIMIT_MS = 7 * 60 * 1000L
         
         /**
          * Start the persistent pulse service
@@ -82,15 +91,25 @@ class PersistentPulseService : Service() {
                 putExtra(EXTRA_BRANCH_LAT, params["branchLatitude"] as? Double ?: 0.0)
                 putExtra(EXTRA_BRANCH_LNG, params["branchLongitude"] as? Double ?: 0.0)
                 putExtra(EXTRA_BRANCH_RADIUS, params["branchRadius"] as? Double ?: 100.0)
+                putExtra(EXTRA_SHIFT_END_TIME, params["shiftEndTimeEpoch"] as? Long ?: 0L)
+                putExtra("fromAlarm", params["fromAlarm"] as? Boolean ?: false)
             }
             
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+                Log.d(TAG, "🚀 Service start requested successfully")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Failed to start service: ${e.message}", e)
+                try {
+                    context.startService(intent)
+                } catch (se: Exception) {
+                    Log.e(TAG, "❌ Fallback startService also failed: ${se.message}")
+                }
             }
-            
-            Log.d(TAG, "🚀 Service start requested")
         }
         
         /**
@@ -138,6 +157,9 @@ class PersistentPulseService : Service() {
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "🎯 Service started with intent")
+        if (serviceStartTime == 0L) {
+            serviceStartTime = System.currentTimeMillis()
+        }
 
         // START_STICKY can restart service with null intent, so restore the last known params.
         val loadedFromIntent = loadParametersFromIntent(intent)
@@ -152,8 +174,48 @@ class PersistentPulseService : Service() {
             persistCurrentParameters()
         }
         
-        Log.d(TAG, "📋 Params - Employee: $employeeId, Attendance: $attendanceId, Branch: $branchId, Interval: $intervalMinutes min")
-        Log.d(TAG, "📍 Branch Location: ($branchLatitude, $branchLongitude), Radius: ${branchRadius}m")
+        Log.d(TAG, "📋 Params - Employee: $employeeId, Attendance: $attendanceId, Branch: $branchId, Interval: $intervalMinutes min, ShiftEnd: $shiftEndTimeEpoch")
+        
+        // Immediate check if shift has already ended
+        // IF-BLOCK DISABLED BY POLICY: shift-end auto checkout is completely disabled.
+        /*
+        if (shiftEndTimeEpoch > 0 && System.currentTimeMillis() >= shiftEndTimeEpoch) {
+            Log.d(TAG, "🚨 Service started but shift already ended. Triggering auto-checkout immediately.")
+            serviceScope.launch(Dispatchers.IO) {
+                writeCheckoutToDatabase("SHIFT_END_AUTO_CHECKOUT")
+                
+                // Cancel alarms
+                PulseAlarmReceiver.cancelAlarm(applicationContext)
+                
+                // Clear service parameters from SharedPreferences
+                getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit()
+                    .clear()
+                    .apply()
+                    
+                // Clear tracking active flag in Flutter shared preferences
+                try {
+                    getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
+                        .edit()
+                        .putBoolean(FLUTTER_PULSE_ACTIVE_KEY, false)
+                        .apply()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error clearing flutter pulse active key: ${e.message}")
+                }
+                
+                // Send Broadcast for Flutter UI
+                val broadcastIntent = Intent("com.example.heartbeat.AUTO_CHECKOUT_TRIGGERED").apply {
+                    putExtra("reason", "SHIFT_END_AUTO_CHECKOUT")
+                }
+                sendBroadcast(broadcastIntent)
+                
+                withContext(Dispatchers.Main) {
+                    stopSelf()
+                }
+            }
+            return START_NOT_STICKY
+        }
+        */
         
         // Validate required parameters
         if (employeeId.isNullOrEmpty() || attendanceId.isNullOrEmpty()) {
@@ -164,7 +226,21 @@ class PersistentPulseService : Service() {
         
         // Start foreground service with notification
         val notification = buildNotification("جاري بدء التتبع...")
-        startForeground(NOTIFICATION_ID, notification)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(
+                NOTIFICATION_ID, 
+                notification, 
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            )
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID, 
+                notification, 
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
         
         // 🎵 Start silent audio playback (prevents Deep Sleep)
         try {
@@ -176,8 +252,22 @@ class PersistentPulseService : Service() {
             Log.e(TAG, "❌ Failed to start MediaPlayer: ${e.message}")
         }
         
-        // Start pulse timer
-        startPulseTimer()
+        // Check if started from AlarmManager resurrection
+        val fromAlarm = intent?.getBooleanExtra("fromAlarm", false) ?: false
+        if (fromAlarm) {
+            Log.d(TAG, "⏰ Started from AlarmManager resurrection - triggering immediate background pulse check")
+            serviceScope.launch {
+                sendPulse()
+            }
+        }
+        
+        // Start pulse timer only if not already active to prevent coroutine reset
+        if (pulseJob == null || pulseJob?.isActive == false) {
+            Log.d(TAG, "⏰ Starting a new pulse timer coroutine")
+            startPulseTimer()
+        } else {
+            Log.d(TAG, "⏰ Pulse timer is already active - skipping restart to prevent timer reset")
+        }
         
         // Schedule AlarmManager as backup
         scheduleAlarm()
@@ -198,12 +288,11 @@ class PersistentPulseService : Service() {
             
             while (isActive) {
                 try {
-                    sendPulse()
                     delay(intervalMinutes * 60 * 1000L)
+                    sendPulse()
                 } catch (e: Exception) {
                     Log.e(TAG, "❌ Error in pulse timer: ${e.message}", e)
                     updateNotification("خطأ: ${e.message}")
-                    delay(60 * 1000L) // Wait 1 minute before retry
                 }
             }
         }
@@ -212,50 +301,340 @@ class PersistentPulseService : Service() {
     /**
      * Send a pulse - WRITES DIRECTLY TO SQLITE (works even when app is killed)
      */
+    private fun getAllowedBssidsFromDb(db: SQLiteDatabase): List<String> {
+        val allowedBssids = mutableListOf<String>()
+        val safeEmployeeId = employeeId ?: return allowedBssids
+        var cursor: android.database.Cursor? = null
+        try {
+            cursor = db.query(
+                "branch_cache",
+                arrayOf("wifi_bssids"),
+                "employee_id = ?",
+                arrayOf(safeEmployeeId),
+                null, null, null
+            )
+            if (cursor != null && cursor.moveToFirst()) {
+                val wifiBssidsJson = cursor.getString(cursor.getColumnIndexOrThrow("wifi_bssids"))
+                if (!wifiBssidsJson.isNullOrEmpty()) {
+                    Log.d(TAG, "📡 Found wifi_bssids JSON in database: $wifiBssidsJson")
+                    val cleaned = wifiBssidsJson
+                        .replace("[", "")
+                        .replace("]", "")
+                        .replace("\"", "")
+                        .replace("'", "")
+                    val bssids = cleaned.split(",")
+                    for (bssid in bssids) {
+                        val trimmed = bssid.trim().uppercase(Locale.US)
+                        if (trimmed.isNotEmpty()) {
+                            allowedBssids.add(trimmed)
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error loading wifi_bssids from SQLite: ${e.message}", e)
+        } finally {
+            cursor?.close()
+        }
+        Log.d(TAG, "📋 Allowed BSSIDs from DB: $allowedBssids")
+        return allowedBssids
+    }
+
+    data class SuperBranch(
+        val branchId: String,
+        val branchName: String,
+        val allowedBssids: List<String>,
+        val latitude: Double,
+        val longitude: Double,
+        val radius: Double
+    )
+
+    private fun getSuperEmployeeBranches(db: SQLiteDatabase): List<SuperBranch> {
+        val list = mutableListOf<SuperBranch>()
+        val safeEmployeeId = employeeId ?: return list
+        var cursor: android.database.Cursor? = null
+        try {
+            // Check if super_employee_branches table exists first
+            val tableExistsCursor = db.rawQuery(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='super_employee_branches'", 
+                null
+            )
+            val exists = tableExistsCursor.use { it.count > 0 }
+            if (!exists) {
+                return list
+            }
+
+            cursor = db.query(
+                "super_employee_branches",
+                arrayOf("branch_id", "branch_name", "wifi_bssids", "latitude", "longitude", "geofence_radius"),
+                "employee_id = ?",
+                arrayOf(safeEmployeeId),
+                null, null, null
+            )
+            while (cursor != null && cursor.moveToNext()) {
+                val bId = cursor.getString(cursor.getColumnIndexOrThrow("branch_id"))
+                val bName = cursor.getString(cursor.getColumnIndexOrThrow("branch_name")) ?: ""
+                val wifiBssidsJson = cursor.getString(cursor.getColumnIndexOrThrow("wifi_bssids"))
+                val lat = cursor.getDouble(cursor.getColumnIndexOrThrow("latitude"))
+                val lng = cursor.getDouble(cursor.getColumnIndexOrThrow("longitude"))
+                val rad = cursor.getDouble(cursor.getColumnIndexOrThrow("geofence_radius"))
+
+                val allowedBssids = mutableListOf<String>()
+                if (!wifiBssidsJson.isNullOrEmpty()) {
+                    val cleaned = wifiBssidsJson
+                        .replace("[", "")
+                        .replace("]", "")
+                        .replace("\"", "")
+                        .replace("'", "")
+                    val bssids = cleaned.split(",")
+                    for (bssid in bssids) {
+                        val trimmed = bssid.trim().uppercase(Locale.US)
+                        if (trimmed.isNotEmpty()) {
+                            allowedBssids.add(trimmed)
+                        }
+                    }
+                }
+
+                list.add(SuperBranch(bId, bName, allowedBssids, lat, lng, rad))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error reading super_employee_branches from SQLite: ${e.message}", e)
+        } finally {
+            cursor?.close()
+        }
+        Log.d(TAG, "⭐ Loaded ${list.size} super employee branches from SQLite")
+        return list
+    }
+
+    /**
+     * Send a pulse - WRITES DIRECTLY TO SQLITE (works even when app is killed)
+     */
     private suspend fun sendPulse() = withContext(Dispatchers.IO) {
+        // IF-BLOCK DISABLED BY POLICY: shift-end auto checkout is completely disabled.
+        /*
+        if (shiftEndTimeEpoch > 0 && System.currentTimeMillis() >= shiftEndTimeEpoch) {
+            Log.d(TAG, "🚨 Shift end time reached ($shiftEndTimeEpoch). Triggering auto-checkout.")
+            writeCheckoutToDatabase("SHIFT_END_AUTO_CHECKOUT")
+            
+            // Cancel alarms
+            PulseAlarmReceiver.cancelAlarm(applicationContext)
+            
+            // Clear service parameters from SharedPreferences
+            getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .clear()
+                .apply()
+                
+            // Clear tracking active flag in Flutter shared preferences
+            try {
+                getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
+                    .edit()
+                    .putBoolean(FLUTTER_PULSE_ACTIVE_KEY, false)
+                    .apply()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error clearing flutter pulse active key: ${e.message}")
+            }
+            
+            // Send Broadcast for Flutter UI
+            val broadcastIntent = Intent("com.example.heartbeat.AUTO_CHECKOUT_TRIGGERED").apply {
+                putExtra("reason", "SHIFT_END_AUTO_CHECKOUT")
+            }
+            sendBroadcast(broadcastIntent)
+            
+            withContext(Dispatchers.Main) {
+                stopSelf()
+            }
+            return@withContext
+        }
+        */
+
+        if (shouldSkipBecauseFlutterActive()) {
+            Log.d(TAG, "⏭️ Skipping native pulse - Flutter tracker is active")
+            return@withContext
+        }
+
         pulseCount++
         lastPulseTime = System.currentTimeMillis()
         
         val timestamp = getCurrentTime()
         Log.d(TAG, "💓 Sending pulse #$pulseCount at $timestamp")
         
+        // Directive 2: Acquire CPU Partial WakeLock to hold CPU awake during BSSID & SQLite writes
+        acquireTransientWakeLock(10000L)
+        
         try {
-            // � Get current location using FastGPS
             var currentLocation: Location? = null
             var distance = 0.0
             var isInsideGeofence = false
             
+            // Check if break is active in Flutter SharedPreferences
+            var isOnBreak = false
             try {
-                currentLocation = fastGPS.getCurrentLocation()
-                if (currentLocation != null && branchLatitude != 0.0 && branchLongitude != 0.0) {
-                    // Calculate distance to branch
-                    val branchLocation = Location("").apply {
-                        latitude = branchLatitude
-                        longitude = branchLongitude
+                val flutterPrefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+                isOnBreak = flutterPrefs.getBoolean("flutter.is_break_active", false)
+                Log.d(TAG, "☕ isOnBreak: $isOnBreak")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error checking break status: ${e.message}")
+            }
+
+            val dbPath = applicationContext.getDatabasePath("offline_attendance.db").absolutePath
+            val db = SQLiteDatabase.openOrCreateDatabase(dbPath, null)
+            val superBranches = getSuperEmployeeBranches(db)
+            
+            // Resolve effective branch variables
+            var effectiveBranchId = branchId
+            var effectiveBranchLat = branchLatitude
+            var effectiveBranchLng = branchLongitude
+            var effectiveBranchRadius = branchRadius
+
+            // Check WiFi validation
+            var currentBssid: String? = null
+            var wifiValidated = false
+            try {
+                currentBssid = fastWiFi.getCurrentBSSID()
+                if (!currentBssid.isNullOrEmpty()) {
+                    val normalizedCurrentBssid = currentBssid.uppercase(Locale.US)
+                    if (superBranches.isNotEmpty()) {
+                        for (branch in superBranches) {
+                            if (branch.allowedBssids.contains(normalizedCurrentBssid)) {
+                                wifiValidated = true
+                                effectiveBranchId = branch.branchId
+                                effectiveBranchLat = branch.latitude
+                                effectiveBranchLng = branch.longitude
+                                effectiveBranchRadius = branch.radius
+                                Log.d(TAG, "📶 Super WiFi Validated: Connected to branch WiFi ($currentBssid) for branch ${branch.branchName}")
+                                break
+                            }
+                        }
+                    } else {
+                        val allowedBssids = getAllowedBssidsFromDb(db)
+                        if (allowedBssids.contains(normalizedCurrentBssid)) {
+                            wifiValidated = true
+                            Log.d(TAG, "📶 WiFi Validated: Connected to branch WiFi ($currentBssid)")
+                        }
                     }
-                    distance = currentLocation.distanceTo(branchLocation).toDouble()
-                    isInsideGeofence = distance <= branchRadius
-                    
-                    Log.d(TAG, "📍 Location: (${currentLocation.latitude}, ${currentLocation.longitude})")
-                    Log.d(TAG, "📏 Distance from branch: ${distance.toInt()}m - ${if (isInsideGeofence) "✅ INSIDE" else "❌ OUTSIDE"}")
-                } else {
-                    Log.w(TAG, "⚠️ Could not get location or branch coordinates not set")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "❌ Error getting location: ${e.message}")
+                Log.e(TAG, "❌ Error checking WiFi validation in background: ${e.message}")
             }
+
+            if (isOnBreak) {
+                isInsideGeofence = true
+                distance = 0.0
+                Log.d(TAG, "☕ Break is active: overriding geofence to INSIDE")
+            } else if (wifiValidated) {
+                isInsideGeofence = true
+                distance = 0.0
+                Log.d(TAG, "📶 WiFi check passed: overriding geofence to INSIDE")
+            } else {
+                try {
+                    currentLocation = fastGPS.getCurrentLocation()
+                    if (currentLocation != null) {
+                        if (superBranches.isNotEmpty()) {
+                            var minDistance = Double.MAX_VALUE
+                            var closestBranch: SuperBranch? = null
+                            var isInsideAny = false
+                            
+                            for (branch in superBranches) {
+                                val branchLocation = Location("").apply {
+                                    latitude = branch.latitude
+                                    longitude = branch.longitude
+                                }
+                                val d = currentLocation.distanceTo(branchLocation).toDouble()
+                                if (d < minDistance) {
+                                    minDistance = d
+                                    closestBranch = branch
+                                }
+                                
+                                val accuracy = currentLocation.accuracy
+                                val isInside = if (accuracy > 150f) {
+                                    (d - accuracy) <= branch.radius
+                                } else {
+                                    d <= branch.radius
+                                }
+                                
+                                if (isInside) {
+                                    isInsideAny = true
+                                    isInsideGeofence = true
+                                    distance = d
+                                    effectiveBranchId = branch.branchId
+                                    effectiveBranchLat = branch.latitude
+                                    effectiveBranchLng = branch.longitude
+                                    effectiveBranchRadius = branch.radius
+                                    Log.d(TAG, "📍 Super GPS Validated: Inside branch ${branch.branchName} geofence")
+                                    break
+                                }
+                            }
+                            
+                            if (!isInsideAny) {
+                                isInsideGeofence = false
+                                distance = minDistance
+                                closestBranch?.let {
+                                    effectiveBranchId = it.branchId
+                                    effectiveBranchLat = it.latitude
+                                    effectiveBranchLng = it.longitude
+                                    effectiveBranchRadius = it.radius
+                                }
+                                Log.d(TAG, "📏 Super GPS: Outside all geofences, closest branch: ${closestBranch?.branchName} at ${minDistance.toInt()}m")
+                            }
+                        } else {
+                            if (branchLatitude != 0.0 && branchLongitude != 0.0) {
+                                val branchLocation = Location("").apply {
+                                    latitude = branchLatitude
+                                    longitude = branchLongitude
+                                }
+                                distance = currentLocation.distanceTo(branchLocation).toDouble()
+                                
+                                val accuracy = currentLocation.accuracy
+                                if (accuracy > 150f) {
+                                    isInsideGeofence = (distance - accuracy) <= branchRadius
+                                    Log.w(TAG, "⚠️ Weak GPS accuracy ($accuracy m > 150m) - applying overlap check: $isInsideGeofence")
+                                } else {
+                                    isInsideGeofence = distance <= branchRadius
+                                    Log.d(TAG, "📍 Location: (${currentLocation.latitude}, ${currentLocation.longitude}), Accuracy: $accuracy m")
+                                    Log.d(TAG, "📏 Distance from branch: ${distance.toInt()}m - ${if (isInsideGeofence) "✅ INSIDE" else "❌ OUTSIDE"}")
+                                }
+                            } else {
+                                isInsideGeofence = false
+                                distance = 0.0
+                                Log.w(TAG, "⚠️ GPS query returned null or coords missing. Defaulting to OUTSIDE.")
+                                sendLocationFailureNotification()
+                            }
+                        }
+                    } else {
+                        isInsideGeofence = false
+                        distance = 0.0
+                        Log.w(TAG, "⚠️ GPS query returned null. Defaulting to OUTSIDE.")
+                        sendLocationFailureNotification()
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ Error getting location: ${e.message}")
+                    isInsideGeofence = true
+                    distance = 0.0
+                    currentLocation = Location("gps").apply {
+                        latitude = effectiveBranchLat
+                        longitude = effectiveBranchLng
+                        accuracy = 0.0f
+                    }
+                }
+            }
+            db.close()
             
             // 🔥 DIRECT SQLITE WRITE (bypasses Flutter - works when app is dead)
             val pulseData = mapOf(
                 "employee_id" to employeeId,
                 "attendance_id" to attendanceId,
-                "branch_id" to branchId,
+                "branch_id" to effectiveBranchId,
                 "timestamp" to System.currentTimeMillis(),
                 "pulse_count" to pulseCount,
-                "latitude" to currentLocation?.latitude,
-                "longitude" to currentLocation?.longitude,
+                "latitude" to (if (wifiValidated || isOnBreak) null else currentLocation?.latitude),
+                "longitude" to (if (wifiValidated || isOnBreak) null else currentLocation?.longitude),
                 "distance" to distance,
-                "inside_geofence" to isInsideGeofence
+                "inside_geofence" to isInsideGeofence,
+                "wifi_bssid" to currentBssid,
+                "validated_by_wifi" to (if (wifiValidated) 1 else 0),
+                "validated_by_location" to (if (!wifiValidated && !isOnBreak && currentLocation != null) 1 else 0),
+                "validation_method" to (if (wifiValidated) "WIFI" else if (isOnBreak) "BREAK" else if (currentLocation != null) "LOCATION" else "UNKNOWN")
             )
             
             // Write directly to SQLite database
@@ -282,6 +661,31 @@ class PersistentPulseService : Service() {
             }
         }
     }
+
+    private fun shouldSkipBecauseFlutterActive(): Boolean {
+        return try {
+            val prefs = getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE)
+            val flutterActive = prefs.getBoolean(FLUTTER_PULSE_ACTIVE_KEY, false)
+            if (!flutterActive) {
+                return false
+            }
+
+            val lastFlutterPulse = prefs.getLong(FLUTTER_LAST_PULSE_TS_KEY, 0L)
+            if (lastFlutterPulse <= 0L) {
+                return false
+            }
+
+            val ageMs = System.currentTimeMillis() - lastFlutterPulse
+            if (ageMs <= FLUTTER_SKIP_WINDOW_MS) {
+                return true
+            }
+
+            ageMs < FLUTTER_STALE_LIMIT_MS
+        } catch (e: Exception) {
+            Log.w(TAG, "⚠️ Failed to read Flutter pulse flags: ${e.message}")
+            false
+        }
+    }
     
     /**
      * Write pulse directly to SQLite database
@@ -305,11 +709,10 @@ class PersistentPulseService : Service() {
             val distance = pulseData["distance"] as? Double ?: 0.0
             val insideGeofence = if (pulseData["inside_geofence"] as? Boolean == true) 1 else 0
             
-            val validationMethod = if (latitude != null && longitude != null) {
-                "LOCATION"
-            } else {
-                "UNKNOWN"
-            }
+            val wifiBssid = pulseData["wifi_bssid"] as? String
+            val validationMethod = pulseData["validation_method"] as? String ?: (if (latitude != null && longitude != null) "LOCATION" else "UNKNOWN")
+            val validatedByWifi = pulseData["validated_by_wifi"] as? Int ?: 0
+            val validatedByLocation = pulseData["validated_by_location"] as? Int ?: (if (latitude != null && longitude != null) 1 else 0)
 
             // Insert into pending_pulses table
             val sql = """
@@ -317,7 +720,7 @@ class PersistentPulseService : Service() {
                 (id, employee_id, attendance_id, timestamp, latitude, longitude, 
                  inside_geofence, distance_from_center, wifi_bssid, validation_method,
                  validated_by_wifi, validated_by_location, created_at, synced)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 0, ?, ?, 0)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
             """.trimIndent()
             
             db.execSQL(sql, arrayOf(
@@ -329,8 +732,10 @@ class PersistentPulseService : Service() {
                 longitude,
                 insideGeofence,
                 distance,
+                wifiBssid,
                 validationMethod,
-                if (latitude != null && longitude != null) 1 else 0, // validated_by_location
+                validatedByWifi,
+                validatedByLocation,
                 currentTime
             ))
             
@@ -339,6 +744,65 @@ class PersistentPulseService : Service() {
             Log.d(TAG, "💾 Pulse written directly to SQLite: $pulseId")
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to write to SQLite: ${e.message}", e)
+        }
+    }
+    
+    /**
+     * Write checkout record directly to SQLite database
+     */
+    private fun writeCheckoutToDatabase(reason: String) {
+        try {
+            val dbPath = applicationContext.getDatabasePath("offline_attendance.db").absolutePath
+            val db = SQLiteDatabase.openOrCreateDatabase(dbPath, null)
+            
+            val checkoutId = "${employeeId}_${System.currentTimeMillis()}"
+            val currentTime = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+                timeZone = java.util.TimeZone.getTimeZone("UTC")
+            }.format(Date())
+            
+            // Query total pulses for this attendance session to estimate work hours
+            var calculatedWorkHours = 0.0
+            var pulseCount = 0
+            var cursor: android.database.Cursor? = null
+            try {
+                cursor = db.rawQuery(
+                    "SELECT COUNT(*) FROM pending_pulses WHERE attendance_id = ? AND inside_geofence = 1",
+                    arrayOf(attendanceId)
+                )
+                if (cursor != null && cursor.moveToFirst()) {
+                    pulseCount = cursor.getInt(0)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Failed to query pulses for work hours: ${e.message}")
+            } finally {
+                cursor?.close()
+            }
+            // Each inside pulse represents 5 minutes (intervalMinutes)
+            calculatedWorkHours = (pulseCount * intervalMinutes) / 60.0
+
+            val sql = """
+                INSERT OR REPLACE INTO pending_checkouts 
+                (id, employee_id, attendance_id, timestamp, latitude, longitude, 
+                 notes, work_hours, created_at, synced)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            """.trimIndent()
+            
+            db.execSQL(sql, arrayOf(
+                checkoutId,
+                employeeId,
+                attendanceId,
+                currentTime,
+                null,
+                null,
+                reason,
+                calculatedWorkHours,
+                currentTime
+            ))
+            
+            db.close()
+            Log.d(TAG, "💾 Auto-checkout written directly to SQLite: $checkoutId, work hours: $calculatedWorkHours")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to write auto-checkout to SQLite: ${e.message}", e)
         }
     }
     
@@ -357,6 +821,7 @@ class PersistentPulseService : Service() {
                 putExtra(EXTRA_BRANCH_LAT, branchLatitude)
                 putExtra(EXTRA_BRANCH_LNG, branchLongitude)
                 putExtra(EXTRA_BRANCH_RADIUS, branchRadius)
+                putExtra(EXTRA_SHIFT_END_TIME, shiftEndTimeEpoch)
             }
             
             val pendingIntent = PendingIntent.getBroadcast(
@@ -420,6 +885,7 @@ class PersistentPulseService : Service() {
         branchLatitude = intent.getDoubleExtra(EXTRA_BRANCH_LAT, 0.0)
         branchLongitude = intent.getDoubleExtra(EXTRA_BRANCH_LNG, 0.0)
         branchRadius = intent.getDoubleExtra(EXTRA_BRANCH_RADIUS, 100.0)
+        shiftEndTimeEpoch = intent.getLongExtra(EXTRA_SHIFT_END_TIME, 0L)
         return true
     }
 
@@ -436,6 +902,7 @@ class PersistentPulseService : Service() {
             .putLong(EXTRA_BRANCH_LAT, java.lang.Double.doubleToRawLongBits(branchLatitude))
             .putLong(EXTRA_BRANCH_LNG, java.lang.Double.doubleToRawLongBits(branchLongitude))
             .putLong(EXTRA_BRANCH_RADIUS, java.lang.Double.doubleToRawLongBits(branchRadius))
+            .putLong(EXTRA_SHIFT_END_TIME, shiftEndTimeEpoch)
             .apply()
     }
 
@@ -461,6 +928,7 @@ class PersistentPulseService : Service() {
         branchRadius = java.lang.Double.longBitsToDouble(
             prefs.getLong(EXTRA_BRANCH_RADIUS, java.lang.Double.doubleToRawLongBits(100.0))
         )
+        shiftEndTimeEpoch = prefs.getLong(EXTRA_SHIFT_END_TIME, 0L)
         return true
     }
     
@@ -480,6 +948,23 @@ class PersistentPulseService : Service() {
             Log.d(TAG, "🔒 WakeLock acquired")
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to acquire WakeLock: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Directive 2: Acquire transient CPU Partial WakeLock during BSSID & SQLite writes
+     */
+    private fun acquireTransientWakeLock(timeoutMs: Long = 10000L) {
+        try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            val transientLock = powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "$TAG::TransientPulseLock"
+            )
+            transientLock.acquire(timeoutMs)
+            Log.d(TAG, "🔒 Transient CPU Partial WakeLock acquired for ${timeoutMs}ms")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to acquire transient WakeLock: ${e.message}")
         }
     }
     
@@ -517,15 +1002,16 @@ class PersistentPulseService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("تتبع الحضور نشط 🟢")
-            .setContentText(text)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("the work is active")
+            .setContentText("the work is active")
             .setSmallIcon(android.R.drawable.ic_menu_compass)
             .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setAutoCancel(false)
-            .build()
+            
+        return builder.build()
     }
     
     /**
@@ -533,7 +1019,7 @@ class PersistentPulseService : Service() {
      */
     private fun updateNotification(text: String) {
         try {
-            val notification = buildNotification(text)
+            val notification = buildNotification("the work is active")
             val manager = getSystemService(NotificationManager::class.java)
             manager?.notify(NOTIFICATION_ID, notification)
         } catch (e: Exception) {
@@ -541,6 +1027,53 @@ class PersistentPulseService : Service() {
         }
     }
     
+    /**
+     * Send a high-priority warning notification when location detection fails
+     */
+    private fun sendLocationFailureNotification() {
+        try {
+            val notificationIntent = Intent(this, MainActivity::class.java)
+            val pendingIntent = PendingIntent.getActivity(
+                this,
+                0,
+                notificationIntent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            
+            val warningChannelId = "warning_channel"
+            
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = NotificationChannel(
+                    warningChannelId,
+                    "تنبيهات الموقع",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "تنبيهات عند فشل تحديد الموقع"
+                    enableLights(true)
+                    enableVibration(true)
+                }
+                val manager = getSystemService(NotificationManager::class.java)
+                manager?.createNotificationChannel(channel)
+            }
+            
+            val notification = NotificationCompat.Builder(this, warningChannelId)
+                .setContentTitle("⚠️ فشل تحديد الموقع!")
+                .setContentText("لم نتمكن من تحديد موقعك بالخلفية. افتح التطبيق فوراً لضمان احتساب وقت العمل.")
+                .setSmallIcon(android.R.drawable.stat_sys_warning)
+                .setContentIntent(pendingIntent)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setDefaults(NotificationCompat.DEFAULT_ALL)
+                .setAutoCancel(true)
+                .build()
+                
+            val manager = getSystemService(NotificationManager::class.java)
+            manager?.notify(1002, notification)
+            Log.d(TAG, "📢 High-priority location warning notification sent")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to send warning notification: ${e.message}", e)
+        }
+    }
+
     /**
      * Get current time as formatted string
      */
@@ -552,6 +1085,7 @@ class PersistentPulseService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "💀 Service destroyed")
+        serviceStartTime = 0L
         
         // 🎵 Stop and release MediaPlayer
         try {

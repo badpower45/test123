@@ -69,6 +69,7 @@ class _ManagerDashboardSimpleState extends State<ManagerDashboardSimple>
   @override
   void initState() {
     super.initState();
+    print('🔍 [ManagerDashboardSimple] initState: managerId=${widget.managerId}, branchName=${widget.branchName}, initialTabIndex=${widget.initialTabIndex}');
     final initialIndex = widget.initialTabIndex.clamp(0, 3);
     _tabController = TabController(
       length: 4,
@@ -99,12 +100,15 @@ class _ManagerDashboardSimpleState extends State<ManagerDashboardSimple>
 
   Future<void> _ensureBranchId() async {
     try {
+      print('🔍 [ManagerDashboardSimple] _ensureBranchId: branchName=${widget.branchName}');
       final b = await SupabaseBranchService.getBranchByName(widget.branchName);
+      print('🔍 [ManagerDashboardSimple] _ensureBranchId: found branch=$b');
       setState(() {
         _branchId = b?['id'] as String?;
       });
-    } catch (_) {
-      // ignore
+      print('🔍 [ManagerDashboardSimple] _ensureBranchId: _branchId=$_branchId');
+    } catch (e) {
+      print('❌ [ManagerDashboardSimple] _ensureBranchId error: $e');
     }
   }
 
@@ -148,6 +152,7 @@ class _ManagerDashboardSimpleState extends State<ManagerDashboardSimple>
   }
 
   Future<void> _loadRequests() async {
+    print('🔍 [ManagerDashboardSimple] _loadRequests: branchName=${widget.branchName}, managerId=${widget.managerId}, filter=$_requestsFilter');
     setState(() {
       _loadingRequests = true;
       _requestsError = null;
@@ -156,18 +161,22 @@ class _ManagerDashboardSimpleState extends State<ManagerDashboardSimple>
       final results = await Future.wait<List<Map<String, dynamic>>>([
         SupabaseRequestsService.getAllLeaveRequestsWithEmployees(
           status: _requestsFilter == 'all' ? null : _requestsFilter,
+          branchName: widget.branchName,
           managerId: widget.managerId,
         ),
         SupabaseRequestsService.getAllSalaryAdvanceRequestsWithEmployees(
           status: _requestsFilter == 'all' ? null : _requestsFilter,
+          branchName: widget.branchName,
           managerId: widget.managerId,
         ),
         SupabaseRequestsService.getAllAttendanceRequestsWithEmployees(
           status: _requestsFilter == 'all' ? null : _requestsFilter,
+          branchName: widget.branchName,
           managerId: widget.managerId,
         ),
         SupabaseRequestsService.getAllBreaksWithEmployees(
           status: _requestsFilter == 'all' ? null : _requestsFilter,
+          branchName: widget.branchName,
           managerId: widget.managerId,
         ),
       ]);
@@ -179,7 +188,9 @@ class _ManagerDashboardSimpleState extends State<ManagerDashboardSimple>
         _breakRequests = results[3];
         _loadingRequests = false;
       });
+      print('🔍 [ManagerDashboardSimple] Requests loaded: leaves=${results[0].length}, advances=${results[1].length}, attendance=${results[2].length}, breaks=${results[3].length}');
     } catch (e) {
+      print('❌ [ManagerDashboardSimple] Error loading requests: $e');
       setState(() {
         _requestsError = e.toString();
         _loadingRequests = false;
@@ -730,18 +741,10 @@ class _ManagerDashboardSimpleState extends State<ManagerDashboardSimple>
 
   Widget _buildQuickStatsRow() {
     final totalPending =
-        _leaveRequests
-            .where((r) => (r['status'] ?? '').toString() == 'pending')
-            .length +
-        _advanceRequests
-            .where((r) => (r['status'] ?? '').toString() == 'pending')
-            .length +
-        _attendanceRequests
-            .where((r) => (r['status'] ?? '').toString() == 'pending')
-            .length +
-        _breakRequests
-            .where((r) => (r['status'] ?? '').toString() == 'pending')
-            .length;
+        _leaveRequests.where((r) => _isPendingStatus(r['status'])).length +
+        _advanceRequests.where((r) => _isPendingStatus(r['status'])).length +
+        _attendanceRequests.where((r) => _isPendingStatus(r['status'])).length +
+        _breakRequests.where((r) => _isPendingStatus(r['status'])).length;
 
     return Card(
       elevation: 0,
@@ -804,9 +807,7 @@ class _ManagerDashboardSimpleState extends State<ManagerDashboardSimple>
     final employeeName = (employee is Map)
         ? (employee['full_name'] ?? '')
         : (req['employeeName'] ?? '');
-    final status = (req['status'] ?? 'pending')
-        .toString()
-        .toLowerCase(); // Normalize to lowercase
+    final status = _normalizedStatus(req['status']);
     final branch = (employee is Map) ? (employee['branch'] ?? '') : '';
     final role = (employee is Map) ? (employee['role'] ?? '') : '';
 
@@ -962,6 +963,12 @@ class _ManagerDashboardSimpleState extends State<ManagerDashboardSimple>
       label: Text(label, style: const TextStyle(color: Colors.white)),
       backgroundColor: bg,
     );
+  }
+
+  bool _isPendingStatus(Object? value) => _normalizedStatus(value) == 'pending';
+
+  String _normalizedStatus(Object? value) {
+    return (value ?? 'pending').toString().trim().toLowerCase();
   }
 
   Widget _buildAbsencesPage() {

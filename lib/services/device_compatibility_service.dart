@@ -42,6 +42,9 @@ class DeviceCompatibilityService {
     }
   }
 
+  /// Check if device is OnePlus
+  bool get isOnePlus => _manufacturer?.contains('oneplus') ?? false;
+
   /// Check if device is Realme (ColorOS)
   bool get isRealme => _manufacturer?.contains('realme') ?? false;
 
@@ -67,7 +70,10 @@ class DeviceCompatibilityService {
 
   /// Check if device has restrictive battery management
   bool get hasRestrictiveBatteryManagement => 
-    hasColorOS || isXiaomi || isHuawei;
+    hasColorOS || isXiaomi || isHuawei || isOnePlus ||
+    (_manufacturer?.contains('infinix') ?? false) ||
+    (_manufacturer?.contains('tecno') ?? false) ||
+    (_manufacturer?.contains('meizu') ?? false);
 
   /// Get Android SDK version
   int get sdkVersion => _sdkVersion ?? 33;
@@ -77,9 +83,10 @@ class DeviceCompatibilityService {
 
   /// Get device-specific instructions for enabling permissions
   String getPermissionInstructions() {
-    if (hasColorOS) {
+    if (hasColorOS || isOnePlus) {
+      final name = isOnePlus ? 'OnePlus (OxygenOS)' : 'Realme/Oppo (ColorOS)';
       return '''
-لتشغيل التطبيق بشكل صحيح على جهاز Realme/Oppo:
+لتشغيل التطبيق بشكل صحيح على جهاز $name:
 
 1️⃣ صلاحية الموقع:
    الإعدادات ← التطبيقات ← AT ← الأذونات ← الموقع ← "مسموح دائماً"
@@ -145,7 +152,9 @@ class DeviceCompatibilityService {
             ? 'Xiaomi (MIUI)'
             : isHuawei 
                 ? 'Huawei (EMUI)'
-                : 'Android';
+                : isOnePlus
+                    ? 'OnePlus (OxygenOS)'
+                    : 'Android';
 
     await showDialog(
       context: context,

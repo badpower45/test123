@@ -82,7 +82,7 @@ class FastWiFiScanner(private val context: Context) {
     /**
      * Get BSSID from current WiFi connection
      */
-    private fun getCurrentBSSID(): String? {
+    fun getCurrentBSSID(): String? {
         try {
             val wifiInfo = wifiManager.connectionInfo
             val bssid = wifiInfo?.bssid

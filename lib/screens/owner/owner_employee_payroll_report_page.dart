@@ -43,6 +43,8 @@ class _OwnerEmployeePayrollReportPageState
   double _totalDeductions = 0;
   double _totalPenalties = 0;
   int _absenceDays = 0;
+  int _leaveDays = 0;
+  double _hourlyRate = 0;
 
   @override
   void initState() {
@@ -102,6 +104,11 @@ class _OwnerEmployeePayrollReportPageState
         persistedLeaveAllowance = 100.0;
         print('ℹ️ Using default leave allowance: 100.0');
       }
+
+      _hourlyRate = (empResponse?['hourly_rate'] is num)
+          ? (empResponse?['hourly_rate'] as num).toDouble()
+          : double.tryParse(empResponse?['hourly_rate']?.toString() ?? '') ??
+                0.0;
     } catch (e) {
       // Column doesn't exist in database - use default
       print('⚠️ Could not fetch persisted leave allowance: $e');
@@ -113,6 +120,10 @@ class _OwnerEmployeePayrollReportPageState
     final currentMonth = now.month;
     final currentYear = now.year;
 
+    print(
+      '🔄 Attempting to calculate leave allowance for ${widget.employeeId} (${widget.employeeName})',
+    );
+
     double calculatedLeaveAllowance = await _payrollService
         .calculateLeaveAllowance(
           employeeId: widget.employeeId,
@@ -121,12 +132,19 @@ class _OwnerEmployeePayrollReportPageState
           year: currentYear,
         );
 
+    print(
+      '📊 Calculation result: $calculatedLeaveAllowance (persisted: $persistedLeaveAllowance)',
+    );
+
     // If edge function returned 0, use persisted value as fallback
+    // (0 might mean failed calculation, not "no allowance")
     if (calculatedLeaveAllowance == 0.0) {
       print(
-        '⚠️ Edge function returned 0, using persisted allowance: $persistedLeaveAllowance',
+        '⚠️ Edge function returned 0, falling back to persisted: $persistedLeaveAllowance',
       );
       calculatedLeaveAllowance = persistedLeaveAllowance;
+    } else {
+      print('✅ Using calculated leave allowance: $calculatedLeaveAllowance');
     }
 
     final legacyData = await _payrollService
@@ -180,6 +198,7 @@ class _OwnerEmployeePayrollReportPageState
     }
 
     int absences = 0;
+    int leaveDays = 0;
 
     List<dynamic> tableRows =
         (legacyData['tableRows'] as List?) ??
@@ -198,6 +217,7 @@ class _OwnerEmployeePayrollReportPageState
       bool isLeave = row['hasLeave'] == true;
       bool isAbsent = (wHours == 0 && !isLeave);
       if (isAbsent) absences++;
+      if (isLeave) leaveDays++;
 
       mappedData.add({
         'attendance_date': row['date'],
@@ -234,6 +254,7 @@ class _OwnerEmployeePayrollReportPageState
       _totalDeductions = deductions;
       _totalPenalties = penalties;
       _absenceDays = absences;
+      _leaveDays = leaveDays;
       _isLoading = false;
     });
   }
@@ -338,14 +359,14 @@ class _OwnerEmployeePayrollReportPageState
                                   Icons.access_time,
                                 ),
                                 _buildSummaryItem(
-                                  'أيام غياب',
-                                  '$_absenceDays',
-                                  Icons.event_busy,
+                                  'سعر الساعة',
+                                  '${_hourlyRate.toStringAsFixed(2)} ج.م',
+                                  Icons.payments,
                                 ),
                                 _buildSummaryItem(
-                                  'المرتب الأساسي',
-                                  '${_totalSalary.toStringAsFixed(0)} ج.م',
-                                  Icons.attach_money,
+                                  'أيام الإجازات',
+                                  '$_leaveDays',
+                                  Icons.event_available,
                                 ),
                               ],
                             ),
@@ -355,9 +376,9 @@ class _OwnerEmployeePayrollReportPageState
                               mainAxisAlignment: MainAxisAlignment.spaceAround,
                               children: [
                                 _buildSummaryItem(
-                                  'بدل الإجازة',
-                                  '${_totalLeaveAllowance.toStringAsFixed(2)} ج.م',
-                                  Icons.card_giftcard,
+                                  'المرتب الأساسي',
+                                  '${_totalSalary.toStringAsFixed(0)} ج.م',
+                                  Icons.attach_money,
                                 ),
                                 _buildSummaryItem(
                                   'المكافآت',
@@ -365,9 +386,30 @@ class _OwnerEmployeePayrollReportPageState
                                   Icons.emoji_events,
                                 ),
                                 _buildSummaryItem(
+                                  'السلف',
+                                  '${_totalAdvances.toStringAsFixed(2)} ج.م',
+                                  Icons.money_off,
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceAround,
+                              children: [
+                                _buildSummaryItem(
+                                  'بدل الإجازة',
+                                  '${_totalLeaveAllowance.toStringAsFixed(2)} ج.م',
+                                  Icons.card_giftcard,
+                                ),
+                                _buildSummaryItem(
                                   'الخصومات',
                                   '${_totalDeductions.toStringAsFixed(2)} ج.م',
                                   Icons.remove_circle,
+                                ),
+                                _buildSummaryItem(
+                                  'أيام الغياب',
+                                  '$_absenceDays',
+                                  Icons.event_busy,
                                 ),
                               ],
                             ),
@@ -1019,7 +1061,6 @@ class _OwnerEmployeePayrollReportPageState
         },
         build: (context) {
           return [
-            // Employee Info Box
             pw.Container(
               padding: const pw.EdgeInsets.all(15),
               decoration: pw.BoxDecoration(
@@ -1082,9 +1123,8 @@ class _OwnerEmployeePayrollReportPageState
             ),
             pw.SizedBox(height: 25),
 
-            // Financial Summary
             pw.Text(
-              'الخلاصة المالية',
+              'ملخص المرتب',
               style: pw.TextStyle(
                 fontSize: 18,
                 fontWeight: pw.FontWeight.bold,
@@ -1107,6 +1147,8 @@ class _OwnerEmployeePayrollReportPageState
               data: [
                 ['البيان', 'القيمة'],
                 ['إجمالي الساعات', '${_totalHours.toStringAsFixed(1)} ساعة'],
+                ['سعر الساعة', '${_hourlyRate.toStringAsFixed(2)} ج.م'],
+                ['أيام الإجازات', '$_leaveDays يوم'],
                 ['أيام الغياب', '$_absenceDays يوم'],
                 ['المرتب الأساسي', '${_totalSalary.toStringAsFixed(2)} ج.م'],
                 [
@@ -1123,93 +1165,6 @@ class _OwnerEmployeePayrollReportPageState
                 ['صافي المرتب النهائي', '${netSalary.toStringAsFixed(2)} ج.م'],
               ],
             ),
-            pw.SizedBox(height: 30),
-
-            // Attendance Data Table
-            if (_attendanceData.isNotEmpty) ...[
-              pw.Text(
-                'سجل الحضور والانصراف (${_attendanceData.length} يوم)',
-                style: pw.TextStyle(
-                  fontSize: 18,
-                  fontWeight: pw.FontWeight.bold,
-                  color: PdfColors.black,
-                ),
-              ),
-              pw.SizedBox(height: 10),
-              pw.TableHelper.fromTextArray(
-                context: context,
-                border: pw.TableBorder.all(color: PdfColors.grey300, width: 1),
-                headerDecoration: const pw.BoxDecoration(
-                  color: PdfColors.grey200,
-                ),
-                headerStyle: pw.TextStyle(
-                  fontWeight: pw.FontWeight.bold,
-                  fontSize: 10,
-                ),
-                cellStyle: const pw.TextStyle(fontSize: 10),
-                cellAlignment: pw.Alignment.center,
-                cellPadding: const pw.EdgeInsets.all(5),
-                data: [
-                  [
-                    'التاريخ',
-                    'الحضور',
-                    'الانصراف',
-                    'ساعات',
-                    'المرتب',
-                    'سلف',
-                    'بدلات',
-                    'مكافأة',
-                    'خصم',
-                  ],
-                  ..._attendanceData.map((day) {
-                    DateTime date;
-                    try {
-                      date = DateTime.parse(
-                        day['attendance_date']?.toString() ?? '',
-                      );
-                    } catch (e) {
-                      date = DateTime.now();
-                    }
-                    final checkIn = _formatAttendanceTime(day['check_in_time']);
-                    final checkOut = _formatAttendanceTime(
-                      day['check_out_time'],
-                    );
-                    final hours = (day['total_hours'] as num?)?.toDouble() ?? 0;
-                    final dailySalary =
-                        (day['daily_salary'] as num?)?.toDouble() ?? 0;
-                    final advance =
-                        (day['advance_amount'] as num?)?.toDouble() ?? 0;
-                    final leave =
-                        (day['leave_allowance'] as num?)?.toDouble() ?? 0;
-                    final bonus =
-                        (day['bonus_amount'] as num?)?.toDouble() ?? 0;
-                    final deduction =
-                        (day['deduction_amount'] as num?)?.toDouble() ?? 0;
-                    final isAbsent = day['is_absent'] == true;
-                    final isOnLeave = day['is_on_leave'] == true;
-
-                    String status = checkIn;
-                    if (isAbsent)
-                      status = 'غياب';
-                    else if (isOnLeave)
-                      status = 'إجازة';
-
-                    return [
-                      DateFormat('dd/MM/yyyy').format(date),
-                      status,
-                      checkOut,
-                      hours > 0 ? hours.toStringAsFixed(1) : '-',
-                      dailySalary > 0 ? dailySalary.toStringAsFixed(0) : '-',
-                      advance > 0 ? advance.toStringAsFixed(0) : '-',
-                      leave > 0 ? leave.toStringAsFixed(0) : '-',
-                      bonus > 0 ? bonus.toStringAsFixed(0) : '-',
-                      deduction > 0 ? deduction.toStringAsFixed(0) : '-',
-                    ];
-                  }),
-                ],
-              ),
-              pw.SizedBox(height: 40),
-            ],
 
             // Signatures
             pw.Row(

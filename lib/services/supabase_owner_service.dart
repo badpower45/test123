@@ -914,6 +914,7 @@ class SupabaseOwnerService {
     String? shiftStartTime,
     String? shiftEndTime,
     String? shiftType,
+    bool? isSuperEmployee,
   }) async {
     try {
       final updates = <String, dynamic>{};
@@ -928,6 +929,7 @@ class SupabaseOwnerService {
       if (shiftStartTime != null) updates['shift_start_time'] = shiftStartTime;
       if (shiftEndTime != null) updates['shift_end_time'] = shiftEndTime;
       if (shiftType != null) updates['shift_type'] = shiftType;
+      if (isSuperEmployee != null) updates['is_super_employee'] = isSuperEmployee;
       updates['updated_at'] = DateTime.now().toUtc().toIso8601String();
 
       final response = await _supabase
@@ -1000,6 +1002,7 @@ class SupabaseOwnerService {
     String? shiftEndTime,
     String? shiftType,
     String role = 'staff',
+    bool isSuperEmployee = false,
   }) async {
     try {
       // Check if employee ID already exists
@@ -1028,6 +1031,7 @@ class SupabaseOwnerService {
             'shift_type': shiftType,
             'role': role,
             'is_active': true,
+            'is_super_employee': isSuperEmployee,
           })
           .select()
           .single();
@@ -1096,6 +1100,72 @@ class SupabaseOwnerService {
     } catch (e) {
       print('Get payroll summary error: $e');
       rethrow;
+    }
+  }
+
+  /// Get all attendance rules
+  static Future<List<Map<String, dynamic>>> getAttendanceRules() async {
+    try {
+      final response = await _supabase
+          .from('attendance_rules')
+          .select('*, branches(name)');
+      return List<Map<String, dynamic>>.from(response as List);
+    } catch (e) {
+      print('Get attendance rules error: $e');
+      return [];
+    }
+  }
+
+  /// Save or update an attendance rule
+  static Future<void> saveAttendanceRule({
+    String? ruleId,
+    required String? branchId,
+    required int gracePeriodMinutes,
+    required double deductionMultiplier,
+    required String deductionType,
+    required double fixedDeductionAmount,
+    required List<dynamic> tieredRules,
+  }) async {
+    try {
+      final data = {
+        'branch_id': branchId,
+        'grace_period_minutes': gracePeriodMinutes,
+        'deduction_multiplier': deductionMultiplier,
+        'deduction_type': deductionType,
+        'fixed_deduction_amount': fixedDeductionAmount,
+        'tiered_rules': tieredRules,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      };
+
+      if (ruleId != null) {
+        await _supabase
+            .from('attendance_rules')
+            .update(data)
+            .eq('id', ruleId);
+      } else {
+        var query = _supabase.from('attendance_rules').select('id');
+        if (branchId == null) {
+          query = query.isFilter('branch_id', null);
+        } else {
+          query = query.eq('branch_id', branchId);
+        }
+        
+        final checkResult = await query.maybeSingle();
+        if (checkResult != null) {
+          final existingId = checkResult['id'] as String;
+          await _supabase
+              .from('attendance_rules')
+              .update(data)
+              .eq('id', existingId);
+        } else {
+          await _supabase
+              .from('attendance_rules')
+              .insert(data);
+        }
+      }
+    } catch (e) {
+      print('Save attendance rule error: $e');
+      throw Exception('فشل حفظ قاعدة الحضور: $e');
     }
   }
 }

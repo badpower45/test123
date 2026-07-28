@@ -1,10 +1,16 @@
 import 'dart:math' as math;
-
+import 'dart:ui' as ui;
 import 'package:intl/intl.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+import 'package:excel/excel.dart' as excel_pkg;
 import '../../theme/app_colors.dart';
 import '../../services/supabase_function_client.dart';
+import '../../services/payroll_service.dart';
+import '../../utils/file_saver.dart' as file_saver;
 import 'owner_employee_payroll_report_page.dart';
 
 class OwnerSalariesScreen extends StatefulWidget {
@@ -22,9 +28,25 @@ class _OwnerSalariesScreenState extends State<OwnerSalariesScreen> {
   String? _payingEmployeeId;
   String? _error;
   List<Map<String, dynamic>> _rows = [];
+  String _selectedBranch = 'الكل';
+  List<String> _dbBranches = [];
 
   late DateTime _periodStart;
   late DateTime _periodEnd;
+
+  List<String> get _branchesList {
+    return ['الكل', ..._dbBranches];
+  }
+
+  List<Map<String, dynamic>> get _filteredRows {
+    if (_selectedBranch == 'الكل') {
+      return _rows;
+    }
+    return _rows.where((row) {
+      final branch = (row['branch'] ?? '').toString().trim();
+      return branch == _selectedBranch;
+    }).toList();
+  }
 
   double _totalDue = 0;
   double _totalPaid = 0;
@@ -41,75 +63,67 @@ class _OwnerSalariesScreenState extends State<OwnerSalariesScreen> {
   Future<void> _load() async {
     setState(() => _loading = true);
     final client = Supabase.instance.client;
-    final periodStart = _date(_periodStart);
-    final periodEnd = _date(_periodEnd);
+    final periodStartStr = _date(_periodStart);
+    final periodEndStr = _date(_periodEnd);
 
     try {
-      final results = await Future.wait([
-        client
-            .from('employees')
-            .select('id, full_name, role, branch')
-            .eq('is_active', true)
-            .neq('role', 'owner')
-            .order('full_name'),
-        client
-            .from('salary_payments')
-            .select('id, employee_id, net_amount, paid_at')
-            .eq('period_start', periodStart)
-            .eq('period_end', periodEnd)
-            .eq('status', 'paid'),
-      ]);
+      final payrollDetails = await PayrollService.getAllEmployeesAttendanceReport(
+        startDate: _periodStart,
+        endDate: _periodEnd,
+      );
 
-      final employeesResp = results[0] as List;
-      final paymentsResp = results[1] as List;
+      final paymentsResp = await client
+          .from('salary_payments')
+          .select('id, employee_id, net_amount, paid_at')
+          .eq('period_start', periodStartStr)
+          .eq('period_end', periodEndStr)
+          .eq('status', 'paid');
+
+      final branchesQuery = await client
+          .from('branches')
+          .select('name')
+          .order('name');
+          
+      final dbBranches = (branchesQuery as List)
+          .map((b) => (b['name'] ?? '').toString().trim())
+          .where((name) => name.isNotEmpty)
+          .toList();
 
       final paymentByEmployee = <String, Map<String, dynamic>>{};
-      for (final payment in paymentsResp) {
+      for (final payment in paymentsResp as List) {
         final employeeId = payment['employee_id']?.toString();
         if (employeeId == null || employeeId.isEmpty) continue;
         paymentByEmployee[employeeId] = Map<String, dynamic>.from(payment);
       }
 
-      final employees = employeesResp.cast<Map<String, dynamic>>();
-
-      final employeeIds = employees
-          .map((e) => e['id']?.toString() ?? '')
-          .where((id) => id.isNotEmpty)
-          .toList(growable: false);
-
-      final employeeIdsNeedingNet = employeeIds
-          .where((id) {
-            final payment = paymentByEmployee[id];
-            final paidAmount =
-                (payment?['net_amount'] as num?)?.toDouble() ?? 0.0;
-            return payment == null || paidAmount <= 0;
-          })
-          .toList(growable: false);
-
-      final periodNetByEmployee = await _loadPeriodNetsForEmployees(
-        employeeIdsNeedingNet,
-        periodStart,
-        periodEnd,
-        client,
-      );
-
       final List<Map<String, dynamic>> list = [];
 
-      for (final emp in employees) {
-        final employeeId = emp['id']?.toString() ?? '';
-        if (employeeId.isEmpty) continue;
-
+      for (final detail in payrollDetails) {
+        final employeeId = detail['employee_id'] as String;
+        final summary = detail['summary'] as Map<String, dynamic>;
+        
         final payment = paymentByEmployee[employeeId];
+        final isPaid = payment != null;
         final paidAmount = (payment?['net_amount'] as num?)?.toDouble() ?? 0.0;
-        final calculatedNet = periodNetByEmployee[employeeId] ?? paidAmount;
+        
+        final calculatedNet = summary['net_salary'] as double? ?? 0.0;
+        final totalHours = summary['total_hours'] as double? ?? 0.0;
+        final hourlyRate = summary['hourly_rate'] as double? ?? 0.0;
+        final baseSalary = summary['base_salary'] as double? ?? 0.0;
+        final totalAdvances = summary['total_advances'] as double? ?? 0.0;
+        final totalDeductions = summary['total_deductions'] as double? ?? 0.0;
 
         list.add({
           'id': employeeId,
-          'full_name': emp['full_name'] ?? 'غير معروف',
-          'role': emp['role'] ?? '—',
-          'branch': emp['branch'] ?? '—',
-          'current_salary': calculatedNet,
-          'is_paid': payment != null,
+          'full_name': detail['employee_name'] ?? 'غير معروف',
+          'branch': detail['branch'] ?? '—',
+          'hourly_rate': hourlyRate,
+          'total_hours': totalHours,
+          'base_salary': baseSalary,
+          'total_advances': totalAdvances,
+          'total_deductions': totalDeductions,
+          'current_salary': isPaid ? paidAmount : calculatedNet,
+          'is_paid': isPaid,
           'paid_amount': paidAmount,
           'paid_at': payment?['paid_at'],
           'payment_id': payment?['id'],
@@ -134,6 +148,7 @@ class _OwnerSalariesScreenState extends State<OwnerSalariesScreen> {
 
       if (!mounted) return;
       setState(() {
+        _dbBranches = dbBranches;
         _rows = list;
         _totalDue = totalDue;
         _totalPaid = totalPaid;
@@ -434,7 +449,7 @@ class _OwnerSalariesScreenState extends State<OwnerSalariesScreen> {
   }
 
   Future<void> _payAll() async {
-    final unpaidRows = _rows
+    final unpaidRows = _filteredRows
         .where(
           (row) =>
               row['is_paid'] != true && _asDouble(row['current_salary']) > 0,
@@ -543,6 +558,16 @@ class _OwnerSalariesScreenState extends State<OwnerSalariesScreen> {
         foregroundColor: Colors.white,
         actions: [
           IconButton(
+            onPressed: _loading || _payingAll || _filteredRows.isEmpty ? null : _printBranchPayroll,
+            icon: const Icon(Icons.print),
+            tooltip: 'طباعة التقرير المالي',
+          ),
+          IconButton(
+            onPressed: _loading || _payingAll || _filteredRows.isEmpty ? null : _exportToExcel,
+            icon: const Icon(Icons.description),
+            tooltip: 'تصدير إلى Excel',
+          ),
+          IconButton(
             onPressed: _loading || _payingAll ? null : _pickDateRange,
             icon: const Icon(Icons.date_range),
             tooltip: 'اختيار فترة',
@@ -591,6 +616,42 @@ class _OwnerSalariesScreenState extends State<OwnerSalariesScreen> {
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: _selectedBranch,
+                isExpanded: true,
+                items: _branchesList.map((branch) {
+                  return DropdownMenuItem<String>(
+                    value: branch,
+                    child: Text(
+                      branch,
+                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+                      textDirection: ui.TextDirection.rtl,
+                    ),
+                  );
+                }).toList(),
+                onChanged: (value) {
+                  setState(() {
+                    _selectedBranch = value ?? 'الكل';
+                  });
+                },
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
           _buildSummaryCard(),
           const SizedBox(height: 12),
           Card(
@@ -605,49 +666,73 @@ class _OwnerSalariesScreenState extends State<OwnerSalariesScreen> {
                   DataColumn(
                     label: Text(
                       'الموظف',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15,
-                      ),
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                     ),
                   ),
                   DataColumn(
                     label: Text(
-                      'مرتب الفترة',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15,
-                      ),
+                      'الفرع',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                    ),
+                  ),
+                  DataColumn(
+                    label: Text(
+                      'الساعات',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                    ),
+                  ),
+                  DataColumn(
+                    label: Text(
+                      'سعر الساعة',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                    ),
+                  ),
+                  DataColumn(
+                    label: Text(
+                      'المستحق',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                    ),
+                  ),
+                  DataColumn(
+                    label: Text(
+                      'الخصومات',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                    ),
+                  ),
+                  DataColumn(
+                    label: Text(
+                      'صافي الراتب',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                     ),
                   ),
                   DataColumn(
                     label: Text(
                       'الحالة',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15,
-                      ),
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                     ),
                   ),
                   DataColumn(
                     label: Text(
                       'الإجراء',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15,
-                      ),
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                     ),
                   ),
                 ],
-                rows: _rows.map((row) {
+                rows: _filteredRows.map((row) {
                   final isPaid = row['is_paid'] == true;
                   final employeeId = row['id']?.toString();
                   final isProcessing =
                       _payingEmployeeId != null &&
                       _payingEmployeeId == employeeId;
 
+                  final double baseSalary = _asDouble(row['base_salary']);
+                  final double totalAdvances = _asDouble(row['total_advances']);
+                  final double totalDeductions = _asDouble(row['total_deductions']);
+                  final double totalDeductionsCombined = totalAdvances + totalDeductions;
+
                   return DataRow(
                     cells: [
+                      // 1. Employee
                       DataCell(
                         InkWell(
                           onTap: () => _openPayrollReport(
@@ -668,16 +753,56 @@ class _OwnerSalariesScreenState extends State<OwnerSalariesScreen> {
                           ),
                         ),
                       ),
+                      // 2. Branch
                       DataCell(
                         Text(
-                          _money(row['current_salary']),
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: Colors.green,
+                          row['branch']?.toString() ?? '—',
+                          style: const TextStyle(fontSize: 14),
+                        ),
+                      ),
+                      // 3. Hours
+                      DataCell(
+                        Text(
+                          _asDouble(row['total_hours']).toStringAsFixed(1),
+                          style: const TextStyle(fontSize: 14),
+                        ),
+                      ),
+                      // 4. Rate/Hour
+                      DataCell(
+                        Text(
+                          _money(_asDouble(row['hourly_rate'])),
+                          style: const TextStyle(fontSize: 14),
+                        ),
+                      ),
+                      // 5. Earned/Base
+                      DataCell(
+                        Text(
+                          _money(baseSalary),
+                          style: const TextStyle(fontSize: 14),
+                        ),
+                      ),
+                      // 6. Deductions
+                      DataCell(
+                        Text(
+                          totalDeductionsCombined > 0 
+                              ? '-${_money(totalDeductionsCombined)}' 
+                              : '0.00 ج.م',
+                          style: TextStyle(
+                            fontSize: 14, 
+                            color: totalDeductionsCombined > 0 ? Colors.red : Colors.black
                           ),
                         ),
                       ),
+                      // 7. Net Salary
+                      DataCell(
+                        Text(
+                          _money(_asDouble(row['current_salary'])),
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                        ),
+                      ),
+                      // 8. Status
                       DataCell(_statusChip(isPaid)),
+                      // 9. Action
                       DataCell(
                         isPaid
                             ? const Text(
@@ -719,7 +844,21 @@ class _OwnerSalariesScreenState extends State<OwnerSalariesScreen> {
   }
 
   Widget _buildSummaryCard() {
-    final unpaidCount = _rows.where((row) => row['is_paid'] != true).length;
+    final filtered = _filteredRows;
+    final unpaidCount = filtered.where((row) => row['is_paid'] != true).length;
+    
+    double filteredTotalDue = 0.0;
+    double filteredTotalPaid = 0.0;
+    
+    for (final row in filtered) {
+      final isPaid = row['is_paid'] == true;
+      final amount = _asDouble(row['current_salary']);
+      if (isPaid) {
+        filteredTotalPaid += amount;
+      } else {
+        filteredTotalDue += amount;
+      }
+    }
 
     return Card(
       elevation: 2,
@@ -733,9 +872,9 @@ class _OwnerSalariesScreenState extends State<OwnerSalariesScreen> {
               style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
             ),
             const SizedBox(height: 10),
-            Text('إجمالي المستحق غير المدفوع: ${_money(_totalDue)}'),
+            Text('إجمالي المستحق غير المدفوع: ${_money(filteredTotalDue)}'),
             const SizedBox(height: 4),
-            Text('إجمالي المدفوع: ${_money(_totalPaid)}'),
+            Text('إجمالي المدفوع: ${_money(filteredTotalPaid)}'),
             const SizedBox(height: 4),
             Text('عدد الموظفين غير المدفوعين: $unpaidCount'),
             const SizedBox(height: 12),
@@ -876,5 +1015,162 @@ class _OwnerSalariesScreenState extends State<OwnerSalariesScreen> {
   String _money(dynamic value) {
     final numVal = _asDouble(value);
     return '${numVal.toStringAsFixed(2)} ج.م';
+  }
+
+  Future<void> _printBranchPayroll() async {
+    try {
+      final font = await PdfGoogleFonts.cairoRegular();
+      final boldFont = await PdfGoogleFonts.cairoBold();
+      final pdf = pw.Document();
+      final employees = _filteredRows;
+
+      final totalHours = employees.fold<double>(0, (sum, emp) {
+        return sum + _asDouble(emp['total_hours']);
+      });
+      final totalNet = employees.fold<double>(0, (sum, emp) {
+        return sum + _asDouble(emp['current_salary']);
+      });
+
+      pdf.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4.landscape,
+          theme: pw.ThemeData.withFont(base: font, bold: boldFont),
+          textDirection: pw.TextDirection.rtl,
+          margin: const pw.EdgeInsets.all(24),
+          build: (context) => [
+            pw.Text(
+              'بيانات الرواتب للفرع',
+              style: pw.TextStyle(fontSize: 22, fontWeight: pw.FontWeight.bold),
+            ),
+            pw.SizedBox(height: 8),
+            pw.Text(
+              'الفترة: ${DateFormat('dd/MM/yyyy').format(_periodStart)} - ${DateFormat('dd/MM/yyyy').format(_periodEnd)}',
+              style: const pw.TextStyle(fontSize: 12),
+            ),
+            if (_selectedBranch != 'الكل')
+              pw.Text(
+                'الفرع المفلتر: $_selectedBranch',
+                style: const pw.TextStyle(fontSize: 12),
+              ),
+            pw.SizedBox(height: 16),
+            pw.TableHelper.fromTextArray(
+              context: context,
+              border: pw.TableBorder.all(color: PdfColors.grey300),
+              headerDecoration: const pw.BoxDecoration(color: PdfColors.orange100),
+              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
+              cellStyle: const pw.TextStyle(fontSize: 9),
+              cellAlignment: pw.Alignment.center,
+              data: [
+                ['الاسم', 'الفرع', 'الساعات', 'سعر الساعة', 'المستحق', 'الخصومات', 'صافي الراتب', 'الحالة'],
+                ...employees.map((employee) {
+                  final name = (employee['full_name'] ?? '').toString();
+                  final branchName = (employee['branch'] ?? '').toString();
+                  final hours = _asDouble(employee['total_hours']).toStringAsFixed(1);
+                  final hourlyRate = _money(_asDouble(employee['hourly_rate']));
+                  final baseSalary = _money(_asDouble(employee['base_salary']));
+                  final totalDeds = _money(_asDouble(employee['total_advances']) + _asDouble(employee['total_deductions']));
+                  final net = _money(_asDouble(employee['current_salary']));
+                  final status = employee['is_paid'] == true ? 'مدفوع' : 'غير مدفوع';
+                  return [name, branchName, hours, hourlyRate, baseSalary, totalDeds, net, status];
+                }),
+              ],
+            ),
+            pw.SizedBox(height: 16),
+            pw.Text('إجمالي الساعات: ${totalHours.toStringAsFixed(1)}', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 11)),
+            pw.Text('إجمالي صافي المرتبات: ${_money(totalNet)}', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 11)),
+          ],
+        ),
+      );
+
+      await Printing.layoutPdf(
+        onLayout: (format) async => pdf.save(),
+        name: 'قائمة_رواتب_الفرع_${DateFormat('yyyyMMdd').format(DateTime.now())}.pdf',
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('خطأ في الطباعة: $e'), backgroundColor: AppColors.error),
+      );
+    }
+  }
+
+  Future<void> _exportToExcel() async {
+    try {
+      setState(() => _loading = true);
+      
+      final excelObj = excel_pkg.Excel.createExcel();
+      excelObj.rename('Sheet1', 'التقرير المالي للرواتب');
+      final sheet = excelObj['التقرير المالي للرواتب'];
+      
+      sheet.isRTL = true;
+      
+      // Add title block
+      sheet.appendRow([
+        excel_pkg.TextCellValue('التقرير الشامل للرواتب (recap attendee)'),
+      ]);
+      sheet.appendRow([
+        excel_pkg.TextCellValue('الفترة: ${DateFormat('dd/MM/yyyy').format(_periodStart)} - ${DateFormat('dd/MM/yyyy').format(_periodEnd)}'),
+      ]);
+      if (_selectedBranch != 'الكل') {
+        sheet.appendRow([
+          excel_pkg.TextCellValue('الفرع المفلتر: $_selectedBranch'),
+        ]);
+      }
+      sheet.appendRow([]); // Empty row
+      
+      // Add table headers
+      sheet.appendRow([
+        excel_pkg.TextCellValue('كود الموظف'),
+        excel_pkg.TextCellValue('الاسم الكامل'),
+        excel_pkg.TextCellValue('الفرع'),
+        excel_pkg.TextCellValue('سعر الساعة'),
+        excel_pkg.TextCellValue('إجمالي الساعات'),
+        excel_pkg.TextCellValue('الراتب الأساسي/المستحق'),
+        excel_pkg.TextCellValue('إجمالي السلف والخصومات'),
+        excel_pkg.TextCellValue('صافي الراتب'),
+        excel_pkg.TextCellValue('حالة الدفع'),
+      ]);
+      
+      // Add data
+      final employees = _filteredRows;
+      for (final emp in employees) {
+        final empId = emp['id']?.toString() ?? '';
+        final name = emp['full_name']?.toString() ?? '';
+        final branchName = emp['branch']?.toString() ?? '';
+        final hourlyRate = _asDouble(emp['hourly_rate']);
+        final totalHours = _asDouble(emp['total_hours']);
+        final baseSalary = _asDouble(emp['base_salary']);
+        final totalDeds = _asDouble(emp['total_advances']) + _asDouble(emp['total_deductions']);
+        final netSalary = _asDouble(emp['current_salary']);
+        final status = emp['is_paid'] == true ? 'مدفوع' : 'غير مدفوع';
+        
+        sheet.appendRow([
+          excel_pkg.TextCellValue(empId),
+          excel_pkg.TextCellValue(name),
+          excel_pkg.TextCellValue(branchName),
+          excel_pkg.DoubleCellValue(hourlyRate),
+          excel_pkg.DoubleCellValue(totalHours),
+          excel_pkg.DoubleCellValue(baseSalary),
+          excel_pkg.DoubleCellValue(totalDeds),
+          excel_pkg.DoubleCellValue(netSalary),
+          excel_pkg.TextCellValue(status),
+        ]);
+      }
+      
+      // Save
+      final bytes = excelObj.encode();
+      if (bytes != null) {
+        final fileName = 'تقرير_الرواتب_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.xlsx';
+        await file_saver.saveFile(bytes, fileName);
+      }
+      setState(() => _loading = false);
+    } catch (e) {
+      setState(() => _loading = false);
+      print('Excel export error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('فشل تصدير Excel: $e'), backgroundColor: AppColors.error),
+        );
+      }
+    }
   }
 }

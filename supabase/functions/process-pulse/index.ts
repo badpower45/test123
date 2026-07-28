@@ -46,43 +46,23 @@ serve(async (req) => {
                 const allViolations = lastPulses.every(p => p.inside_geofence === false)
 
                 if (allViolations) {
-                    console.log(`3rd Violation detected for attendance: ${newPulse.attendance_id}. Triggering Auto-Checkout.`)
+                    console.log(`3rd Violation detected for attendance: ${newPulse.attendance_id}. Auto-checkout disabled by policy.`)
 
-                    // 1. Auto-Checkout
-                    const { data: updatedData, error: updateError } = await supabaseClient
-                        .from('attendance')
-                        .update({
-                            check_out_time: new Date().toISOString(),
-                            status: 'completed',
-                            notes: 'تم تسجيل الانصراف تلقائياً بسبب الخروج من النطاق الجغرافي (3 مخالفات)'
+                    // Policy: no automatic check-out from edge functions.
+                    // Keep a warning notification only.
+                    const { error: notifError } = await supabaseClient
+                        .from('notifications')
+                        .insert({
+                            employee_id: newPulse.employee_id,
+                            title: 'تحذير خروج من النطاق',
+                            body: 'تم رصد 3 مخالفات متتالية خارج النطاق. لا يوجد انصراف تلقائي من النظام.',
+                            type: 'geofence_warning',
+                            is_read: false,
+                            created_at: new Date().toISOString()
                         })
-                        .eq('id', newPulse.attendance_id)
-                        .is('check_out_time', null) // Only if not already checked out
-                        .select()
 
-                    if (updateError) {
-                        console.error('Error updating attendance:', updateError)
-                    } else if (updatedData && updatedData.length > 0) {
-                        // ✅ Update successful (row was modified)
-                        console.log('✅ Auto-checkout successful. Sending notification.')
-
-                        // 2. Send Notification (Insert into notifications table)
-                        const { error: notifError } = await supabaseClient
-                            .from('notifications')
-                            .insert({
-                                employee_id: newPulse.employee_id,
-                                title: 'تم تسجيل الانصراف تلقائياً',
-                                body: 'تم تسجيل انصرافك بسبب تكرار الخروج من موقع العمل.',
-                                type: 'auto_checkout',
-                                is_read: false,
-                                created_at: new Date().toISOString()
-                            })
-
-                        if (notifError) {
-                            console.error('Error sending notification:', notifError)
-                        }
-                    } else {
-                        console.log('⚠️ Auto-checkout skipped: Attendance already completed or not found.')
+                    if (notifError) {
+                        console.error('Error sending warning notification:', notifError)
                     }
                 }
             }

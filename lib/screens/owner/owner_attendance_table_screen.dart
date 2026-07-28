@@ -20,6 +20,7 @@ class _OwnerAttendanceTableScreenState
   List<Map<String, dynamic>> _branches = [];
   bool _loading = true;
   String? _error;
+  bool _useAmPmFormat = true;
 
   // Filters
   DateTime? _startDate;
@@ -132,6 +133,12 @@ class _OwnerAttendanceTableScreenState
     return '$start - $end';
   }
 
+  void _toggleTimeFormat() {
+    setState(() {
+      _useAmPmFormat = !_useAmPmFormat;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -140,6 +147,17 @@ class _OwnerAttendanceTableScreenState
         backgroundColor: AppColors.primaryOrange,
         foregroundColor: Colors.white,
         actions: [
+          TextButton.icon(
+            onPressed: _toggleTimeFormat,
+            icon: Icon(
+              _useAmPmFormat ? Icons.schedule : Icons.access_time,
+              color: Colors.white,
+            ),
+            label: Text(
+              _useAmPmFormat ? 'AM/PM' : '24h',
+              style: const TextStyle(color: Colors.white),
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.filter_alt_off),
             tooltip: 'مسح الفلاتر',
@@ -448,7 +466,10 @@ class _OwnerAttendanceTableScreenState
   }
 
   String _formatTime(String? value) {
-    return OwnerTimeUtils.formatTimeShort(value);
+    return OwnerTimeUtils.formatTimeShort(
+      value,
+      useAmPm: _useAmPmFormat,
+    );
   }
 
   String _formatDate(String? value) {

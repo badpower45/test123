@@ -5,15 +5,13 @@ import '../../../services/requests_api_service.dart';
 import '../../../theme/app_colors.dart';
 
 class ManagerLeaveRequestsTab extends StatefulWidget {
-  const ManagerLeaveRequestsTab({
-    super.key,
-    required this.managerId,
-  });
+  const ManagerLeaveRequestsTab({super.key, required this.managerId});
 
   final String managerId;
 
   @override
-  State<ManagerLeaveRequestsTab> createState() => _ManagerLeaveRequestsTabState();
+  State<ManagerLeaveRequestsTab> createState() =>
+      _ManagerLeaveRequestsTabState();
 }
 
 class _ManagerLeaveRequestsTabState extends State<ManagerLeaveRequestsTab> {
@@ -35,7 +33,9 @@ class _ManagerLeaveRequestsTabState extends State<ManagerLeaveRequestsTab> {
     });
 
     try {
-      final requests = await RequestsApiService.fetchLeaveRequests(widget.managerId);
+      final requests = await RequestsApiService.fetchLeaveRequests(
+        widget.managerId,
+      );
       if (!mounted) {
         return;
       }
@@ -168,7 +168,8 @@ class _ManagerLeaveRequestsTabState extends State<ManagerLeaveRequestsTab> {
           else if (_requests.isEmpty)
             const _LeaveRequestsEmptyState()
           else ...[
-            for (final request in _requests) _LeaveRequestCard(request: request),
+            for (final request in _requests)
+              _LeaveRequestCard(request: request),
           ],
           const SizedBox(height: 24),
         ],
@@ -213,7 +214,10 @@ class _LeaveRequestCard extends StatelessWidget {
                 ),
                 Text(
                   _formatDate(request.createdAt),
-                  style: const TextStyle(color: AppColors.textTertiary, fontSize: 12),
+                  style: const TextStyle(
+                    color: AppColors.textTertiary,
+                    fontSize: 12,
+                  ),
                 ),
               ],
             ),
@@ -221,7 +225,10 @@ class _LeaveRequestCard extends StatelessWidget {
             _LeaveInfoRow(label: 'من', value: _formatDate(request.startDate)),
             _LeaveInfoRow(label: 'إلى', value: _formatDate(request.endDate)),
             if (request.daysCount > 0)
-              _LeaveInfoRow(label: 'عدد الأيام', value: request.daysCount.toString()),
+              _LeaveInfoRow(
+                label: 'عدد الأيام',
+                value: request.daysCount.toString(),
+              ),
             if (request.allowanceAmount > 0)
               _LeaveInfoRow(
                 label: 'بدل الإجازة',
@@ -235,7 +242,8 @@ class _LeaveRequestCard extends StatelessWidget {
                   style: const TextStyle(color: AppColors.textSecondary),
                 ),
               ),
-            if (request.rejectionReason != null && request.rejectionReason!.isNotEmpty)
+            if (request.rejectionReason != null &&
+                request.rejectionReason!.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 12),
                 child: Text(
@@ -256,7 +264,7 @@ class _LeaveRequestCard extends StatelessWidget {
     if (request.isRejected) {
       return AppColors.error;
     }
-  return AppColors.statusPending;
+    return AppColors.statusPending;
   }
 
   String _statusText(LeaveRequest request) {
@@ -269,7 +277,8 @@ class _LeaveRequestCard extends StatelessWidget {
     return 'قيد المراجعة';
   }
 
-  String _formatDate(DateTime date) => '${date.year}-${_twoDigits(date.month)}-${_twoDigits(date.day)}';
+  String _formatDate(DateTime date) =>
+      '${date.year}-${_twoDigits(date.month)}-${_twoDigits(date.day)}';
 
   String _twoDigits(int value) => value.toString().padLeft(2, '0');
 }
@@ -289,11 +298,18 @@ class _LeaveInfoRow extends StatelessWidget {
         children: [
           Text(
             label,
-            style: const TextStyle(color: AppColors.textSecondary, fontSize: 14),
+            style: const TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 14,
+            ),
           ),
           Text(
             value,
-            style: const TextStyle(color: AppColors.textPrimary, fontSize: 14, fontWeight: FontWeight.w600),
+            style: const TextStyle(
+              color: AppColors.textPrimary,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ],
       ),
@@ -318,7 +334,11 @@ class _LeaveRequestsEmptyState extends StatelessWidget {
           SizedBox(height: 12),
           Text(
             'لا توجد طلبات بعد',
-            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16, color: AppColors.textSecondary),
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: 16,
+              color: AppColors.textSecondary,
+            ),
           ),
           SizedBox(height: 8),
           Text(
@@ -358,7 +378,9 @@ class _LeaveRequestsErrorState extends StatelessWidget {
           const SizedBox(height: 16),
           ElevatedButton(
             onPressed: onRetry,
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryOrange),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryOrange,
+            ),
             child: const Text('إعادة المحاولة'),
           ),
         ],
@@ -398,7 +420,9 @@ class _LeaveRequestSheetState extends State<_LeaveRequestSheet> {
       lastDate: now.add(const Duration(days: 365)),
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
-          colorScheme: const ColorScheme.light(primary: AppColors.primaryOrange),
+          colorScheme: const ColorScheme.light(
+            primary: AppColors.primaryOrange,
+          ),
         ),
         child: child!,
       ),
@@ -422,7 +446,9 @@ class _LeaveRequestSheetState extends State<_LeaveRequestSheet> {
       lastDate: base.add(const Duration(days: 365)),
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
-          colorScheme: const ColorScheme.light(primary: AppColors.primaryOrange),
+          colorScheme: const ColorScheme.light(
+            primary: AppColors.primaryOrange,
+          ),
         ),
         child: child!,
       ),
@@ -461,6 +487,9 @@ class _LeaveRequestSheetState extends State<_LeaveRequestSheet> {
         employeeId: widget.managerId,
         startDate: _startDate!,
         endDate: _endDate!,
+        leaveType: _selectedType == LeaveType.emergency
+            ? 'emergency'
+            : 'normal',
         reason: reason.isEmpty ? null : reason,
       );
       if (!mounted) {
@@ -511,7 +540,10 @@ class _LeaveRequestSheetState extends State<_LeaveRequestSheet> {
             const SizedBox(height: 16),
             const Text(
               'نوع الإجازة',
-              style: TextStyle(color: AppColors.textSecondary, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                color: AppColors.textSecondary,
+                fontWeight: FontWeight.w600,
+              ),
             ),
             const SizedBox(height: 12),
             Row(
@@ -523,7 +555,8 @@ class _LeaveRequestSheetState extends State<_LeaveRequestSheet> {
                     title: 'إجازة عادية',
                     subtitle: 'يُفضل طلبها قبل 48 ساعة',
                     icon: Icons.event_available,
-                    onTap: () => setState(() => _selectedType = LeaveType.normal),
+                    onTap: () =>
+                        setState(() => _selectedType = LeaveType.normal),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -534,7 +567,8 @@ class _LeaveRequestSheetState extends State<_LeaveRequestSheet> {
                     title: 'إجازة طارئة',
                     subtitle: 'يمكن طلبها قبل 24 ساعة',
                     icon: Icons.warning,
-                    onTap: () => setState(() => _selectedType = LeaveType.emergency),
+                    onTap: () =>
+                        setState(() => _selectedType = LeaveType.emergency),
                   ),
                 ),
               ],
@@ -544,31 +578,33 @@ class _LeaveRequestSheetState extends State<_LeaveRequestSheet> {
               onPressed: _isSubmitting ? null : _selectStartDate,
               icon: const Icon(Icons.calendar_today),
               label: Text(
-                _startDate == null
-                    ? 'تاريخ البداية'
-                    : _formatDate(_startDate!),
+                _startDate == null ? 'تاريخ البداية' : _formatDate(_startDate!),
               ),
               style: OutlinedButton.styleFrom(
                 foregroundColor: AppColors.primaryOrange,
                 side: const BorderSide(color: AppColors.primaryOrange),
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
             ),
             const SizedBox(height: 12),
             OutlinedButton.icon(
-              onPressed: (_startDate == null || _isSubmitting) ? null : _selectEndDate,
+              onPressed: (_startDate == null || _isSubmitting)
+                  ? null
+                  : _selectEndDate,
               icon: const Icon(Icons.calendar_month),
               label: Text(
-                _endDate == null
-                    ? 'تاريخ النهاية'
-                    : _formatDate(_endDate!),
+                _endDate == null ? 'تاريخ النهاية' : _formatDate(_endDate!),
               ),
               style: OutlinedButton.styleFrom(
                 foregroundColor: AppColors.primaryOrange,
                 side: const BorderSide(color: AppColors.primaryOrange),
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
             ),
             const SizedBox(height: 20),
@@ -577,12 +613,18 @@ class _LeaveRequestSheetState extends State<_LeaveRequestSheet> {
               maxLines: 3,
               decoration: InputDecoration(
                 labelText: _selectedType == LeaveType.emergency
-                    ? 'السبب (إلزامي)' : 'السبب (اختياري)',
+                    ? 'السبب (إلزامي)'
+                    : 'السبب (اختياري)',
                 hintText: 'اكتب سبب طلب الإجازة... ',
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: AppColors.primaryOrange, width: 2),
+                  borderSide: const BorderSide(
+                    color: AppColors.primaryOrange,
+                    width: 2,
+                  ),
                 ),
               ),
             ),
@@ -592,7 +634,9 @@ class _LeaveRequestSheetState extends State<_LeaveRequestSheet> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primaryOrange,
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
               child: _isSubmitting
                   ? const SizedBox(
@@ -602,7 +646,10 @@ class _LeaveRequestSheetState extends State<_LeaveRequestSheet> {
                     )
                   : const Text(
                       'إرسال الطلب',
-                      style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 16,
+                      ),
                     ),
             ),
           ],
@@ -639,9 +686,13 @@ class _LeaveTypeCard extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: isSelected ? AppColors.primaryOrange.withOpacity(0.08) : Colors.white,
+          color: isSelected
+              ? AppColors.primaryOrange.withOpacity(0.08)
+              : Colors.white,
           border: Border.all(
-            color: isSelected ? AppColors.primaryOrange : AppColors.surfaceVariant,
+            color: isSelected
+                ? AppColors.primaryOrange
+                : AppColors.surfaceVariant,
             width: 2,
           ),
           borderRadius: BorderRadius.circular(12),
@@ -649,22 +700,32 @@ class _LeaveTypeCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            Icon(icon,
-                color: isSelected ? AppColors.primaryOrange : AppColors.textTertiary, size: 32),
+            Icon(
+              icon,
+              color: isSelected
+                  ? AppColors.primaryOrange
+                  : AppColors.textTertiary,
+              size: 32,
+            ),
             const SizedBox(height: 8),
             Text(
               title,
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontWeight: FontWeight.bold,
-                color: isSelected ? AppColors.primaryOrange : AppColors.textPrimary,
+                color: isSelected
+                    ? AppColors.primaryOrange
+                    : AppColors.textPrimary,
               ),
             ),
             const SizedBox(height: 4),
             Text(
               subtitle,
               textAlign: TextAlign.center,
-              style: const TextStyle(color: AppColors.textTertiary, fontSize: 12),
+              style: const TextStyle(
+                color: AppColors.textTertiary,
+                fontSize: 12,
+              ),
             ),
           ],
         ),

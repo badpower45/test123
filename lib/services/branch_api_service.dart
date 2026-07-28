@@ -1,9 +1,12 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:flutter/foundation.dart';
 import '../config/supabase_config.dart';
 import '../constants/api_endpoints.dart';
 
 class BranchApiService {
+  // Notifier to signal branch list changes. Widgets can listen and refresh.
+  static final ValueNotifier<int> branchesVersion = ValueNotifier<int>(0);
   static bool get _useLegacyApi => apiBaseUrl.trim().isNotEmpty;
 
   static bool _isUsableBssid(String value) {
@@ -160,6 +163,8 @@ class BranchApiService {
             .select()
             .single();
 
+        // Notify listeners that branches changed
+        branchesVersion.value++;
         return {'success': true, 'branch': inserted};
       } catch (error) {
         throw Exception('Failed to create branch: $error');
@@ -183,6 +188,8 @@ class BranchApiService {
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
+        // Notify listeners for legacy API as well
+        branchesVersion.value++;
         return data;
       } else {
         final error = json.decode(response.body);
@@ -218,6 +225,8 @@ class BranchApiService {
             })
             .eq('id', employeeId);
 
+        // Manager assignment may change branch-related state; notify listeners
+        branchesVersion.value++;
         return {
           'success': true,
           'branch_id': branchId,
@@ -237,6 +246,7 @@ class BranchApiService {
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
+        branchesVersion.value++;
         return data;
       } else {
         final error = json.decode(response.body);
@@ -327,6 +337,8 @@ class BranchApiService {
             .select()
             .single();
 
+        // Branch updated -> notify
+        branchesVersion.value++;
         return {'success': true, 'branch': updated};
       } catch (error) {
         throw Exception('Failed to update branch: $error');
@@ -353,6 +365,8 @@ class BranchApiService {
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
+        // Branch updated via legacy API -> notify
+        branchesVersion.value++;
         return data;
       } else {
         final error = json.decode(response.body);
@@ -369,6 +383,8 @@ class BranchApiService {
     if (!_useLegacyApi) {
       try {
         await SupabaseConfig.client.from('branches').delete().eq('id', branchId);
+        // Branch deleted -> notify
+        branchesVersion.value++;
         return {'success': true};
       } catch (error) {
         throw Exception('Failed to delete branch: $error');
@@ -387,6 +403,8 @@ class BranchApiService {
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
+        // Branch deleted via legacy API -> notify
+        branchesVersion.value++;
         return data;
       } else if (response.statusCode == 404) {
         throw Exception('الفرع غير موجود');

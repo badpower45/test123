@@ -22,6 +22,7 @@ class _EmployeeAttendanceTableScreenState extends State<EmployeeAttendanceTableS
   List<dynamic> _tableRows = [];
   Map<String, dynamic>? _summary;
   Map<String, dynamic>? _employeeInfo;
+  bool _useAmPmFormat = true;
   
   DateTime? _startDate;
   DateTime? _endDate;
@@ -47,6 +48,12 @@ class _EmployeeAttendanceTableScreenState extends State<EmployeeAttendanceTableS
       _startDate = DateTime(now.year, now.month - 1, 16);
       _endDate = DateTime(now.year, now.month, 15);
     }
+  }
+
+  void _toggleTimeFormat() {
+    setState(() {
+      _useAmPmFormat = !_useAmPmFormat;
+    });
   }
 
   Future<void> _loadData() async {
@@ -116,6 +123,18 @@ class _EmployeeAttendanceTableScreenState extends State<EmployeeAttendanceTableS
         title: Text('جدول ${widget.employeeName}'),
         backgroundColor: const Color(0xFF1976D2),
         actions: [
+          TextButton.icon(
+            onPressed: _toggleTimeFormat,
+            icon: Icon(
+              _useAmPmFormat ? Icons.schedule : Icons.access_time,
+              color: Colors.white,
+              size: 18,
+            ),
+            label: Text(
+              _useAmPmFormat ? 'AM/PM' : '24h',
+              style: const TextStyle(color: Colors.white),
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.date_range),
             onPressed: _selectDateRange,
@@ -261,8 +280,14 @@ class _EmployeeAttendanceTableScreenState extends State<EmployeeAttendanceTableS
         DataColumn(label: Text('الخصومات', style: TextStyle(fontWeight: FontWeight.bold))),
       ],
       rows: _tableRows.map((row) {
-        final checkInFormatted = OwnerTimeUtils.formatTimeShort(row['checkIn']?.toString());
-        final checkOutFormatted = OwnerTimeUtils.formatTimeShort(row['checkOut']?.toString());
+        final checkInFormatted = OwnerTimeUtils.formatTimeShort(
+          row['checkIn']?.toString(),
+          useAmPm: _useAmPmFormat,
+        );
+        final checkOutFormatted = OwnerTimeUtils.formatTimeShort(
+          row['checkOut']?.toString(),
+          useAmPm: _useAmPmFormat,
+        );
 
         return DataRow(
           cells: [

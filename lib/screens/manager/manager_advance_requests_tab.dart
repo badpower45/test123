@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../models/advance_request.dart';
 import '../../services/manager_api_service.dart';
-import '../../services/supabase_attendance_service.dart';
 import '../../services/supabase_requests_service.dart';
 import '../../theme/app_colors.dart';
 
@@ -35,29 +34,10 @@ class _ManagerAdvanceRequestsTabState extends State<ManagerAdvanceRequestsTab> {
     });
 
     try {
-      // Get manager's branch name first
-      final employeeStatus = await SupabaseAttendanceService.getEmployeeStatus(widget.managerId);
-      final employeeData = employeeStatus['employee'];
-
-      String? branchName;
-      if (employeeData is Map<String, dynamic>) {
-        branchName = employeeData['branch'] as String?;
-        if (branchName == null || branchName.isEmpty) {
-          final branchInfo = employeeData['branches'];
-          if (branchInfo is Map<String, dynamic>) {
-            branchName = branchInfo['name'] as String?;
-          }
-        }
-      }
-
-      if (branchName == null || branchName.toString().isEmpty) {
-        throw Exception('المدير غير مرتبط بفرع');
-      }
-
-      // ✅ Use Supabase directly instead of broken edge function
+      // ✅ Use Supabase directly with managerId to get assigned requests
       final rawList = await SupabaseRequestsService.getAllSalaryAdvanceRequestsWithEmployees(
         status: 'pending',
-        branchName: branchName,
+        managerId: widget.managerId, // Filter by assigned_manager_id instead of branchName
       );
 
       setState(() {

@@ -7,6 +7,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:battery_plus/battery_plus.dart';
 import 'app_logger.dart';
+import '../utils/time_utils.dart';
 
 /// 🔥 Aggressive Keep-Alive Service
 /// 
@@ -197,15 +198,10 @@ class AggressiveKeepAliveService {
   Future<void> _checkPulseHealth() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final lastPulseTime = prefs.getString('last_pulse_time');
+      final lastPulseTimeStr = prefs.getString('last_pulse_time');
       
-      if (lastPulseTime != null) {
-        DateTime? lastPulse;
-        try {
-          lastPulse = DateTime.parse(lastPulseTime);
-        } catch (e) {
-          lastPulse = null;
-        }
+      if (lastPulseTimeStr != null) {
+        final DateTime? lastPulse = TimeUtils.parseTimestamp(lastPulseTimeStr);
         if (lastPulse != null) {
           final diff = DateTime.now().difference(lastPulse);
           

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- طريقة التصدير: App Store -->
+	<key>method</key>
+	<string>app-store</string>
+
+	<!-- الوجهة: export (حفظ IPA محلياً ثم رفع يدوياً) -->
+	<key>destination</key>
+	<string>export</string>
+
+	<!-- التوقيع يدوي باستخدام Provisioning Profile -->
+	<key>signingStyle</key>
+	<string>manual</string>
+
+	<!-- ربط الـ Bundle ID بالـ Provisioning Profile -->
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>com.oldies.attendance.full</key>
+		<string>add values</string>
+	</dict>
+
+	<!-- Team ID الخاص بالحساب -->
+	<key>teamID</key>
+	<string>8VZ7G94DWM</string>
+
+	<!-- تقليص رموز Swift لتصغير حجم الـ IPA -->
+	<key>stripSwiftSymbols</key>
+	<true/>
+
+	<!-- رفع الـ Symbols لـ Crash Reports في Xcode Organizer -->
+	<key>uploadSymbols</key>
+	<true/>
+
+	<!-- تضمين كل الـ Slices (بدون App Thinning) -->
+	<key>thinning</key>
+	<string>&lt;none&gt;</string>
+
+	<!-- الإصدار المستهدف -->
+	<key>compileBitcode</key>
+	<false/>
+
+	<!-- رفع مباشر لـ App Store Connect (بديل: export + altool) -->
+	<key>uploadBitcode</key>
+	<false/>
+</dict>
+</plist>

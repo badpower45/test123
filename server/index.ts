@@ -480,7 +480,7 @@ app.get('/api/branch/:branch/pulses', async (req, res) => {
       const safeHourlyRate = Number.isFinite(parsedHourlyRate) && !Number.isNaN(parsedHourlyRate)
         ? parsedHourlyRate
         : 40;
-      const pulseValue = (safeHourlyRate / 3600) * 30;
+      const pulseValue = (safeHourlyRate / 3600) * 300;
       const earnings = Number((stats.validPulses * pulseValue).toFixed(2));
 
       const checkInTime = attendanceMap.get(emp.id);
@@ -1508,7 +1508,7 @@ app.get('/api/pulses/active/:employeeId', async (req, res) => {
       .limit(1);
 
     const hourlyRate = employeeRecord && employeeRecord.hourlyRate ? Number(employeeRecord.hourlyRate) : 40;
-    const pulseValue = (hourlyRate / 3600) * 30; // قيمة كل نبضة (30 ثانية)
+    const pulseValue = (hourlyRate / 3600) * 300; // قيمة كل نبضة (5 دقائق = 300 ثانية)
     const earnings = validPulseCount * pulseValue;
 
     res.json({
@@ -1549,7 +1549,7 @@ app.get('/api/pulses/period/:employeeId', async (req, res) => {
 
     const validPulseCount = Number(result[0]?.count) || 0;
     const HOURLY_RATE = 40;
-    const pulseValue = (HOURLY_RATE / 3600) * 30;
+    const pulseValue = (HOURLY_RATE / 3600) * 300;
     const earnings = validPulseCount * pulseValue;
 
     res.json({
@@ -2497,7 +2497,7 @@ app.post('/api/advances/request', async (req, res) => {
     
     // Calculate earnings (40 EGP/hour, pulse every 30 seconds = 0.333 EGP per pulse)
     const HOURLY_RATE = 40;
-    const pulseValue = (HOURLY_RATE / 3600) * 30;
+    const pulseValue = (HOURLY_RATE / 3600) * 300;
     const totalRealTimeEarnings = validPulseCount * pulseValue;
     
     // Eligible amount is 30% of real-time earnings
@@ -2907,7 +2907,7 @@ app.get('/api/reports/comprehensive/:employeeId', async (req, res) => {
     
     // Calculate salary from pulses (40 EGP/hour, pulse every 30 seconds)
     const HOURLY_RATE = 40;
-    const pulseValue = (HOURLY_RATE / 3600) * 30; // 0.333 EGP per pulse
+    const pulseValue = (HOURLY_RATE / 3600) * 300; // 5-minute pulse
     const grossSalary = validPulseCount * pulseValue;
 
     // Get advances
@@ -3180,7 +3180,7 @@ app.get('/api/employees/:id/current-earnings', async (req, res) => {
     
     // Calculate earnings (40 EGP/hour, pulse every 30 seconds = 0.333 EGP per pulse)
     const HOURLY_RATE = 40;
-    const pulseValue = (HOURLY_RATE / 3600) * 30;
+    const pulseValue = (HOURLY_RATE / 3600) * 300;
     const totalEarnings = validPulseCount * pulseValue;
     const maxAdvanceAmount = totalEarnings * 0.3;
 
@@ -5112,7 +5112,7 @@ app.get('/api/owner/payroll/summary', async (req, res) => {
 
       const effectiveHourlyRate = hourlyRateValue ?? 0;
       const hourlyPay = Math.round(attendanceInfo.totalWorkHours * effectiveHourlyRate * 100) / 100;
-      const pulseValue = effectiveHourlyRate > 0 ? (effectiveHourlyRate / 3600) * 30 : 0;
+      const pulseValue = effectiveHourlyRate > 0 ? (effectiveHourlyRate / 3600) * 300 : 0;
       const pulsePay = Math.round(pulsesCount * pulseValue * 100) / 100;
       const totalComputedPay = Math.round((hourlyPay + pulsePay) * 100) / 100;
       const netSalary = Math.round((totalComputedPay - employeeAdvances) * 100) / 100;
@@ -5616,8 +5616,8 @@ app.post('/api/payroll/calculate', async (req, res) => {
     // Calculate total pay
     const totalPay = totalWorkHours * hourlyRate;
 
-    // Calculate pulse-based pay (40 EGP/hour, pulse every 30 seconds = 0.333 EGP per pulse)
-    const pulseValue = (hourlyRate / 3600) * 30;
+    // Calculate pulse-based pay (40 EGP/hour, pulse every 5 minutes = 300 seconds)
+    const pulseValue = (hourlyRate / 3600) * 300;
     const pulsePay = totalValidPulses * pulseValue;
 
     // Get advances for this period
@@ -7902,7 +7902,8 @@ cron.schedule('*/30 * * * *', async () => {
 // Check every 10 minutes for employees who need auto checkout
 cron.schedule('*/10 * * * *', async () => {
   try {
-    console.log('[CRON] Checking for employees needing auto checkout...');
+    console.log('[CRON] Auto checkout disabled by policy.');
+    return;
 
     // Get Egypt/Cairo time
     const cairoTimeString = new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' });

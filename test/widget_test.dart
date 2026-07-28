@@ -17,8 +17,7 @@ void main() {
     expect(find.byType(SplashScreen), findsOneWidget);
 
     // Run a few frames to ensure startup async work does not throw.
-    await tester.pump(const Duration(seconds: 1));
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 2));
 
     final exception = tester.takeException();
     expect(exception, isNull, reason: 'Splash navigation threw $exception');

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../theme/app_colors.dart';
 
@@ -21,15 +20,17 @@ class BranchLocationPickerScreen extends StatefulWidget {
 }
 
 class _BranchLocationPickerScreenState extends State<BranchLocationPickerScreen> {
-  late MapController _mapController;
+  GoogleMapController? _mapController;
   late LatLng _center;
   double _radius = 100;
   bool _isLoading = false;
+  
+  Set<Marker> _markers = {};
+  Set<Circle> _circles = {};
 
   @override
   void initState() {
     super.initState();
-    _mapController = MapController();
     _radius = widget.initialRadius;
     
     // Initialize with passed coordinates or default to Cairo
@@ -37,6 +38,42 @@ class _BranchLocationPickerScreenState extends State<BranchLocationPickerScreen>
       widget.initialLatitude ?? 30.0444,
       widget.initialLongitude ?? 31.2357,
     );
+    _updateMapElements();
+  }
+
+  @override
+  void dispose() {
+    _mapController?.dispose();
+    super.dispose();
+  }
+
+  void _updateMapElements() {
+    setState(() {
+      _markers = {
+        Marker(
+          markerId: const MarkerId('branch_marker'),
+          position: _center,
+          draggable: true,
+          onDragEnd: (newPosition) {
+            setState(() {
+              _center = newPosition;
+            });
+            _updateMapElements();
+          },
+        ),
+      };
+      
+      _circles = {
+        Circle(
+          circleId: const CircleId('branch_geofence'),
+          center: _center,
+          radius: _radius,
+          fillColor: AppColors.primaryOrange.withOpacity(0.15),
+          strokeColor: AppColors.primaryOrange,
+          strokeWidth: 2,
+        ),
+      };
+    });
   }
 
   Future<void> _getCurrentLocation() async {
@@ -47,12 +84,20 @@ class _BranchLocationPickerScreenState extends State<BranchLocationPickerScreen>
         desiredAccuracy: LocationAccuracy.high,
       );
       
+      final newCenter = LatLng(position.latitude, position.longitude);
+      
       setState(() {
-        _center = LatLng(position.latitude, position.longitude);
+        _center = newCenter;
         _isLoading = false;
       });
       
-      _mapController.move(_center, 16);
+      _updateMapElements();
+      
+      _mapController?.animateCamera(
+        CameraUpdate.newCameraPosition(
+          CameraPosition(target: newCenter, zoom: 16),
+        ),
+      );
       
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -78,10 +123,11 @@ class _BranchLocationPickerScreenState extends State<BranchLocationPickerScreen>
     }
   }
 
-  void _onMapTap(TapPosition tapPosition, LatLng point) {
+  void _onMapTap(LatLng point) {
     setState(() {
       _center = point;
     });
+    _updateMapElements();
   }
 
   void _saveLocation() {
@@ -108,62 +154,22 @@ class _BranchLocationPickerScreenState extends State<BranchLocationPickerScreen>
       ),
       body: Stack(
         children: [
-          // Map
-          FlutterMap(
-            mapController: _mapController,
-            options: MapOptions(
-              initialCenter: _center,
-              initialZoom: 16,
-              onTap: _onMapTap,
-              interactionOptions: const InteractionOptions(
-                flags: InteractiveFlag.all,
-              ),
+          // Google Map
+          GoogleMap(
+            initialCameraPosition: CameraPosition(
+              target: _center,
+              zoom: 16,
             ),
-            children: [
-              TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.oldies.attendance',
-              ),
-              CircleLayer(
-                circles: [
-                  CircleMarker(
-                    point: _center,
-                    radius: _radius,
-                    useRadiusInMeter: true,
-                    color: AppColors.primaryOrange.withOpacity(0.2),
-                    borderColor: AppColors.primaryOrange,
-                    borderStrokeWidth: 2,
-                  ),
-                ],
-              ),
-              MarkerLayer(
-                markers: [
-                  Marker(
-                    point: _center,
-                    width: 40,
-                    height: 40,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: AppColors.primaryOrange,
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.3),
-                            blurRadius: 8,
-                            spreadRadius: 2,
-                          ),
-                        ],
-                      ),
-                      child: const Icon(
-                        Icons.location_on,
-                        color: Colors.white,
-                        size: 24,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
+            onMapCreated: (controller) {
+              _mapController = controller;
+            },
+            onTap: _onMapTap,
+            markers: _markers,
+            circles: _circles,
+            myLocationEnabled: true,
+            myLocationButtonEnabled: false,
+            zoomControlsEnabled: false,
+            compassEnabled: true,
           ),
 
           // Loading overlay
@@ -263,6 +269,7 @@ class _BranchLocationPickerScreenState extends State<BranchLocationPickerScreen>
                     activeColor: AppColors.primaryOrange,
                     onChanged: (value) {
                       setState(() => _radius = value);
+                      _updateMapElements();
                     },
                   ),
                   
@@ -365,7 +372,10 @@ class _BranchLocationPickerScreenState extends State<BranchLocationPickerScreen>
   Widget _buildRadiusButton(int radius) {
     final isSelected = _radius == radius.toDouble();
     return InkWell(
-      onTap: () => setState(() => _radius = radius.toDouble()),
+      onTap: () {
+        setState(() => _radius = radius.toDouble());
+        _updateMapElements();
+      },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(

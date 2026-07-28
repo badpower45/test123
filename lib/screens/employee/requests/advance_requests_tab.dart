@@ -109,16 +109,8 @@ class _AdvanceRequestsTabState extends State<AdvanceRequestsTab> {
   }
 
   Future<void> _openAdvanceRequestSheet() async {
-    // Check if advance info is loaded
-    if (_loadingAdvanceInfo) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('⏳ جاري تحميل بيانات السلفة...'),
-          backgroundColor: AppColors.statusPending,
-        ),
-      );
-      return;
-    }
+    // Allow opening the request sheet immediately even if advance info
+    // is still loading — the sheet will show the available data when ready.
 
     // Check if user has earnings
     if (_currentEarnings == null || _currentEarnings! <= 0) {
@@ -182,8 +174,8 @@ class _AdvanceRequestsTabState extends State<AdvanceRequestsTab> {
         physics: const AlwaysScrollableScrollPhysics(),
         children: [
           ElevatedButton.icon(
-            onPressed: _loadingAdvanceInfo ? null : _openAdvanceRequestSheet,
-            icon: _loadingAdvanceInfo 
+            onPressed: _openAdvanceRequestSheet,
+            icon: _loadingAdvanceInfo
                 ? const SizedBox(
                     width: 16,
                     height: 16,

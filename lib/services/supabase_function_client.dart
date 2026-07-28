@@ -118,6 +118,18 @@ class SupabaseFunctionClient {
         throw Exception(fullMessage);
       }
 
+      if (response.statusCode == 404) {
+        final notFoundMsg = responseBody is Map<String, dynamic>
+            ? (responseBody['message']?.toString() ??
+                responseBody['error']?.toString() ??
+                'Requested function was not found')
+            : 'Requested function was not found';
+        final fullMessage = '$notFoundMsg (function: $functionName)';
+        _log(enableLogging, '❌ [SupabaseFunctionClient] HTTP 404: $fullMessage');
+        if (!throwOnError) return null;
+        throw Exception(fullMessage);
+      }
+
       final errorMsg = responseBody is Map<String, dynamic>
           ? responseBody['message'] ??
                 responseBody['error'] ??
@@ -132,7 +144,7 @@ class SupabaseFunctionClient {
       if (!throwOnError) return null;
       rethrow;
     } catch (e) {
-      _log(enableLogging, '❌ [SupabaseFunctionClient] Exception: $e');
+      _log(enableLogging, '❌ [SupabaseFunctionClient] Exception in $functionName: $e');
       if (!throwOnError) return null;
       rethrow;
     }

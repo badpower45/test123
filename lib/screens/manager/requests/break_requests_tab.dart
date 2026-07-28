@@ -22,7 +22,8 @@ class ManagerBreakRequestsTab extends StatefulWidget {
   final bool isShiftStatusLoading;
 
   @override
-  State<ManagerBreakRequestsTab> createState() => _ManagerBreakRequestsTabState();
+  State<ManagerBreakRequestsTab> createState() =>
+      _ManagerBreakRequestsTabState();
 }
 
 class _ManagerBreakRequestsTabState extends State<ManagerBreakRequestsTab> {
@@ -64,8 +65,20 @@ class _ManagerBreakRequestsTabState extends State<ManagerBreakRequestsTab> {
   void _startTicker() {
     _ticker?.cancel();
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
-      final hasActiveBreak = _breaks.any((item) => item.status == BreakStatus.active);
-      if (hasActiveBreak && mounted) {
+      final activeBreak = _breaks.cast<Break?>().firstWhere(
+        (item) => item?.status == BreakStatus.active,
+        orElse: () => null,
+      );
+      final shouldAutoRefresh =
+          activeBreak?.endTime != null &&
+          !DateTime.now().isBefore(activeBreak!.endTime!);
+
+      if (shouldAutoRefresh) {
+        _loadBreaks(showLoadingIndicator: false);
+        return;
+      }
+
+      if (activeBreak != null && mounted) {
         setState(() {});
       }
     });
@@ -82,7 +95,9 @@ class _ManagerBreakRequestsTabState extends State<ManagerBreakRequestsTab> {
     }
 
     try {
-      final breaks = await RequestsApiService.fetchBreaks(employeeId: widget.managerId);
+      final breaks = await RequestsApiService.fetchManagerPendingBreaks(
+        managerId: widget.managerId,
+      );
       if (!mounted) {
         return;
       }
@@ -106,7 +121,9 @@ class _ManagerBreakRequestsTabState extends State<ManagerBreakRequestsTab> {
 
   Future<void> _refreshShiftStatus() async {
     try {
-      final status = await RequestsApiService.fetchShiftStatus(widget.managerId);
+      final status = await RequestsApiService.fetchShiftStatus(
+        widget.managerId,
+      );
       if (!mounted) {
         return;
       }
@@ -128,7 +145,9 @@ class _ManagerBreakRequestsTabState extends State<ManagerBreakRequestsTab> {
       _isLoadingStatus = true;
     });
     try {
-      final isActive = await RequestsApiService.checkActiveShift(widget.managerId);
+      final isActive = await RequestsApiService.checkActiveShift(
+        widget.managerId,
+      );
       if (mounted) {
         setState(() {
           _isShiftActive = isActive;
@@ -147,7 +166,9 @@ class _ManagerBreakRequestsTabState extends State<ManagerBreakRequestsTab> {
   }
 
   Future<void> _openBreakRequestSheet() async {
-    final hasShift = await RequestsApiService.checkActiveShift(widget.managerId);
+    final hasShift = await RequestsApiService.checkActiveShift(
+      widget.managerId,
+    );
     if (!hasShift) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -194,7 +215,7 @@ class _ManagerBreakRequestsTabState extends State<ManagerBreakRequestsTab> {
       }
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('تم بدء الاستراحة. الوقت الآن غير محسوب ضمن ساعات العمل.'),
+          content: Text('تم بدء الاستراحة بنجاح.'),
           backgroundColor: AppColors.primaryOrange,
         ),
       );
@@ -280,9 +301,13 @@ class _ManagerBreakRequestsTabState extends State<ManagerBreakRequestsTab> {
 
   @override
   Widget build(BuildContext context) {
-  final shiftStatusKnown = !widget.isShiftStatusLoading && _currentShiftStatus != null;
-  final hasActiveShift = shiftStatusKnown ? _currentShiftStatus!.hasActiveShift : true;
-  final canRequestBreak = !_isLoadingStatus && (_isShiftActive || hasActiveShift);
+    final shiftStatusKnown =
+        !widget.isShiftStatusLoading && _currentShiftStatus != null;
+    final hasActiveShift = shiftStatusKnown
+        ? _currentShiftStatus!.hasActiveShift
+        : true;
+    final canRequestBreak =
+        !_isLoadingStatus && (_isShiftActive || hasActiveShift);
     Break? activeBreak;
     for (final item in _breaks) {
       if (item.status == BreakStatus.active) {
@@ -316,7 +341,9 @@ class _ManagerBreakRequestsTabState extends State<ManagerBreakRequestsTab> {
               backgroundColor: AppColors.primaryOrange,
               foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
             ),
           ),
           if (widget.isShiftStatusLoading)
@@ -355,7 +382,9 @@ class _ManagerBreakRequestsTabState extends State<ManagerBreakRequestsTab> {
                 backgroundColor: AppColors.error,
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
             ),
           ],
@@ -390,19 +419,23 @@ class _ManagerBreakRequestsTabState extends State<ManagerBreakRequestsTab> {
           if (_isLoading && !_isRefreshing)
             const Center(child: CircularProgressIndicator())
           else if (_errorMessage != null)
-            _BreaksErrorState(message: _errorMessage!, onRetry: ({bool showLoadingIndicator = true}) {
-              return _loadBreaks(showLoadingIndicator: showLoadingIndicator);
-            })
+            _BreaksErrorState(
+              message: _errorMessage!,
+              onRetry: ({bool showLoadingIndicator = true}) {
+                return _loadBreaks(showLoadingIndicator: showLoadingIndicator);
+              },
+            )
           else if (_breaks.isEmpty)
             const _BreaksEmptyState()
           else ...[
-            for (final breakItem in _breaks) _BreakCard(
-              breakItem: breakItem,
-              onStart: _handleStartBreak,
-              onEnd: _handleEndBreak,
-              isActioning: _actioningBreakId == breakItem.id,
-              remainingLabel: _remainingTimeLabel(breakItem),
-            ),
+            for (final breakItem in _breaks)
+              _BreakCard(
+                breakItem: breakItem,
+                onStart: _handleStartBreak,
+                onEnd: _handleEndBreak,
+                isActioning: _actioningBreakId == breakItem.id,
+                remainingLabel: _remainingTimeLabel(breakItem),
+              ),
           ],
         ],
       ),
@@ -410,12 +443,16 @@ class _ManagerBreakRequestsTabState extends State<ManagerBreakRequestsTab> {
   }
 
   String? _remainingTimeLabel(Break breakItem) {
-    if (breakItem.status != BreakStatus.active || breakItem.startTime == null) {
+    if (breakItem.status != BreakStatus.active) {
       return null;
     }
-    final requested = breakItem.requestedDuration;
-    final elapsed = DateTime.now().difference(breakItem.startTime!);
-    final remaining = requested - elapsed;
+
+    final endTime = breakItem.endTime;
+    if (endTime == null) {
+      return 'الاستراحة ستنتهي تلقائياً';
+    }
+
+    final remaining = endTime.difference(DateTime.now());
 
     if (remaining.inSeconds <= 0) {
       return 'انتهت مدة الاستراحة المقررة';
@@ -492,7 +529,9 @@ class _BreakCard extends StatelessWidget {
               ),
               Chip(
                 label: Text(_statusLabel(breakItem.status)),
-                backgroundColor: _statusColor(breakItem.status).withOpacity(0.1),
+                backgroundColor: _statusColor(
+                  breakItem.status,
+                ).withOpacity(0.1),
                 labelStyle: TextStyle(
                   color: _statusColor(breakItem.status),
                   fontWeight: FontWeight.bold,
@@ -501,7 +540,10 @@ class _BreakCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
-          _BreakDetailsRow(label: 'بداية الطلب', value: _formatDateTime(breakItem.createdAt)),
+          _BreakDetailsRow(
+            label: 'بداية الطلب',
+            value: _formatDateTime(breakItem.createdAt),
+          ),
           if (breakItem.startTime != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
@@ -546,7 +588,9 @@ class _BreakCard extends StatelessWidget {
         style: ElevatedButton.styleFrom(
           backgroundColor: AppColors.primaryOrange,
           padding: const EdgeInsets.symmetric(vertical: 14),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
         ),
         child: isActioning
             ? const SizedBox(
@@ -554,25 +598,7 @@ class _BreakCard extends StatelessWidget {
                 width: 20,
                 child: CircularProgressIndicator(strokeWidth: 2),
               )
-            : const Text('بدء الاستراحة'),
-      );
-    }
-    if (breakItem.status == BreakStatus.active) {
-      return OutlinedButton(
-        onPressed: isActioning ? null : () => onEnd(breakItem.id),
-        style: OutlinedButton.styleFrom(
-          foregroundColor: AppColors.primaryOrange,
-          side: const BorderSide(color: AppColors.primaryOrange, width: 2),
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ),
-        child: isActioning
-            ? const SizedBox(
-                height: 20,
-                width: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : const Text('إنهاء الاستراحة'),
+            : const Text('تفعيل الاستراحة'),
       );
     }
     return null;
@@ -610,8 +636,10 @@ class _BreakCard extends StatelessWidget {
 
   String _formatDateTime(DateTime dateTime) {
     final local = dateTime.toLocal();
-    final date = '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')}';
-    final time = '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+    final date =
+        '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')}';
+    final time =
+        '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
     return '$date $time';
   }
 }
@@ -651,10 +679,7 @@ class _BreaksEmptyState extends StatelessWidget {
 }
 
 class _BreaksErrorState extends StatelessWidget {
-  const _BreaksErrorState({
-    required this.message,
-    required this.onRetry,
-  });
+  const _BreaksErrorState({required this.message, required this.onRetry});
 
   final String message;
   final Future<void> Function({bool showLoadingIndicator}) onRetry;
@@ -674,12 +699,17 @@ class _BreaksErrorState extends StatelessWidget {
           Text(
             message,
             textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+            style: const TextStyle(
+              fontSize: 14,
+              color: AppColors.textSecondary,
+            ),
           ),
           const SizedBox(height: 16),
           ElevatedButton(
             onPressed: () => onRetry(showLoadingIndicator: true),
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryOrange),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryOrange,
+            ),
             child: const Text('إعادة المحاولة'),
           ),
         ],
@@ -701,10 +731,7 @@ class _BreakDetailsRow extends StatelessWidget {
       children: [
         Text(
           label,
-          style: const TextStyle(
-            fontSize: 14,
-            color: AppColors.textSecondary,
-          ),
+          style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
         ),
         Text(
           value,
@@ -739,6 +766,10 @@ class _BreakRequestSheetState extends State<_BreakRequestSheet> {
   }
 
   Future<void> _submit() async {
+    if (_isSubmitting) {
+      return;
+    }
+
     final minutes = int.tryParse(_durationController.text.trim());
 
     if (minutes == null || minutes <= 0) {

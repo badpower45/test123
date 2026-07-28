@@ -6,8 +6,10 @@ import bcrypt from 'bcrypt';
 import cron from 'node-cron';
 import * as XLSX from 'xlsx';
 import { db } from './db.js';
-import { employees, attendance, attendanceRequests, leaveRequests, advances, deductions, absenceNotifications, pulses, branches, branchBssids, branchManagers, breaks, deviceSessions, notifications, salaryCalculations, geofenceViolations } from '../shared/schema.js';
+import { employees, attendance, attendanceRequests, leaveRequests, advances, deductions, absenceNotifications, pulses, branches, branchBssids, branchManagers, breaks, deviceSessions, notifications, salaryCalculations, geofenceViolations, branchEnvironmentBaselines, pulseFlags, manualOverrides } from '../shared/schema.js';
 import { eq, and, gte, lte, lt, desc, sql, inArray, isNull, or } from 'drizzle-orm';
+import { verifyPresence, createAutoFlags } from './services/blv-verification.js';
+import { calculateAllBaselines, updateAllBranchBaselines } from './services/baseline-calculation.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const app = express();
@@ -280,6 +282,198 @@ app.get('/api/branch/:branch/requests', async (req, res) => {
     }
     catch (err) {
         res.status(500).json({ error: 'Internal server error', message: err?.message });
+    }
+});
+// Get pulse & earnings summary for a branch
+app.get('/api/branch/:branch/pulses', async (req, res) => {
+    try {
+        const branchName = req.params.branch;
+        const { start: startQuery, end: endQuery } = req.query;
+        const [branchRecord] = await db
+            .select()
+            .from(branches)
+            .where(eq(branches.name, branchName))
+            .limit(1);
+        const branchEmployees = await db
+            .select({
+            id: employees.id,
+            fullName: employees.fullName,
+            role: employees.role,
+            hourlyRate: employees.hourlyRate,
+            active: employees.active,
+            branchId: employees.branchId,
+        })
+            .from(employees)
+            .where(eq(employees.branch, branchName));
+        const employeeIds = branchEmployees.map(emp => emp.id);
+        const nowEgypt = getEgyptTime();
+        const defaultStart = new Date(nowEgypt);
+        defaultStart.setHours(0, 0, 0, 0);
+        const defaultEnd = nowEgypt;
+        let startDateTime = defaultStart;
+        let endDateTime = defaultEnd;
+        if (startQuery) {
+            const parsedStart = new Date(startQuery);
+            if (Number.isNaN(parsedStart.getTime())) {
+                return res.status(400).json({ error: 'Invalid start date' });
+            }
+            startDateTime = parsedStart;
+        }
+        if (endQuery) {
+            const parsedEnd = new Date(endQuery);
+            if (Number.isNaN(parsedEnd.getTime())) {
+                return res.status(400).json({ error: 'Invalid end date' });
+            }
+            endDateTime = parsedEnd;
+        }
+        if (startDateTime.getTime() > endDateTime.getTime()) {
+            return res.status(400).json({ error: 'Start date must be before end date' });
+        }
+        if (employeeIds.length === 0) {
+            return res.json({
+                success: true,
+                branch: {
+                    id: branchRecord?.id ?? null,
+                    name: branchName,
+                },
+                period: {
+                    start: startDateTime.toISOString(),
+                    end: endDateTime.toISOString(),
+                    timezone: 'Africa/Cairo',
+                },
+                summary: {
+                    employeeCount: 0,
+                    activeEmployeeCount: 0,
+                    totalPulses: 0,
+                    totalValidPulses: 0,
+                    totalInvalidPulses: 0,
+                    totalEarnings: 0,
+                    averageEarningsPerEmployee: 0,
+                },
+                employees: [],
+            });
+        }
+        let condition = inArray(pulses.employeeId, employeeIds);
+        condition = and(condition, gte(pulses.createdAt, startDateTime));
+        condition = and(condition, lte(pulses.createdAt, endDateTime));
+        const pulseRows = await db
+            .select({
+            employeeId: pulses.employeeId,
+            totalPulses: sql `COUNT(*)`,
+            validPulses: sql `SUM(CASE WHEN ${pulses.isWithinGeofence} = true THEN 1 ELSE 0 END)`,
+            invalidPulses: sql `SUM(CASE WHEN ${pulses.isWithinGeofence} = false THEN 1 ELSE 0 END)`,
+            firstPulse: sql `MIN(${pulses.createdAt})`,
+            lastPulse: sql `MAX(${pulses.createdAt})`,
+        })
+            .from(pulses)
+            .where(condition)
+            .groupBy(pulses.employeeId);
+        const activeAttendanceRecords = await db
+            .select({
+            employeeId: attendance.employeeId,
+            checkInTime: attendance.checkInTime,
+        })
+            .from(attendance)
+            .where(and(inArray(attendance.employeeId, employeeIds), eq(attendance.status, 'active')));
+        const attendanceMap = new Map();
+        for (const record of activeAttendanceRecords) {
+            if (!attendanceMap.has(record.employeeId)) {
+                const value = record.checkInTime ? new Date(record.checkInTime) : null;
+                attendanceMap.set(record.employeeId, value);
+            }
+        }
+        const pulseMap = new Map();
+        for (const row of pulseRows) {
+            const firstPulse = row.firstPulse ? new Date(row.firstPulse) : null;
+            const lastPulse = row.lastPulse ? new Date(row.lastPulse) : null;
+            pulseMap.set(row.employeeId, {
+                totalPulses: Number(row.totalPulses ?? 0),
+                validPulses: Number(row.validPulses ?? 0),
+                invalidPulses: Number(row.invalidPulses ?? 0),
+                firstPulse,
+                lastPulse,
+            });
+        }
+        const employeesWithStats = branchEmployees.map(emp => {
+            const stats = pulseMap.get(emp.id) ?? {
+                totalPulses: 0,
+                validPulses: 0,
+                invalidPulses: 0,
+                firstPulse: null,
+                lastPulse: null,
+            };
+            const parsedHourlyRate = emp.hourlyRate !== null && emp.hourlyRate !== undefined
+                ? Number(emp.hourlyRate)
+                : 40;
+            const safeHourlyRate = Number.isFinite(parsedHourlyRate) && !Number.isNaN(parsedHourlyRate)
+                ? parsedHourlyRate
+                : 40;
+            const pulseValue = (safeHourlyRate / 3600) * 300;
+            const earnings = Number((stats.validPulses * pulseValue).toFixed(2));
+            const checkInTime = attendanceMap.get(emp.id);
+            return {
+                id: emp.id,
+                fullName: emp.fullName,
+                role: emp.role,
+                active: emp.active,
+                branchId: emp.branchId,
+                hourlyRate: Number(safeHourlyRate.toFixed(2)),
+                totalPulses: stats.totalPulses,
+                validPulses: stats.validPulses,
+                invalidPulses: stats.invalidPulses,
+                earnings,
+                firstPulseAt: stats.firstPulse ? stats.firstPulse.toISOString() : null,
+                lastPulseAt: stats.lastPulse ? stats.lastPulse.toISOString() : null,
+                isCheckedIn: attendanceMap.has(emp.id),
+                checkInTime: checkInTime ? checkInTime.toISOString() : null,
+            };
+        });
+        employeesWithStats.sort((a, b) => b.earnings - a.earnings);
+        const summaryTotals = employeesWithStats.reduce((acc, employee) => {
+            acc.totalPulses += employee.totalPulses;
+            acc.totalValidPulses += employee.validPulses;
+            acc.totalInvalidPulses += employee.invalidPulses;
+            acc.totalEarnings += employee.earnings;
+            if (employee.isCheckedIn) {
+                acc.activeEmployeeCount += 1;
+            }
+            return acc;
+        }, {
+            totalPulses: 0,
+            totalValidPulses: 0,
+            totalInvalidPulses: 0,
+            totalEarnings: 0,
+            activeEmployeeCount: 0,
+        });
+        const averageEarnings = employeesWithStats.length > 0
+            ? Number((summaryTotals.totalEarnings / employeesWithStats.length).toFixed(2))
+            : 0;
+        res.json({
+            success: true,
+            branch: {
+                id: branchRecord?.id ?? employeesWithStats.find(employee => employee.branchId)?.branchId ?? null,
+                name: branchName,
+            },
+            period: {
+                start: startDateTime.toISOString(),
+                end: endDateTime.toISOString(),
+                timezone: 'Africa/Cairo',
+            },
+            summary: {
+                employeeCount: employeesWithStats.length,
+                activeEmployeeCount: summaryTotals.activeEmployeeCount,
+                totalPulses: summaryTotals.totalPulses,
+                totalValidPulses: summaryTotals.totalValidPulses,
+                totalInvalidPulses: summaryTotals.totalInvalidPulses,
+                totalEarnings: Number(summaryTotals.totalEarnings.toFixed(2)),
+                averageEarningsPerEmployee: averageEarnings,
+            },
+            employees: employeesWithStats,
+        });
+    }
+    catch (error) {
+        console.error('Branch pulse summary error:', error);
+        res.status(500).json({ error: 'Internal server error' });
     }
 });
 // Approve/reject a request (leave, advance, attendance, absence)
@@ -564,14 +758,16 @@ app.post('/api/auth/login', async (req, res) => {
 // Check In
 app.post('/api/attendance/check-in', async (req, res) => {
     try {
-        const { employee_id, latitude, longitude, wifi_bssid } = req.body;
+        const { employee_id, latitude, longitude, wifi_bssid, 
+        // BLV environmental data (optional)
+        wifi_count, wifi_signal_strength, battery_level, is_charging, accel_variance, sound_level, device_orientation, device_model, os_version } = req.body;
         if (!employee_id) {
             return res.status(400).json({ error: 'Employee ID is required' });
         }
         console.log(`[Check-In] 🔵 Request received for employee: ${employee_id}`);
         console.log(`[Check-In] 📍 Location: ${latitude}, ${longitude}`);
         console.log(`[Check-In] 📶 WiFi BSSID: ${wifi_bssid || 'NOT PROVIDED'}`);
-        // Fetch employee to check shift times
+        // Fetch employee
         const [employee] = await db
             .select()
             .from(employees)
@@ -580,9 +776,52 @@ app.post('/api/attendance/check-in', async (req, res) => {
         if (!employee) {
             return res.status(404).json({ error: 'Employee not found' });
         }
-        // --- START VERIFICATION (WiFi OR Location) ---
+        console.log(`[Check-In Debug] => Employee: ${employee_id}, Role: ${employee.role}`);
+        // ✅ SHIFT VALIDATION - Check if within shift hours
+        if (employee.shiftStartTime && employee.shiftEndTime) {
+            const now = new Date();
+            const currentTime = now.toTimeString().slice(0, 5); // HH:mm format
+            const shiftStart = employee.shiftStartTime;
+            const shiftEnd = employee.shiftEndTime;
+            // Handle shifts that cross midnight
+            const isWithinShift = shiftStart <= shiftEnd
+                ? currentTime >= shiftStart && currentTime <= shiftEnd
+                : currentTime >= shiftStart || currentTime <= shiftEnd;
+            if (!isWithinShift) {
+                console.log(`[Check-In] ❌ REJECTED - Outside shift hours (${shiftStart} - ${shiftEnd}), Current: ${currentTime}`);
+                return res.status(403).json({
+                    error: 'لا يمكن تسجيل الحضور خارج وقت الشيفت المحدد',
+                    message: `وقت الشيفت من ${shiftStart} إلى ${shiftEnd}، الوقت الحالي: ${currentTime}`,
+                    code: 'OUTSIDE_SHIFT_HOURS',
+                });
+            }
+            console.log(`[Check-In] ✅ Within shift hours (${shiftStart} - ${shiftEnd})`);
+        }
+        // --- START VERIFICATION (WiFi OR Location OR BLV) ---
         let isWifiValid = false;
         let isLocationValid = false;
+        let isBLVValid = false;
+        // 🔬 Try BLV verification first if environmental data provided
+        if (wifi_count !== undefined && accel_variance !== undefined && employee.branchId) {
+            try {
+                const blvResult = await verifyPresence(employee_id, employee.branchId, {
+                    wifiCount: wifi_count || 0,
+                    wifiSignalStrength: wifi_signal_strength || -70,
+                    batteryLevel: battery_level || 0.5,
+                    isCharging: is_charging || false,
+                    accelVariance: accel_variance || 0,
+                    soundLevel: sound_level || 0,
+                    deviceOrientation: device_orientation,
+                    deviceModel: device_model || 'Unknown',
+                    osVersion: os_version || 'Unknown'
+                }, wifi_bssid);
+                isBLVValid = blvResult.isValid;
+                console.log(`[Check-In] 🔬 BLV: ${isBLVValid ? 'VALID' : 'INVALID'} - Presence: ${blvResult.presenceScore.toFixed(2)}, Trust: ${blvResult.trustScore.toFixed(2)}`);
+            }
+            catch (blvError) {
+                console.log(`[Check-In] ⚠️ BLV: SKIPPED - ${blvError}`);
+            }
+        }
         if (employee.branchId) {
             const [branch] = await db
                 .select()
@@ -666,74 +905,22 @@ app.post('/api/attendance/check-in', async (req, res) => {
                 else {
                     console.log(`[Check-In] ⚠️ No location provided`);
                 }
-                // 3️⃣ Check: WiFi OR Location (at least one must be valid)
-                if (!isWifiValid && !isLocationValid) {
-                    console.log(`[Check-In] ❌ REJECTED - Neither WiFi nor Location is valid`);
+                // 3️⃣ Check: WiFi OR Location OR BLV (at least one must be valid)
+                if (!isWifiValid && !isLocationValid && !isBLVValid) {
+                    console.log(`[Check-In] ❌ REJECTED - WiFi, Location, and BLV all invalid`);
                     return res.status(403).json({
                         error: 'يجب أن تكون متصلاً بشبكة الواي فاي الخاصة بالفرع أو متواجداً في الموقع الصحيح لتسجيل الحضور.',
                         message: 'تأكد من الاتصال بالـ WiFi الصحيح أو التواجد داخل الفرع.',
-                        code: 'INVALID_WIFI_OR_LOCATION',
+                        code: 'INVALID_WIFI_LOCATION_BLV',
                     });
                 }
-                console.log(`[Check-In] ✅ APPROVED - WiFi: ${isWifiValid}, Location: ${isLocationValid}`);
+                console.log(`[Check-In] ✅ APPROVED - WiFi: ${isWifiValid}, Location: ${isLocationValid}, BLV: ${isBLVValid}`);
             }
         }
         // --- END VERIFICATION ---
         // --- START DEBUG LOG ---
-        console.log(`[Check-In Debug] Employee: ${employee_id}, Role: ${employee.role}, Shift Start: ${employee.shiftStartTime}, Shift End: ${employee.shiftEndTime}`);
-        // Get Egypt/Cairo time
-        const cairoTime = new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' });
-        const cairoDate = new Date(cairoTime);
-        console.log(`[Check-In Debug] Server Time (UTC): ${new Date().toISOString()}`);
-        console.log(`[Check-In Debug] Cairo Time: ${cairoTime}`);
-        console.log(`[Check-In Debug] Cairo Time (Date Object): ${cairoDate.toISOString()}`);
-        // --- END DEBUG LOG ---
-        // Validate shift time using Cairo timezone (skip for owner/admin)
-        const isPrivilegedRole = employee.role === 'owner' || employee.role === 'admin';
-        console.log(`[Check-In Debug] Is Privileged Role: ${isPrivilegedRole}`);
-        if (employee.shiftStartTime && employee.shiftEndTime && !isPrivilegedRole) {
-            // Use Cairo time for validation
-            const currentHour = cairoDate.getHours();
-            const currentMinute = cairoDate.getMinutes();
-            const currentTime = currentHour * 60 + currentMinute; // Convert to minutes since midnight
-            console.log(`[Check-In Debug] Cairo Current Time: ${currentHour}:${currentMinute.toString().padStart(2, '0')} (${currentTime} minutes)`);
-            // Parse shift times (format: "HH:mm")
-            const [startHour, startMinute] = employee.shiftStartTime.split(':').map(Number);
-            const [endHour, endMinute] = employee.shiftEndTime.split(':').map(Number);
-            const shiftStart = startHour * 60 + startMinute;
-            const shiftEnd = endHour * 60 + endMinute;
-            console.log(`[Check-In Debug] Shift Window: ${employee.shiftStartTime} (${shiftStart} min) to ${employee.shiftEndTime} (${shiftEnd} min)`);
-            // Check if current time is within shift window
-            let isWithinShift = false;
-            if (shiftEnd > shiftStart) {
-                // Normal shift (e.g., 9:00 - 17:00)
-                isWithinShift = currentTime >= shiftStart && currentTime <= shiftEnd;
-                console.log(`[Check-In Debug] Normal shift check: ${currentTime} >= ${shiftStart} && ${currentTime} <= ${shiftEnd} = ${isWithinShift}`);
-            }
-            else {
-                // Night shift crossing midnight (e.g., 21:00 - 05:00)
-                isWithinShift = currentTime >= shiftStart || currentTime <= shiftEnd;
-                console.log(`[Check-In Debug] Night shift check: ${currentTime} >= ${shiftStart} || ${currentTime} <= ${shiftEnd} = ${isWithinShift}`);
-            }
-            if (!isWithinShift) {
-                const formatTime = (minutes) => {
-                    const h = Math.floor(minutes / 60);
-                    const m = minutes % 60;
-                    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
-                };
-                console.log(`[Check-In Debug] ❌ REJECTED - Outside shift time`);
-                return res.status(400).json({
-                    error: 'لا يمكنك تسجيل الحضور خارج وقت الشيفت المحدد',
-                    message: `وقت الشيفت الخاص بك من ${employee.shiftStartTime} إلى ${employee.shiftEndTime}. الوقت الحالي: ${formatTime(currentTime)}`,
-                    shiftStartTime: employee.shiftStartTime,
-                    shiftEndTime: employee.shiftEndTime,
-                    currentTime: formatTime(currentTime),
-                    cairoTime: cairoTime,
-                    code: 'OUTSIDE_SHIFT_TIME',
-                });
-            }
-            console.log(`[Check-In Debug] ✅ APPROVED - Within shift time`);
-        }
+        console.log(`[Check-In Debug] Employee: ${employee_id}, Role: ${employee.role}`);
+        // ✅ SHIFT VALIDATION REMOVED - Allow check-in anytime
         // Use Cairo timezone for date consistency
         const cairoTimeStr = new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' });
         const cairoNow = new Date(cairoTimeStr);
@@ -817,7 +1004,9 @@ app.post('/api/attendance/check-in', async (req, res) => {
 // Check Out
 app.post('/api/attendance/check-out', async (req, res) => {
     try {
-        const { employee_id, latitude, longitude, wifi_bssid } = req.body;
+        const { employee_id, latitude, longitude, wifi_bssid, 
+        // BLV environmental data (optional)
+        wifi_count, wifi_signal_strength, battery_level, is_charging, accel_variance, sound_level, device_orientation, device_model, os_version } = req.body;
         console.log(`[Check-Out] 🔵 Request received for employee: ${employee_id}`);
         console.log(`[Check-Out] 📍 Location: ${latitude}, ${longitude}`);
         console.log(`[Check-Out] 📶 WiFi BSSID: ${wifi_bssid || 'NOT PROVIDED'}`);
@@ -876,9 +1065,31 @@ app.post('/api/attendance/check-out', async (req, res) => {
             .from(employees)
             .where(eq(employees.id, employee_id))
             .limit(1);
-        // --- START VERIFICATION (WiFi OR Location) ---
+        // --- START VERIFICATION (WiFi OR Location OR BLV) ---
         let isWifiValid = false;
         let isLocationValid = false;
+        let isBLVValid = false;
+        // 🔬 Try BLV verification first if environmental data provided
+        if (wifi_count !== undefined && accel_variance !== undefined && employee && employee.branchId) {
+            try {
+                const blvResult = await verifyPresence(employee_id, employee.branchId, {
+                    wifiCount: wifi_count || 0,
+                    wifiSignalStrength: wifi_signal_strength || -70,
+                    batteryLevel: battery_level || 0.5,
+                    isCharging: is_charging || false,
+                    accelVariance: accel_variance || 0,
+                    soundLevel: sound_level || 0,
+                    deviceOrientation: device_orientation,
+                    deviceModel: device_model || 'Unknown',
+                    osVersion: os_version || 'Unknown'
+                }, wifi_bssid);
+                isBLVValid = blvResult.isValid;
+                console.log(`[Check-Out] 🔬 BLV: ${isBLVValid ? 'VALID' : 'INVALID'} - Presence: ${blvResult.presenceScore.toFixed(2)}, Trust: ${blvResult.trustScore.toFixed(2)}`);
+            }
+            catch (blvError) {
+                console.log(`[Check-Out] ⚠️ BLV: SKIPPED - ${blvError}`);
+            }
+        }
         if (employee && employee.branchId) {
             const [branch] = await db
                 .select()
@@ -963,16 +1174,16 @@ app.post('/api/attendance/check-out', async (req, res) => {
                 else {
                     console.log(`[Check-Out] ⚠️ No location provided`);
                 }
-                // 3️⃣ Check: WiFi OR Location (at least one must be valid)
-                if (!isWifiValid && !isLocationValid) {
-                    console.log(`[Check-Out] ❌ REJECTED - Neither WiFi nor Location is valid`);
+                // 3️⃣ Check: WiFi OR Location OR BLV (at least one must be valid)
+                if (!isWifiValid && !isLocationValid && !isBLVValid) {
+                    console.log(`[Check-Out] ❌ REJECTED - WiFi, Location, and BLV all invalid`);
                     return res.status(403).json({
                         error: 'يجب أن تكون متصلاً بشبكة الواي فاي الخاصة بالفرع أو متواجداً في الموقع الصحيح لتسجيل الانصراف.',
                         message: 'تأكد من الاتصال بالـ WiFi الصحيح أو التواجد داخل الفرع.',
-                        code: 'INVALID_WIFI_OR_LOCATION',
+                        code: 'INVALID_WIFI_LOCATION_BLV',
                     });
                 }
-                console.log(`[Check-Out] ✅ APPROVED - WiFi: ${isWifiValid}, Location: ${isLocationValid}`);
+                console.log(`[Check-Out] ✅ APPROVED - WiFi: ${isWifiValid}, Location: ${isLocationValid}, BLV: ${isBLVValid}`);
             }
         }
         // --- END VERIFICATION ---
@@ -1045,11 +1256,12 @@ app.get('/api/pulses/active/:employeeId', async (req, res) => {
         }
         const startTs = new Date(todayAttendance.checkInTime);
         const now = cairoDate;
-        // Check if employee has an active break (break = full pay, no restrictions)
+        // Check if employee has an approved break (APPROVED with payoutEligible = false means count all pulses)
+        // Also check for ACTIVE breaks (break in progress)
         const [activeBreak] = await db
             .select()
             .from(breaks)
-            .where(and(eq(breaks.employeeId, employeeId), eq(breaks.status, 'ACTIVE')))
+            .where(and(eq(breaks.employeeId, employeeId), or(and(eq(breaks.status, 'APPROVED'), eq(breaks.payoutEligible, false)), eq(breaks.status, 'ACTIVE'))))
             .limit(1);
         let validPulseCount = 0;
         if (activeBreak) {
@@ -1078,7 +1290,7 @@ app.get('/api/pulses/active/:employeeId', async (req, res) => {
             .where(eq(employees.id, employeeId))
             .limit(1);
         const hourlyRate = employeeRecord && employeeRecord.hourlyRate ? Number(employeeRecord.hourlyRate) : 40;
-        const pulseValue = (hourlyRate / 3600) * 30; // قيمة كل نبضة (30 ثانية)
+        const pulseValue = (hourlyRate / 3600) * 300; // قيمة كل نبضة (5 دقائق = 300 ثانية)
         const earnings = validPulseCount * pulseValue;
         res.json({
             success: true,
@@ -1109,7 +1321,7 @@ app.get('/api/pulses/period/:employeeId', async (req, res) => {
             .where(and(eq(pulses.employeeId, employeeId), eq(pulses.isWithinGeofence, true), gte(pulses.createdAt, startTs), lte(pulses.createdAt, endTs)));
         const validPulseCount = Number(result[0]?.count) || 0;
         const HOURLY_RATE = 40;
-        const pulseValue = (HOURLY_RATE / 3600) * 30;
+        const pulseValue = (HOURLY_RATE / 3600) * 300;
         const earnings = validPulseCount * pulseValue;
         res.json({
             success: true,
@@ -1330,7 +1542,21 @@ app.post('/api/attendance/requests/:requestId/review', async (req, res) => {
         const updated = extractFirstRow(updateResult);
         // If approved, create/update attendance record
         if (action === 'approve') {
-            const requestedDateTime = new Date(request.requestedTime);
+            // تحويل الوقت للتوقيت المصري (Africa/Cairo)
+            const requestedTimeString = new Date(request.requestedTime).toLocaleString('en-US', {
+                timeZone: 'Africa/Cairo',
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false
+            });
+            const requestedDateTime = new Date(requestedTimeString);
+            console.log(`[Attendance Request] Original time: ${request.requestedTime}`);
+            console.log(`[Attendance Request] Cairo time: ${requestedTimeString}`);
+            console.log(`[Attendance Request] Final DateTime: ${requestedDateTime}`);
             const requestDate = requestedDateTime.toISOString().split('T')[0];
             if (request.requestType === 'check-in') {
                 // Check if attendance already exists for this date
@@ -1881,7 +2107,7 @@ app.post('/api/advances/request', async (req, res) => {
         const validPulseCount = validPulsesResult[0]?.count || 0;
         // Calculate earnings (40 EGP/hour, pulse every 30 seconds = 0.333 EGP per pulse)
         const HOURLY_RATE = 40;
-        const pulseValue = (HOURLY_RATE / 3600) * 30;
+        const pulseValue = (HOURLY_RATE / 3600) * 300;
         const totalRealTimeEarnings = validPulseCount * pulseValue;
         // Eligible amount is 30% of real-time earnings
         const eligibleAmount = totalRealTimeEarnings * 0.3;
@@ -2233,7 +2459,7 @@ app.get('/api/reports/comprehensive/:employeeId', async (req, res) => {
         const validPulseCount = validPulsesResult[0]?.count || 0;
         // Calculate salary from pulses (40 EGP/hour, pulse every 30 seconds)
         const HOURLY_RATE = 40;
-        const pulseValue = (HOURLY_RATE / 3600) * 30; // 0.333 EGP per pulse
+        const pulseValue = (HOURLY_RATE / 3600) * 300; // 5-minute pulse
         const grossSalary = validPulseCount * pulseValue;
         // Get advances
         const advancesList = await db
@@ -2420,7 +2646,7 @@ app.get('/api/employees/:id/current-earnings', async (req, res) => {
         const validPulseCount = Number(validPulsesResult[0]?.count) || 0;
         // Calculate earnings (40 EGP/hour, pulse every 30 seconds = 0.333 EGP per pulse)
         const HOURLY_RATE = 40;
-        const pulseValue = (HOURLY_RATE / 3600) * 30;
+        const pulseValue = (HOURLY_RATE / 3600) * 300;
         const totalEarnings = validPulseCount * pulseValue;
         const maxAdvanceAmount = totalEarnings * 0.3;
         res.json({
@@ -2485,6 +2711,11 @@ app.post('/api/employees', async (req, res) => {
         const shiftStartTime = typeof req.body.shiftStartTime === 'string' ? req.body.shiftStartTime.trim() : undefined;
         const shiftEndTime = typeof req.body.shiftEndTime === 'string' ? req.body.shiftEndTime.trim() : undefined;
         const shiftType = typeof req.body.shiftType === 'string' ? req.body.shiftType.trim() : undefined;
+        // Get personal information from request
+        const address = typeof req.body.address === 'string' ? req.body.address.trim() : undefined;
+        const birthDate = typeof req.body.birthDate === 'string' || req.body.birthDate instanceof Date ? req.body.birthDate : undefined;
+        const email = typeof req.body.email === 'string' ? req.body.email.trim() : undefined;
+        const phone = typeof req.body.phone === 'string' ? req.body.phone.trim() : undefined;
         const insertData = {
             id,
             fullName,
@@ -2505,6 +2736,19 @@ app.post('/api/employees', async (req, res) => {
         }
         if (shiftType) {
             insertData.shiftType = shiftType;
+        }
+        // Add personal information if provided
+        if (address) {
+            insertData.address = address;
+        }
+        if (birthDate) {
+            insertData.birthDate = birthDate;
+        }
+        if (email) {
+            insertData.email = email;
+        }
+        if (phone) {
+            insertData.phone = phone;
         }
         const [newEmployee] = await db
             .insert(employees)
@@ -2590,6 +2834,19 @@ app.put('/api/employees/:id', async (req, res) => {
         if (req.body.shiftType !== undefined) {
             updateData.shiftType = req.body.shiftType ? String(req.body.shiftType).trim() : null;
         }
+        // Personal information fields
+        if (req.body.address !== undefined) {
+            updateData.address = req.body.address ? String(req.body.address).trim() : null;
+        }
+        if (req.body.birthDate !== undefined) {
+            updateData.birthDate = req.body.birthDate || null;
+        }
+        if (req.body.email !== undefined) {
+            updateData.email = req.body.email ? String(req.body.email).trim() : null;
+        }
+        if (req.body.phone !== undefined) {
+            updateData.phone = req.body.phone ? String(req.body.phone).trim() : null;
+        }
         if (Object.keys(updateData).length === 0) {
             return res.status(400).json({ error: 'No fields to update' });
         }
@@ -2606,6 +2863,10 @@ app.put('/api/employees/:id', async (req, res) => {
             branchId: employees.branchId,
             hourlyRate: employees.hourlyRate,
             active: employees.active,
+            address: employees.address,
+            birthDate: employees.birthDate,
+            email: employees.email,
+            phone: employees.phone,
             updatedAt: employees.updatedAt,
         });
         if (!updatedEmployee) {
@@ -3972,7 +4233,7 @@ app.get('/api/owner/payroll/summary', async (req, res) => {
                 : null;
             const effectiveHourlyRate = hourlyRateValue ?? 0;
             const hourlyPay = Math.round(attendanceInfo.totalWorkHours * effectiveHourlyRate * 100) / 100;
-            const pulseValue = effectiveHourlyRate > 0 ? (effectiveHourlyRate / 3600) * 30 : 0;
+            const pulseValue = effectiveHourlyRate > 0 ? (effectiveHourlyRate / 3600) * 300 : 0;
             const pulsePay = Math.round(pulsesCount * pulseValue * 100) / 100;
             const totalComputedPay = Math.round((hourlyPay + pulsePay) * 100) / 100;
             const netSalary = Math.round((totalComputedPay - employeeAdvances) * 100) / 100;
@@ -4400,8 +4661,8 @@ app.post('/api/payroll/calculate', async (req, res) => {
         }
         // Calculate total pay
         const totalPay = totalWorkHours * hourlyRate;
-        // Calculate pulse-based pay (40 EGP/hour, pulse every 30 seconds = 0.333 EGP per pulse)
-        const pulseValue = (hourlyRate / 3600) * 30;
+        // Calculate pulse-based pay (40 EGP/hour, pulse every 5 minutes = 300 seconds)
+        const pulseValue = (hourlyRate / 3600) * 300;
         const pulsePay = totalValidPulses * pulseValue;
         // Get advances for this period
         const advancesList = await db
@@ -4590,10 +4851,12 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c; // Distance in meters
 }
-// Receive and validate pulse from Flutter app
+// Receive and validate pulse from Flutter app (with BLV support)
 app.post('/api/pulses', async (req, res) => {
     try {
-        const { employee_id, wifi_bssid, latitude, longitude, timestamp } = req.body;
+        const { employee_id, wifi_bssid, latitude, longitude, timestamp, 
+        // BLV environmental data
+        wifi_count, wifi_signal_strength, battery_level, is_charging, accel_variance, sound_level, device_orientation, device_model, os_version } = req.body;
         if (!employee_id || latitude === undefined || longitude === undefined) {
             return res.status(400).json({
                 error: 'employee_id, latitude, and longitude are required'
@@ -4698,10 +4961,44 @@ app.post('/api/pulses', async (req, res) => {
             .from(breaks)
             .where(and(eq(breaks.employeeId, employee_id), eq(breaks.status, 'ACTIVE')))
             .limit(1);
+        // ========================================================================
+        // BLV (Behavioral Location Verification) - NEW SYSTEM
+        // ========================================================================
+        let blvResult = null;
+        let presenceScore = 1.0;
+        let trustScore = 1.0;
+        let verificationMethod = 'WiFi'; // Default fallback
+        let pulseStatus = 'IN';
+        // Try BLV verification if environmental data is provided
+        if (wifi_count !== undefined && accel_variance !== undefined && employee.branchId) {
+            try {
+                blvResult = await verifyPresence(employee_id, employee.branchId, {
+                    wifiCount: wifi_count || 0,
+                    wifiSignalStrength: wifi_signal_strength || -70,
+                    batteryLevel: battery_level || 0.5,
+                    isCharging: is_charging || false,
+                    accelVariance: accel_variance || 0,
+                    soundLevel: sound_level || 0,
+                    deviceOrientation: device_orientation,
+                    deviceModel: device_model || 'Unknown',
+                    osVersion: os_version || 'Unknown'
+                }, wifi_bssid);
+                presenceScore = blvResult.presenceScore;
+                trustScore = blvResult.trustScore;
+                verificationMethod = blvResult.verificationMethod;
+                pulseStatus = blvResult.status;
+                console.log(`[BLV] Employee ${employee_id}: presence=${presenceScore.toFixed(2)}, trust=${trustScore.toFixed(2)}, method=${verificationMethod}, status=${pulseStatus}`);
+            }
+            catch (blvError) {
+                console.error('[BLV] Verification failed, falling back to WiFi/GPS:', blvError);
+                // Continue with legacy verification
+            }
+        }
         // NEW LOGIC: Calculate overall validity
-        // Rule: (WiFi valid OR Location valid) = valid pulse for payment
+        // Rule: (WiFi valid OR Location valid OR BLV valid) = valid pulse for payment
         // Exception: During ACTIVE break, all pulses are valid regardless
-        const overallValid = activeBreak ? true : (wifiValid || geofenceValid);
+        const blvValid = blvResult ? blvResult.isValid : false;
+        const overallValid = activeBreak ? true : (wifiValid || geofenceValid || blvValid);
         // Check if employee has active attendance (checked in today)
         const today = new Date().toISOString().split('T')[0];
         const [todayAttendance] = await db
@@ -4735,7 +5032,7 @@ app.post('/api/pulses', async (req, res) => {
                 await sendNotification(employee_id, 'ABSENCE_ALERT', 'تحذير: خارج نطاق العمل', warningMessage);
             }
         }
-        // Store pulse in database
+        // Store pulse in database with BLV data
         const insertPulseResult = await db
             .insert(pulses)
             .values({
@@ -4744,12 +5041,30 @@ app.post('/api/pulses', async (req, res) => {
             latitude,
             longitude,
             bssidAddress: wifi_bssid,
-            isWithinGeofence: overallValid, // Changed to use overallValid (wifi AND geofence)
-            status: 'IN', // Default status
+            isWithinGeofence: overallValid,
+            status: pulseStatus, // Use BLV status
+            // BLV environmental data
+            wifiCount: wifi_count,
+            wifiSignalStrength: wifi_signal_strength,
+            batteryLevel: battery_level,
+            isCharging: is_charging,
+            accelVariance: accel_variance,
+            soundLevel: sound_level,
+            deviceOrientation: device_orientation,
+            presenceScore,
+            trustScore,
+            verificationMethod,
+            deviceModel: device_model,
+            osVersion: os_version,
+            rawEnvironmentData: blvResult ? JSON.stringify(blvResult.details) : null,
             createdAt: timestamp ? new Date(timestamp) : new Date(),
         })
-            .returning({ id: pulses.id, employeeId: pulses.employeeId, branchId: pulses.branchId, latitude: pulses.latitude, longitude: pulses.longitude, bssidAddress: pulses.bssidAddress, isWithinGeofence: pulses.isWithinGeofence, status: pulses.status, createdAt: pulses.createdAt });
+            .returning({ id: pulses.id, employeeId: pulses.employeeId, branchId: pulses.branchId, latitude: pulses.latitude, longitude: pulses.longitude, bssidAddress: pulses.bssidAddress, isWithinGeofence: pulses.isWithinGeofence, status: pulses.status, presenceScore: pulses.presenceScore, trustScore: pulses.trustScore, createdAt: pulses.createdAt });
         const pulse = extractFirstRow(insertPulseResult);
+        // Create auto-flags if BLV detected issues
+        if (blvResult && blvResult.flags && blvResult.flags.length > 0) {
+            await createAutoFlags(pulse.id, employee_id, blvResult.flags, blvResult);
+        }
         res.json({
             success: true,
             pulse: {
@@ -4760,6 +5075,12 @@ app.post('/api/pulses', async (req, res) => {
                 distance_meters: Math.round(distance * 100) / 100,
                 on_break: !!activeBreak,
                 checked_in: !!todayAttendance,
+                // BLV scores
+                presence_score: presenceScore,
+                trust_score: trustScore,
+                verification_method: verificationMethod,
+                status: pulseStatus,
+                flags: blvResult?.flags || []
             }
         });
     }
@@ -6267,6 +6588,194 @@ cron.schedule('*/10 * * * *', async () => {
     }
     catch (error) {
         console.error('[CRON] Error during auto checkout:', error);
+    }
+});
+// Weekly baseline calculation (every Sunday at 2 AM)
+cron.schedule('0 2 * * 0', async () => {
+    console.log('[CRON] Running weekly baseline update...');
+    try {
+        await updateAllBranchBaselines();
+        console.log('[CRON] Baseline update completed successfully');
+    }
+    catch (error) {
+        console.error('[CRON] Error during baseline update:', error);
+    }
+});
+// =============================================================================
+// BLV SYSTEM ENDPOINTS
+// =============================================================================
+// Get branch baseline data
+app.get('/api/baselines/:branchId', async (req, res) => {
+    try {
+        const { branchId } = req.params;
+        const baselines = await db
+            .select()
+            .from(branchEnvironmentBaselines)
+            .where(eq(branchEnvironmentBaselines.branchId, branchId))
+            .orderBy(branchEnvironmentBaselines.timeSlot);
+        res.json({ success: true, baselines });
+    }
+    catch (error) {
+        console.error('Error fetching baselines:', error);
+        res.status(500).json({ error: 'Failed to fetch baselines' });
+    }
+});
+// Manually trigger baseline calculation
+app.post('/api/baselines/calculate', async (req, res) => {
+    try {
+        const { branchId, daysBack } = req.body;
+        if (!branchId) {
+            return res.status(400).json({ error: 'branchId is required' });
+        }
+        await calculateAllBaselines(branchId, daysBack || 14);
+        res.json({
+            success: true,
+            message: `Baselines calculated for branch ${branchId} using last ${daysBack || 14} days`
+        });
+    }
+    catch (error) {
+        console.error('Error calculating baselines:', error);
+        res.status(500).json({ error: 'Failed to calculate baselines' });
+    }
+});
+// Get all unresolved flags (for managers)
+app.get('/api/flags', async (req, res) => {
+    try {
+        const { branchId, severity } = req.query;
+        let query = db
+            .select({
+            id: pulseFlags.id,
+            pulseId: pulseFlags.pulseId,
+            employeeId: pulseFlags.employeeId,
+            flagType: pulseFlags.flagType,
+            severity: pulseFlags.severity,
+            description: pulseFlags.description,
+            isResolved: pulseFlags.isResolved,
+            createdAt: pulseFlags.createdAt,
+            // Join employee info
+            employeeName: employees.fullName,
+            employeeRole: employees.role,
+        })
+            .from(pulseFlags)
+            .leftJoin(employees, eq(pulseFlags.employeeId, employees.id))
+            .where(eq(pulseFlags.isResolved, false))
+            .$dynamic();
+        if (branchId) {
+            query = query.where(eq(employees.branchId, branchId));
+        }
+        if (severity) {
+            query = query.where(eq(pulseFlags.severity, severity));
+        }
+        const flags = await query.orderBy(desc(pulseFlags.createdAt));
+        res.json({ success: true, flags });
+    }
+    catch (error) {
+        console.error('Error fetching flags:', error);
+        res.status(500).json({ error: 'Failed to fetch flags' });
+    }
+});
+// Get employee's flags
+app.get('/api/flags/employee/:employeeId', async (req, res) => {
+    try {
+        const { employeeId } = req.params;
+        const { includeResolved } = req.query;
+        let query = db
+            .select()
+            .from(pulseFlags)
+            .where(eq(pulseFlags.employeeId, employeeId))
+            .$dynamic();
+        if (!includeResolved || includeResolved === 'false') {
+            query = query.where(eq(pulseFlags.isResolved, false));
+        }
+        const flags = await query.orderBy(desc(pulseFlags.createdAt));
+        res.json({ success: true, flags });
+    }
+    catch (error) {
+        console.error('Error fetching employee flags:', error);
+        res.status(500).json({ error: 'Failed to fetch employee flags' });
+    }
+});
+// Resolve a flag
+app.post('/api/flags/:flagId/resolve', async (req, res) => {
+    try {
+        const { flagId } = req.params;
+        const { resolvedBy, resolution } = req.body;
+        if (!resolvedBy) {
+            return res.status(400).json({ error: 'resolvedBy (manager ID) is required' });
+        }
+        const updateResult = await db
+            .update(pulseFlags)
+            .set({
+            isResolved: true,
+            resolvedBy: resolvedBy,
+            resolvedAt: new Date(),
+            resolutionNote: resolution || 'Reviewed and approved',
+        })
+            .where(eq(pulseFlags.id, flagId))
+            .returning();
+        const updatedFlag = extractFirstRow(updateResult);
+        res.json({ success: true, flag: updatedFlag });
+    }
+    catch (error) {
+        console.error('Error resolving flag:', error);
+        res.status(500).json({ error: 'Failed to resolve flag' });
+    }
+});
+// Create manual override
+app.post('/api/overrides', async (req, res) => {
+    try {
+        const { pulseId, employeeId, managerId, reason, newStatus, newPresenceScore } = req.body;
+        if (!pulseId || !employeeId || !managerId || !reason) {
+            return res.status(400).json({
+                error: 'pulseId, employeeId, managerId, and reason are required'
+            });
+        }
+        // Get original pulse data
+        const originalPulse = await db
+            .select()
+            .from(pulses)
+            .where(eq(pulses.id, pulseId))
+            .limit(1);
+        if (!originalPulse || originalPulse.length === 0) {
+            return res.status(404).json({ error: 'Pulse not found' });
+        }
+        const pulse = extractFirstRow(originalPulse);
+        // Create override record
+        const insertResult = await db
+            .insert(manualOverrides)
+            .values({
+            employeeId: employeeId,
+            overrideBy: managerId,
+            overrideReason: reason,
+            originalPresenceScore: pulse.presenceScore,
+            originalTrustScore: pulse.trustScore,
+            originalStatus: pulse.status,
+            newPresenceScore: newPresenceScore || 1.0,
+            newTrustScore: 1.0, // Manager override = full trust
+            newStatus: newStatus || 'APPROVED',
+            timestamp: new Date(),
+        })
+            .returning();
+        const override = extractFirstRow(insertResult);
+        // Update pulse with override
+        await db
+            .update(pulses)
+            .set({
+            presenceScore: newPresenceScore || 1.0,
+            trustScore: 1.0,
+            status: newStatus || 'APPROVED',
+            verificationMethod: 'Manual',
+        })
+            .where(eq(pulses.id, pulseId));
+        res.json({
+            success: true,
+            override,
+            message: 'Manual override applied successfully'
+        });
+    }
+    catch (error) {
+        console.error('Error creating override:', error);
+        res.status(500).json({ error: 'Failed to create override' });
     }
 });
 // Listen on 0.0.0.0 to accept connections from all interfaces (including IPv4)

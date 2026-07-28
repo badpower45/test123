@@ -15,6 +15,8 @@ import '../services/auth_service.dart';
 import '../services/device_service.dart';
 import '../services/blv/blv_manager.dart';
 import '../services/supabase_auth_service.dart';
+import '../services/location_permission_service.dart';
+import 'permissions_onboarding_page.dart';
 import '../theme/app_colors.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -36,6 +38,20 @@ class _LoginScreenState extends State<LoginScreen> {
     super.initState();
     _employeeIdController = TextEditingController();
     _pinController = TextEditingController();
+    _checkPermissionsBeforeLogin();
+  }
+
+  Future<void> _checkPermissionsBeforeLogin() async {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final hasPermissions = await LocationPermissionService.hasAllRequiredPermissions();
+      if (!hasPermissions && mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => const PermissionsOnboardingPage(nextScreen: LoginScreen()),
+          ),
+        );
+      }
+    });
   }
 
   @override
@@ -331,7 +347,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   fit: BoxFit.contain,
                   errorBuilder: (context, error, stackTrace) {
                     return Text(
-                      'أولديزز وركرز',
+                      'recap attendee',
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.headlineMedium
                           ?.copyWith(

@@ -7,6 +7,7 @@ import '../database/offline_database.dart';
 import 'notification_service.dart';
 import 'offline_data_service.dart';
 import 'supabase_function_client.dart';
+import 'supabase_attendance_service.dart';
 
 class SyncService {
   static final SyncService instance = SyncService._init();
@@ -17,6 +18,8 @@ class SyncService {
   StreamSubscription<List<ConnectivityResult>>? _connSub;
   final NotificationService _notifications = NotificationService.instance;
   final OfflineDataService _offlineService = OfflineDataService();
+
+  bool get isSyncing => _isSyncing;
 
   // Start periodic sync (every 60 seconds)
   void startPeriodicSync() {
@@ -279,13 +282,45 @@ class SyncService {
     );
 
     String? newAttendanceId;
+    String? checkInIso;
     if (result != null) {
       // Edge function style
-      if (result['attendance'] is Map && result['attendance']['id'] is String) {
-        newAttendanceId = result['attendance']['id'] as String;
+      if (result['attendance'] is Map) {
+        final attendance = Map<String, dynamic>.from(result['attendance']);
+        final idValue = attendance['id']?.toString();
+        if (idValue != null && idValue.isNotEmpty) {
+          newAttendanceId = idValue;
+        }
+        final checkInValue = attendance['check_in_time']?.toString();
+        if (checkInValue != null && checkInValue.isNotEmpty) {
+          checkInIso = checkInValue;
+        }
       } else if (result['id'] is String) {
         // Direct fallback style
         newAttendanceId = result['id'] as String;
+      }
+    }
+
+    if (newAttendanceId == null || newAttendanceId.isEmpty) {
+      try {
+        final employeeId = checkin['employee_id']?.toString() ?? '';
+        if (employeeId.isNotEmpty) {
+          final active = await SupabaseAttendanceService.getActiveAttendance(
+            employeeId,
+          );
+          if (active != null) {
+            final activeId = active['id']?.toString();
+            if (activeId != null && activeId.isNotEmpty) {
+              newAttendanceId = activeId;
+              final activeCheckIn = active['check_in_time']?.toString();
+              if (activeCheckIn != null && activeCheckIn.isNotEmpty) {
+                checkInIso = activeCheckIn;
+              }
+            }
+          }
+        }
+      } catch (e) {
+        print('⚠️ Could not resolve active attendance after check-in sync: $e');
       }
     }
 
@@ -303,6 +338,24 @@ class SyncService {
       } catch (e) {
         print('⚠️ Backfill pulses failed: $e');
       }
+
+      try {
+        final employeeId = checkin['employee_id']?.toString() ?? '';
+        if (employeeId.isNotEmpty) {
+          await SupabaseAttendanceService.cacheActiveAttendanceOnDevice(
+            employeeId: employeeId,
+            attendanceId: newAttendanceId,
+            checkInIso: checkInIso,
+            isOfflineAttendance: false,
+          );
+        }
+      } catch (e) {
+        print('⚠️ Failed to refresh device attendance cache: $e');
+      }
+    }
+
+    if (newAttendanceId == null || newAttendanceId.isEmpty) {
+      throw Exception('Failed to resolve attendance ID after check-in sync');
     }
 
     print('✅ Check-in sync attempt completed');
@@ -314,12 +367,19 @@ class SyncService {
     );
     final note = checkout['notes'] as String?;
     final isForced = note?.toLowerCase().contains('auto') ?? false;
+    final rawAttendanceId = checkout['attendance_id']?.toString();
+    final attendanceId =
+        rawAttendanceId != null && _isUuid(rawAttendanceId)
+            ? rawAttendanceId
+            : null;
+
+    final double? workHours = checkout['work_hours'] != null
+        ? double.tryParse(checkout['work_hours'].toString())
+        : null;
 
     final payload = {
       'employee_id': checkout['employee_id'],
-      if (checkout['attendance_id'] != null)
-        'attendance_id':
-            checkout['attendance_id'], // ✅ Add attendance_id if available
+      if (attendanceId != null) 'attendance_id': attendanceId,
       'latitude': checkout['latitude'],
       'longitude': checkout['longitude'],
       if (checkout['wifi_bssid'] != null) 'wifi_bssid': checkout['wifi_bssid'],
@@ -329,8 +389,25 @@ class SyncService {
     };
 
     print('📤 Check-out payload: $payload');
-    await SupabaseFunctionClient.post('attendance-check-out', payload);
-    print('✅ Check-out synced successfully');
+    final response = await SupabaseFunctionClient.post('attendance-check-out', payload);
+    print('✅ Check-out synced successfully: $response');
+
+    String? resolvedId = attendanceId;
+    if (resolvedId == null && response != null) {
+      final returnedAtt = response['attendance'] as Map?;
+      if (returnedAtt != null) {
+        resolvedId = returnedAtt['id']?.toString();
+      }
+    }
+
+    if (resolvedId != null && workHours != null && _isUuid(resolvedId)) {
+      final employeeId = checkout['employee_id'].toString();
+      await SupabaseAttendanceService.syncCheckOutWorkHours(
+        attendanceId: resolvedId,
+        employeeId: employeeId,
+        workHours: workHours,
+      );
+    }
   }
 
   Future<void> _syncPulse(Map<String, dynamic> pulse) async {
@@ -439,5 +516,12 @@ class SyncService {
   // Manual sync trigger
   Future<Map<String, dynamic>> forceSyncNow() async {
     return await syncPendingData();
+  }
+
+  bool _isUuid(String value) {
+    return RegExp(
+      r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+      caseSensitive: false,
+    ).hasMatch(value);
   }
 }

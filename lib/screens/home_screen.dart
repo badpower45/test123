@@ -1413,7 +1413,7 @@ class _HomeScreenState extends State<HomeScreen> {
         scrolledUnderElevation: 0,
         surfaceTintColor: Colors.transparent,
         centerTitle: true,
-        title: const Text('أولديزز وركرز'),
+        title: const Text('recap attendee'),
         foregroundColor: AppColors.onPrimary,
         systemOverlayStyle: SystemUiOverlayStyle.light,
         actions: [

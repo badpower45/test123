@@ -91,7 +91,7 @@ class SupabaseAuthService {
       final response = await _withRetry(() async {
         return await _supabase
             .from('employees')
-            .select()
+            .select('*, branches(id, name)')
             .eq('id', employeeId)
             .eq('pin', pin)
             .eq('is_active', true)
@@ -116,7 +116,7 @@ class SupabaseAuthService {
       final response = await _withRetry(() async {
         return await _supabase
             .from('employees')
-            .select()
+            .select('*, branches(id, name)')
             .eq('id', employeeId)
             .maybeSingle();
       });
@@ -217,18 +217,26 @@ class SupabaseAuthService {
         continue;
       }
 
-      sanitized.add({
+      final item = <String, dynamic>{
         'id': id,
         'full_name': fullName,
         'pin': pin,
         'role': (row['role'] ?? 'staff').toString(),
         'branch': (row['branch'] ?? '').toString(),
         'hourly_rate': row['hourly_rate'] ?? 0,
+        'leave_allowance': row['leave_allowance'] ?? 100,
         'shift_start_time': row['shift_start_time'],
         'shift_end_time': row['shift_end_time'],
         'is_active': row['is_active'] ?? true,
         'updated_at': DateTime.now().toIso8601String(),
-      });
+      };
+      if (row['phone'] != null && row['phone'].toString().trim().isNotEmpty) {
+        item['phone'] = row['phone'].toString().trim();
+      }
+      if (row['email'] != null && row['email'].toString().trim().isNotEmpty) {
+        item['email'] = row['email'].toString().trim();
+      }
+      sanitized.add(item);
     }
 
     final failedIds = <String>[];

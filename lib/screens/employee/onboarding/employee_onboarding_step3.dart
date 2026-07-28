@@ -129,7 +129,7 @@ class _EmployeeOnboardingStep3State extends State<EmployeeOnboardingStep3>
                       ),
                       const SizedBox(height: 12),
                       const Text(
-                        'Oldies Workers',
+                        'recap attendee',
                         style: TextStyle(
                           fontSize: 36,
                           fontWeight: FontWeight.bold,

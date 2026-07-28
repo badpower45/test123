@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class PayrollService {
@@ -753,11 +755,14 @@ class PayrollService {
     required String? checkInTime,
     required String? checkOutTime,
     required double hourlyRate,
+    double? workHoursOverride,
   }) async {
     try {
       double totalHours = 0;
 
-      if (checkInTime != null && checkOutTime != null) {
+      if (workHoursOverride != null) {
+        totalHours = workHoursOverride;
+      } else if (checkInTime != null && checkOutTime != null) {
         final checkIn = _parseTime(checkInTime);
         final checkOut = _parseTime(checkOutTime);
         if (checkIn != null && checkOut != null) {
@@ -772,9 +777,9 @@ class PayrollService {
         'attendance_date': date.toIso8601String().split('T')[0],
         'check_in_time': checkInTime,
         'check_out_time': checkOutTime,
-        'total_hours': totalHours,
+        'total_hours': double.parse(totalHours.toStringAsFixed(2)),
         'hourly_rate': hourlyRate,
-        'daily_salary': dailySalary,
+        'daily_salary': double.parse(dailySalary.toStringAsFixed(2)),
         'is_absent': false,
       }, onConflict: 'employee_id,attendance_date');
 
@@ -813,57 +818,133 @@ class PayrollService {
   }) async {
     try {
       final supabase = Supabase.instance.client;
+      final startStr = startDate.toIso8601String().split('T')[0];
+      final endStr = endDate.toIso8601String().split('T')[0];
 
-      // Get all employees
+      // 1. Fetch all active employees
       final employeesResponse = await supabase
           .from('employees')
-          .select('id, fullName, branch, hourlyRate, isActive')
-          .eq('isActive', true);
+          .select('id, full_name, branch, hourly_rate, is_active')
+          .eq('is_active', true);
 
       final employees = List<Map<String, dynamic>>.from(employeesResponse);
+      final employeeIds = employees.map((e) => e['id'] as String).toList();
+
+      if (employeeIds.isEmpty) return [];
+
+      // 2. Fetch all required payroll records in parallel
+      final results = await Future.wait([
+        supabase
+            .from('daily_attendance_summary')
+            .select()
+            .inFilter('employee_id', employeeIds)
+            .gte('attendance_date', startStr)
+            .lte('attendance_date', endStr),
+        supabase
+            .from('attendance')
+            .select('employee_id, work_hours')
+            .inFilter('employee_id', employeeIds)
+            .gte('date', startStr)
+            .lte('date', endStr)
+            .eq('status', 'completed'),
+        supabase
+            .from('salary_advances')
+            .select('employee_id, amount, approved_at, created_at')
+            .inFilter('employee_id', employeeIds)
+            .eq('status', 'approved'),
+        supabase
+            .from('deductions')
+            .select('employee_id, amount, deduction_date')
+            .inFilter('employee_id', employeeIds)
+            .gte('deduction_date', startStr)
+            .lte('deduction_date', endStr),
+      ]);
+
+      final allSummaryRecords = List<Map<String, dynamic>>.from(results[0]);
+      final allRawAttendance = List<Map<String, dynamic>>.from(results[1]);
+      final allAdvances = List<Map<String, dynamic>>.from(results[2]);
+      final allDeductions = List<Map<String, dynamic>>.from(results[3]);
+
+      // 3. Group records by employee in memory
+      final summaryByEmployee = <String, List<Map<String, dynamic>>>{};
+      for (final r in allSummaryRecords) {
+        final empId = r['employee_id'] as String;
+        summaryByEmployee.putIfAbsent(empId, () => []).add(r);
+      }
+
+      final rawAttendanceByEmployee = <String, List<Map<String, dynamic>>>{};
+      for (final r in allRawAttendance) {
+        final empId = r['employee_id'] as String;
+        rawAttendanceByEmployee.putIfAbsent(empId, () => []).add(r);
+      }
+
+      final advancesByEmployee = <String, List<Map<String, dynamic>>>{};
+      for (final r in allAdvances) {
+        final empId = r['employee_id'] as String;
+        advancesByEmployee.putIfAbsent(empId, () => []).add(r);
+      }
+
+      final deductionsByEmployee = <String, List<Map<String, dynamic>>>{};
+      for (final r in allDeductions) {
+        final empId = r['employee_id'] as String;
+        deductionsByEmployee.putIfAbsent(empId, () => []).add(r);
+      }
+
       final List<Map<String, dynamic>> result = [];
 
       for (var employee in employees) {
         final employeeId = employee['id'] as String;
-        final employeeName = employee['fullName'] as String? ?? 'موظف';
+        final employeeName = employee['full_name'] as String? ?? 'موظف';
         final branch = employee['branch'] as String? ?? 'غير محدد';
-        final hourlyRate = (employee['hourlyRate'] as num?)?.toDouble() ?? 0;
+        final hourlyRate = (employee['hourly_rate'] as num?)?.toDouble() ?? 0;
 
-        // Get attendance data for this employee
-        final attendanceResponse = await supabase
-            .from('daily_attendance_summary')
-            .select()
-            .eq('employee_id', employeeId)
-            .gte('attendance_date', startDate.toIso8601String().split('T')[0])
-            .lte('attendance_date', endDate.toIso8601String().split('T')[0])
-            .order('attendance_date', ascending: true);
+        final summaryRecords = summaryByEmployee[employeeId] ?? [];
+        final rawAttendanceRecords = rawAttendanceByEmployee[employeeId] ?? [];
+        final employeeAdvances = advancesByEmployee[employeeId] ?? [];
+        final employeeDeductions = deductionsByEmployee[employeeId] ?? [];
 
-        final attendanceRecords = List<Map<String, dynamic>>.from(
-          attendanceResponse,
-        );
-
-        // Calculate summary
         double totalHours = 0;
         double totalAdvances = 0;
         double totalDeductions = 0;
         int absenceDays = 0;
 
-        for (var record in attendanceRecords) {
-          totalHours += (record['total_hours'] as num?)?.toDouble() ?? 0;
-          totalAdvances += (record['advance_amount'] as num?)?.toDouble() ?? 0;
-          totalDeductions +=
-              (record['deduction_amount'] as num?)?.toDouble() ?? 0;
-          if (record['is_absent'] == true) {
-            absenceDays++;
+        if (summaryRecords.isNotEmpty) {
+          for (var record in summaryRecords) {
+            totalHours += (record['total_hours'] as num?)?.toDouble() ?? 0;
+            totalAdvances += (record['advance_amount'] as num?)?.toDouble() ?? 0;
+            totalDeductions +=
+                (record['deduction_amount'] as num?)?.toDouble() ?? 0;
+            if (record['is_absent'] == true) {
+              absenceDays++;
+            }
+          }
+        } else {
+          // Fallback calculations using in-memory filtered collections
+          for (var record in rawAttendanceRecords) {
+            totalHours += (record['work_hours'] as num?)?.toDouble() ?? 0;
+          }
+
+          for (var row in employeeAdvances) {
+            final approvedAt = row['approved_at']?.toString();
+            final createdAt = row['created_at']?.toString();
+            final dateValue = (approvedAt != null && approvedAt.isNotEmpty)
+                ? approvedAt
+                : (createdAt ?? '');
+            if (dateValue.isEmpty) continue;
+            final dateOnly = dateValue.split('T')[0];
+            if (dateOnly.compareTo(startStr) >= 0 && dateOnly.compareTo(endStr) <= 0) {
+              totalAdvances += (row['amount'] as num?)?.toDouble() ?? 0.0;
+            }
+          }
+
+          for (var row in employeeDeductions) {
+            totalDeductions += (row['amount'] as num?)?.toDouble() ?? 0.0;
           }
         }
 
         final baseSalary = totalHours * hourlyRate;
-        final leaveAllowance = (absenceDays > 0 && absenceDays < 3)
-            ? 100.0
-            : 0.0;
-        final netSalary =
-            baseSalary + leaveAllowance - totalAdvances - totalDeductions;
+        final leaveAllowance = (absenceDays > 0 && absenceDays < 3) ? 100.0 : 0.0;
+        final netSalary = baseSalary + leaveAllowance - totalAdvances - totalDeductions;
 
         result.add({
           'employee_id': employeeId,
@@ -879,7 +960,7 @@ class PayrollService {
             'absence_days': absenceDays,
             'net_salary': netSalary,
           },
-          'attendance_records': attendanceRecords,
+          'attendance_records': summaryRecords,
         });
       }
 
@@ -899,74 +980,111 @@ class PayrollService {
   }) async {
     try {
       print('📊 Calculating leave allowance for employee: $employeeId');
+      if (employeeName != null) {
+        print('   Employee name: $employeeName');
+      }
 
       // Try to invoke the edge function
-      print('   Attempting to invoke calculate-leave-allowance function...');
-      final response = await _supabase.functions.invoke(
-        'calculate-leave-allowance',
-        body: {
-          'employee_id': employeeId,
-          if (employeeName != null) 'employee_name': employeeName,
-          if (month != null) 'month': month,
-          if (year != null) 'year': year,
-        },
-      );
+      print('   Invoking calculate-leave-allowance function...');
+      final response = await _supabase.functions
+          .invoke(
+            'calculate-leave-allowance',
+            body: {
+              'employee_id': employeeId,
+              if (employeeName != null) 'employee_name': employeeName,
+              if (month != null) 'month': month,
+              if (year != null) 'year': year,
+            },
+          )
+          .timeout(
+            const Duration(seconds: 10),
+            onTimeout: () {
+              print('   ⏱️ Function call timeout after 10 seconds');
+              throw TimeoutException('Function timeout');
+            },
+          );
 
       print('✅ Function invoked successfully');
       print('   Response type: ${response.runtimeType}');
-      print('   Response: $response');
+      print('   Raw response: $response');
 
       // Get the data from response
       dynamic responseData = response;
-      if (response is Map<String, dynamic>) {
-        responseData = response;
-      }
 
-      print('   Data type: ${responseData.runtimeType}');
-      print('   Data: $responseData');
+      print('   Parsed data type: ${responseData.runtimeType}');
 
       // Extract leave_allowance from response
       double allowance = 0.0;
 
       if (responseData is Map<String, dynamic>) {
         // Check for success flag
-        if (responseData['success'] == true ||
-            responseData['success'] == 'true') {
+        final success = responseData['success'];
+        print('   Success flag: $success');
+
+        if (success == true || success == 'true') {
           final allowanceValue = responseData['leave_allowance'];
+          print(
+            '   Leave allowance value: $allowanceValue (type: ${allowanceValue.runtimeType})',
+          );
+
           if (allowanceValue != null) {
             allowance = (allowanceValue as num).toDouble();
-            print('✅ Leave allowance extracted: $allowance');
+            print(
+              '✅ Leave allowance calculated: ${allowance.toStringAsFixed(2)} EGP',
+            );
+            print('   Leave count: ${responseData['leave_request_count']}');
+            print('   Period: ${responseData['period_name']}');
             return allowance;
           }
         } else {
           print('⚠️ Function returned success=false');
           print('   Error: ${responseData['error']}');
+          print('   Details: ${responseData['details']}');
+          // Don't return 0 yet - check if we can extract the value anyway
+          final allowanceValue = responseData['leave_allowance'];
+          if (allowanceValue != null &&
+              allowanceValue is num &&
+              allowanceValue > 0) {
+            allowance = (allowanceValue as num).toDouble();
+            print('   ✓ But found leave_allowance value: $allowance');
+            return allowance;
+          }
         }
       } else if (responseData is Map) {
         final allowanceValue = responseData['leave_allowance'];
         if (allowanceValue != null && allowanceValue is num) {
           allowance = allowanceValue.toDouble();
-          print('✅ Leave allowance extracted (untyped): $allowance');
+          print(
+            '✅ Leave allowance extracted from untyped map: ${allowance.toStringAsFixed(2)} EGP',
+          );
           return allowance;
         }
       }
 
-      print('⚠️ Could not extract leave_allowance, returning 0');
+      print('⚠️ Could not extract leave_allowance from response, returning 0');
+      return 0.0;
+    } on TimeoutException catch (e) {
+      print('❌ Function call timeout: $e');
       return 0.0;
     } on Exception catch (e) {
       print('❌ Exception calculating leave allowance: $e');
+      print('   Exception type: ${e.runtimeType}');
       print('   Stack: ${StackTrace.current}');
 
-      // Check if it's a function not found error
-      if (e.toString().contains('404') ||
-          e.toString().contains('not found') ||
-          e.toString().contains('Function not found')) {
-        print('⚠️ Edge function not found - using fallback (0.0)');
+      // Try to extract more details from the exception
+      final errorStr = e.toString();
+      print('   Error string: $errorStr');
+
+      if (errorStr.contains('404') ||
+          errorStr.contains('not found') ||
+          errorStr.contains('Function not found')) {
+        print('⚠️ Function not found or employee not found - using fallback');
       }
 
       return 0.0;
     } catch (e) {
       print('❌ Unexpected error calculating leave allowance: $e');
+      print('   Type: ${e.runtimeType}');
       return 0.0;
     }
   }

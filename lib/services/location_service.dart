@@ -1,4 +1,8 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:geolocator/geolocator.dart';
+import 'package:universal_io/io.dart';
+import 'location_permission_service.dart';
+import 'native_location_service.dart';
 
 class LocationService {
   // Cache للموقع الأخير لتسريع الاستجابة
@@ -14,32 +18,15 @@ class LocationService {
   }
 
   Future<bool> _ensurePermissionGranted() async {
-    LocationPermission permission = await Geolocator.checkPermission();
-    
-    // 🚀 PHASE 3: Request permission if denied
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-    }
-    
-    // Try to upgrade to "always" permission if we only have "whileInUse"
-    // This is important for background pulse tracking
-    if (permission == LocationPermission.whileInUse) {
-      print('[LocationService] ⚠️ Only whileInUse permission - requesting always for background tracking...');
-      // Request again to show "Allow all the time" option (Android 10+)
-      final upgraded = await Geolocator.requestPermission();
-      if (upgraded == LocationPermission.always) {
-        print('[LocationService] ✅ Upgraded to always permission!');
-        permission = upgraded;
-      } else {
-        print('[LocationService] ⚠️ User declined always permission - continuing with whileInUse');
-      }
-    }
-    
-    if (permission == LocationPermission.deniedForever ||
-        permission == LocationPermission.unableToDetermine ||
-        permission == LocationPermission.denied) {
+    final granted = await LocationPermissionService.ensureLocationPermissions(
+      requestAlways: true,
+    );
+
+    if (!granted) {
+      print('[LocationService] ❌ Location permission not granted');
       return false;
     }
+
     return true;
   }
 
@@ -66,6 +53,21 @@ class LocationService {
       }
     }
 
+    // 🚀 Try Native GPS first on Android (fast + reliable)
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        final nativePosition = await NativeLocationService.getCurrentLocation();
+        if (nativePosition != null) {
+          print('[LocationService] ✅ Native GPS position received');
+          _lastKnownPosition = nativePosition;
+          _lastPositionTime = DateTime.now();
+          return nativePosition;
+        }
+      } catch (e) {
+        print('[LocationService] ⚠️ Native GPS failed: $e');
+      }
+    }
+
     try {
       // محاولة الحصول على آخر موقع معروف أولاً (فوري) - أولوية للأجهزة القديمة
       print('[LocationService] 🔍 Trying last known position first...');
@@ -86,10 +88,29 @@ class LocationService {
       // إذا مفيش last known حديث، جيب موقع جديد بأقصى توافق
       print('[LocationService] 🔍 Getting fresh location...');
       
+      late final LocationSettings locationSettings;
+      if (Platform.isAndroid) {
+        locationSettings = AndroidSettings(
+          accuracy: LocationAccuracy.high,
+          forceLocationManager: true,
+          timeLimit: const Duration(seconds: 10),
+        );
+      } else if (Platform.isIOS) {
+        locationSettings = AppleSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: const Duration(seconds: 10),
+          allowBackgroundLocationUpdates: true,
+          showBackgroundLocationIndicator: true,
+        );
+      } else {
+        locationSettings = const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 10),
+        );
+      }
+
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium, // Changed from low to medium for better reliability
-        forceAndroidLocationManager: true, // Force Android Location Manager for old devices
-        timeLimit: const Duration(seconds: 10), // Increased timeout
+        locationSettings: locationSettings,
       ).timeout(
         const Duration(seconds: 15),
         onTimeout: () async {

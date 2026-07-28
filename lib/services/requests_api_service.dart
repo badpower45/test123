@@ -9,12 +9,15 @@ import '../models/attendance_request.dart';
 import '../models/break.dart';
 import '../models/leave_request.dart';
 import '../models/shift_status.dart';
+import 'manager_pending_requests_service.dart';
 import 'notification_service.dart';
 import 'supabase_attendance_service.dart';
 import 'supabase_function_client.dart';
 import 'supabase_requests_service.dart';
 
 class RequestsApiService {
+  static final Set<String> _breakRequestInFlight = <String>{};
+
   static Future<void> deleteRejectedBreaks(String employeeId) async {
     try {
       await SupabaseFunctionClient.post('employee-break', {
@@ -27,17 +30,11 @@ class RequestsApiService {
   }
 
   static Future<void> deleteRejectedLeaves(String employeeId) async {
-    final uri = Uri.parse(leaveRequestsDeleteRejectedEndpoint);
-    final response = await http.post(
-      uri,
-      headers: _jsonHeaders,
-      body: jsonEncode({'employee_id': employeeId}),
-    );
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      return;
+    try {
+      await SupabaseRequestsService.deleteRejectedLeaveRequests(employeeId);
+    } catch (error) {
+      throw Exception('تعذر حذف طلبات الإجازة المرفوضة: $error');
     }
-    final body = _decodeBody(response.body);
-    throw Exception(body['error'] ?? 'تعذر حذف طلبات الإجازة المرفوضة (${response.statusCode})');
   }
 
   static Future<void> deleteRejectedAdvances(String employeeId) async {
@@ -51,17 +48,24 @@ class RequestsApiService {
       return;
     }
     final body = _decodeBody(response.body);
-    throw Exception(body['error'] ?? 'تعذر حذف طلبات السلفة المرفوضة (${response.statusCode})');
+    throw Exception(
+      body['error'] ??
+          'تعذر حذف طلبات السلفة المرفوضة (${response.statusCode})',
+    );
   }
 
   static Future<ShiftStatus> fetchShiftStatus(String employeeId) async {
     if (apiBaseUrl.trim().isEmpty) {
       try {
-        final status = await SupabaseAttendanceService.getEmployeeStatus(employeeId);
+        final status = await SupabaseAttendanceService.getEmployeeStatus(
+          employeeId,
+        );
         final isCheckedIn = status['isCheckedIn'] == true;
         final attendance = status['attendance'] as Map<String, dynamic>?;
         final rawCheckIn = attendance?['check_in_time']?.toString();
-        final checkInAt = rawCheckIn != null ? DateTime.tryParse(rawCheckIn)?.toLocal() : null;
+        final checkInAt = rawCheckIn != null
+            ? DateTime.tryParse(rawCheckIn)?.toLocal()
+            : null;
 
         return ShiftStatus(
           hasActiveShift: isCheckedIn,
@@ -91,16 +95,21 @@ class RequestsApiService {
       return ShiftStatus.inactive();
     }
 
-    throw Exception(body['error'] ?? 'تعذر تحميل حالة المناوبة (${response.statusCode})');
+    throw Exception(
+      body['error'] ?? 'تعذر تحميل حالة المناوبة (${response.statusCode})',
+    );
   }
 
   /// ✅ Check if employee has active attendance (from Database)
   static Future<bool> checkActiveShift(String employeeId) async {
     try {
       // ✅ Primary check: Supabase Database (source of truth)
-      final activeAttendance = await SupabaseAttendanceService.getActiveAttendance(employeeId);
+      final activeAttendance =
+          await SupabaseAttendanceService.getActiveAttendance(employeeId);
       if (activeAttendance != null) {
-        print('✅ Active attendance found in database: ${activeAttendance['id']}');
+        print(
+          '✅ Active attendance found in database: ${activeAttendance['id']}',
+        );
 
         // Keep local cache in sync for resilience on flaky devices.
         try {
@@ -120,15 +129,14 @@ class RequestsApiService {
       final cachedId = prefs.getString('active_attendance_id');
       final cachedEmployeeId = prefs.getString('active_employee_id');
       final isCheckedIn = prefs.getBool('is_checked_in') ?? false;
-      final isOfflineAttendance = prefs.getBool('is_offline_attendance') ?? false;
+      final isOfflineAttendance =
+          prefs.getBool('is_offline_attendance') ?? false;
       final offlineCheckinTime = prefs.getString('offline_checkin_time');
 
       final cacheBelongsToEmployee =
           cachedEmployeeId == null || cachedEmployeeId == employeeId;
       final hasLocalActiveAttendance =
-          cacheBelongsToEmployee &&
-          cachedId != null &&
-          cachedId.isNotEmpty;
+          cacheBelongsToEmployee && cachedId != null && cachedId.isNotEmpty;
       final hasLocalCheckedInState =
           isCheckedIn && (isOfflineAttendance || offlineCheckinTime != null);
 
@@ -139,7 +147,9 @@ class RequestsApiService {
 
       // ✅ Fallback 2: fetch status via Supabase service
       try {
-        final status = await SupabaseAttendanceService.getEmployeeStatus(employeeId);
+        final status = await SupabaseAttendanceService.getEmployeeStatus(
+          employeeId,
+        );
         if (status['isCheckedIn'] == true) {
           print('✅ Active shift inferred from employee status');
           return true;
@@ -172,82 +182,85 @@ class RequestsApiService {
     required String employeeId,
     required DateTime startDate,
     required DateTime endDate,
+    String leaveType = 'normal',
     String? reason,
   }) async {
-    final response = await http.post(
-      Uri.parse(leaveRequestEndpoint),
-      headers: _jsonHeaders,
-      body: jsonEncode({
-        'employee_id': employeeId,
-        'start_date': startDate.toIso8601String(),
-        'end_date': endDate.toIso8601String(),
-        if (reason != null && reason.isNotEmpty) 'reason': reason,
-      }),
-    );
+    try {
+      final result = await SupabaseRequestsService.createLeaveRequest(
+        employeeId: employeeId,
+        leaveType: leaveType,
+        startDate: startDate,
+        endDate: endDate,
+        reason: (reason == null || reason.trim().isEmpty)
+            ? 'طلب إجازة'
+            : reason.trim(),
+      );
 
-    final body = _decodeBody(response.body);
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      final payload = body['leaveRequest'] ?? body['request'] ?? body;
-      return LeaveRequest.fromJson(Map<String, dynamic>.from(payload as Map));
+      if (result != null) {
+        return LeaveRequest.fromJson(result);
+      }
+      throw Exception('تعذر إرسال طلب الإجازة');
+    } catch (error) {
+      throw Exception('تعذر إرسال طلب الإجازة: $error');
     }
-    throw Exception(body['error'] ?? 'تعذر إرسال طلب الإجازة (${response.statusCode})');
   }
 
-  static Future<List<LeaveRequest>> fetchLeaveRequests(String employeeId) async {
-    final uri = Uri.parse(leaveRequestsEndpoint).replace(
-      queryParameters: {'employee_id': employeeId},
-    );
-    final response = await http.get(uri);
-    final body = _decodeBody(response.body);
-
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      final list = body['requests'] ?? body;
-      return (list as List)
-          .map((item) => LeaveRequest.fromJson(Map<String, dynamic>.from(item as Map)))
-          .toList();
+  static Future<List<LeaveRequest>> fetchLeaveRequests(
+    String employeeId,
+  ) async {
+    try {
+      final items = await SupabaseRequestsService.getLeaveRequests(
+        employeeId: employeeId,
+        includeAll: true,
+      );
+      return items.map((item) => LeaveRequest.fromJson(item)).toList();
+    } catch (error) {
+      throw Exception('تعذر تحميل طلبات الإجازة: $error');
     }
-    throw Exception(body['error'] ?? 'تعذر تحميل طلبات الإجازة (${response.statusCode})');
   }
 
   static Future<AdvanceRequest> submitAdvanceRequest({
     required String employeeId,
     required double amount,
   }) async {
-    final response = await http.post(
-      Uri.parse(advanceRequestEndpoint),
-      headers: _jsonHeaders,
-      body: jsonEncode({
-        'employee_id': employeeId,
-        'amount': amount,
-      }),
-    );
+    try {
+      // ✅ Use Supabase instead of old HTTP API
+      final result = await SupabaseRequestsService.createSalaryAdvanceRequest(
+        employeeId: employeeId,
+        amount: amount,
+        reason: 'طلب سلفة',
+      );
 
-    final body = _decodeBody(response.body);
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      final payload = body['advance'] ?? body['request'] ?? body;
-      return AdvanceRequest.fromJson(Map<String, dynamic>.from(payload as Map));
+      if (result != null) {
+        return AdvanceRequest.fromJson(result);
+      }
+      throw Exception('تعذر إرسال طلب السلفة');
+    } catch (e) {
+      throw Exception('فشل إرسال طلب السلفة: $e');
     }
-    throw Exception(body['error'] ?? 'تعذر إرسال طلب السلفة (${response.statusCode})');
   }
 
-  static Future<List<AdvanceRequest>> fetchAdvanceRequests(String employeeId) async {
-    final uri = Uri.parse(advancesEndpoint).replace(
-      queryParameters: {'employee_id': employeeId},
-    );
-    final response = await http.get(uri);
-    final body = _decodeBody(response.body);
-
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      final list = body['advances'] ?? body;
-      return (list as List)
-          .map((item) => AdvanceRequest.fromJson(Map<String, dynamic>.from(item as Map)))
-          .toList();
+  static Future<List<AdvanceRequest>> fetchAdvanceRequests(
+    String employeeId,
+  ) async {
+    try {
+      // ✅ Use Supabase directly instead of old HTTP API
+      final items = await SupabaseRequestsService.getSalaryAdvanceRequests(
+        employeeId: employeeId,
+        includeAll: true, // show all statuses for the employee
+      );
+      return items.map((item) => AdvanceRequest.fromJson(item)).toList();
+    } catch (e) {
+      throw Exception('تعذر تحميل طلبات السلفة: $e');
     }
-    throw Exception(body['error'] ?? 'تعذر تحميل طلبات السلفة (${response.statusCode})');
   }
 
-  static Future<Map<String, dynamic>> fetchCurrentEarnings(String employeeId) async {
-    final uri = Uri.parse('$currentEarningsEndpoint/$employeeId/current-earnings');
+  static Future<Map<String, dynamic>> fetchCurrentEarnings(
+    String employeeId,
+  ) async {
+    final uri = Uri.parse(
+      '$currentEarningsEndpoint/$employeeId/current-earnings',
+    );
     final response = await http.get(uri);
     final body = _decodeBody(response.body);
 
@@ -262,20 +275,44 @@ class RequestsApiService {
     required String employeeId,
     required int durationMinutes,
   }) async {
+    final normalizedEmployeeId = employeeId.trim();
+    if (normalizedEmployeeId.isEmpty) {
+      throw Exception('Employee ID is required');
+    }
+
+    if (_breakRequestInFlight.contains(normalizedEmployeeId)) {
+      print(
+        '⚠️ Duplicate break request prevented for employee: $normalizedEmployeeId',
+      );
+      return;
+    }
+
+    _breakRequestInFlight.add(normalizedEmployeeId);
+    print('🔵 [submitBreakRequest] Starting for employee: $normalizedEmployeeId');
+    print('🔵 [submitBreakRequest] Duration: $durationMinutes minutes');
+    
     try {
-      print('📤 Calling employee-break function: action=request, employee_id=$employeeId, duration=$durationMinutes');
-      final result = await SupabaseFunctionClient.post('employee-break', {
-        'action': 'request',
-        'employee_id': employeeId,
-        'duration_minutes': durationMinutes,
-      });
-      print('✅ Break request response: $result');
+      print(
+        '📤 [submitBreakRequest] Calling employee-break function...',
+      );
+      print('📤 [submitBreakRequest] Using direct Supabase insert (like salary advances)');
+      final result = await SupabaseRequestsService.createBreakRequest(
+        employeeId: normalizedEmployeeId,
+        durationMinutes: durationMinutes,
+      );
+      
+      print('✅ [submitBreakRequest] Break created successfully: ${result?['id']}');
     } on Exception catch (error) {
-      print('❌ Break request exception: $error');
+      print('❌ [submitBreakRequest] Exception caught: $error');
+      print('   Stack: ${error.toString()}');
       throw Exception('Failed to submit break request: $error');
     } catch (error) {
-      print('❌ Break request unknown error: $error');
+      print('❌ [submitBreakRequest] Unknown error: $error');
+      print('   Type: ${error.runtimeType}');
       throw Exception('Failed to submit break request: $error');
+    } finally {
+      print('🔵 [submitBreakRequest] Cleaning up');
+      _breakRequestInFlight.remove(normalizedEmployeeId);
     }
   }
 
@@ -285,15 +322,16 @@ class RequestsApiService {
         'action': 'start',
         'break_id': breakId,
       });
-      
+
       // ✅ Save local break state for background services
       try {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setBool('is_break_active', true);
         await prefs.setString('active_break_id', breakId);
         print('✅ Local break state saved: active');
-        await NotificationService.instance
-            .showBreakStatusNotification(started: true);
+        await NotificationService.instance.showBreakStatusNotification(
+          started: true,
+        );
       } catch (e) {
         print('⚠️ Failed to save local break state: $e');
       }
@@ -315,8 +353,9 @@ class RequestsApiService {
         await prefs.setBool('is_break_active', false);
         await prefs.remove('active_break_id');
         print('✅ Local break state cleared');
-        await NotificationService.instance
-            .showBreakStatusNotification(started: false);
+        await NotificationService.instance.showBreakStatusNotification(
+          started: false,
+        );
       } catch (e) {
         print('⚠️ Failed to clear local break state: $e');
       }
@@ -334,15 +373,51 @@ class RequestsApiService {
 
       final rawList = (response ?? {})['breaks'];
       if (rawList is List) {
-        return rawList
-            .map((item) => Break.fromJson(Map<String, dynamic>.from(item as Map)))
+        final breaks = rawList
+            .map(
+              (item) => Break.fromJson(Map<String, dynamic>.from(item as Map)),
+            )
             .toList();
+
+        final hasActiveBreak = breaks.any(
+          (item) => item.status == BreakStatus.active,
+        );
+        if (!hasActiveBreak) {
+          try {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setBool('is_break_active', false);
+            await prefs.remove('active_break_id');
+          } catch (_) {}
+        }
+
+        return breaks;
       }
       return const <Break>[];
     } on Exception catch (error) {
       throw Exception('Failed to fetch breaks: $error');
     }
   }
+
+  /// Fetch pending break requests assigned to a manager (for manager dashboard)
+  static Future<List<Break>> fetchManagerPendingBreaks({
+    required String managerId,
+  }) async {
+    try {
+      final pendingRequests =
+          await ManagerPendingRequestsService.getAllPendingRequests(managerId);
+
+      final breakRequestsData = pendingRequests['break_requests'];
+      if (breakRequestsData is List) {
+        return breakRequestsData
+            .map((item) => Break.fromJson(Map<String, dynamic>.from(item as Map)))
+            .toList();
+      }
+      return const <Break>[];
+    } catch (error) {
+      throw Exception('Failed to fetch manager pending breaks: $error');
+    }
+  }
+
 
   static Future<AttendanceRequest> submitAttendanceRequest({
     required String employeeId,
@@ -354,15 +429,17 @@ class RequestsApiService {
       // ✅ Use Supabase instead of old API
       final result = await SupabaseRequestsService.createAttendanceRequest(
         employeeId: employeeId,
-        requestType: requestType == AttendanceRequestType.checkIn ? 'check-in' : 'check-out',
+        requestType: requestType == AttendanceRequestType.checkIn
+            ? 'check-in'
+            : 'check-out',
         reason: reason,
         requestedTime: requestedTime,
       );
-      
+
       if (result == null) {
         throw Exception('تعذر إرسال طلب الحضور');
       }
-      
+
       return AttendanceRequest.fromJson(result);
     } catch (e) {
       throw Exception('فشل إرسال طلب الحضور: $e');
@@ -370,7 +447,8 @@ class RequestsApiService {
   }
 
   static Future<List<AttendanceRequest>> fetchAttendanceRequests(
-      String employeeId) async {
+    String employeeId,
+  ) async {
     try {
       // ✅ Use Supabase directly instead of old HTTP API
       final items = await SupabaseRequestsService.getAttendanceRequests(
@@ -388,13 +466,13 @@ class RequestsApiService {
     required String startDate,
     required String endDate,
   }) async {
-    final endpoint = comprehensiveReportEndpoint.replaceAll(':employeeId', employeeId);
-    final uri = Uri.parse(endpoint).replace(
-      queryParameters: {
-        'start_date': startDate,
-        'end_date': endDate,
-      },
+    final endpoint = comprehensiveReportEndpoint.replaceAll(
+      ':employeeId',
+      employeeId,
     );
+    final uri = Uri.parse(
+      endpoint,
+    ).replace(queryParameters: {'start_date': startDate, 'end_date': endDate});
 
     final response = await http.get(uri);
     final body = _decodeBody(response.body);
@@ -403,7 +481,9 @@ class RequestsApiService {
       return Map<String, dynamic>.from(body);
     }
 
-    throw Exception(body['error'] ?? 'تعذر تحميل التقرير الشامل (${response.statusCode})');
+    throw Exception(
+      body['error'] ?? 'تعذر تحميل التقرير الشامل (${response.statusCode})',
+    );
   }
 
   static Map<String, dynamic> _decodeBody(String rawBody) {
@@ -421,7 +501,9 @@ class RequestsApiService {
 
     return <String, dynamic>{'data': decoded};
   }
-  static Future<List<Map<String, dynamic>>> fetchOwnerPendingAttendanceRequests() async {
+
+  static Future<List<Map<String, dynamic>>>
+  fetchOwnerPendingAttendanceRequests() async {
     final uri = Uri.parse(ownerPendingAttendanceRequestsEndpoint).replace(
       queryParameters: {'owner_id': 'OWNER001'}, // TODO: Get from auth
     );
@@ -430,9 +512,13 @@ class RequestsApiService {
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
       final list = body['requests'] ?? body;
-      return (list as List).map((item) => Map<String, dynamic>.from(item as Map)).toList();
+      return (list as List)
+          .map((item) => Map<String, dynamic>.from(item as Map))
+          .toList();
     }
-    throw Exception(body['error'] ?? 'تعذر تحميل طلبات الحضور (${response.statusCode})');
+    throw Exception(
+      body['error'] ?? 'تعذر تحميل طلبات الحضور (${response.statusCode})',
+    );
   }
 
   static Future<void> approveOwnerAttendanceRequest(String requestId) async {
@@ -440,7 +526,9 @@ class RequestsApiService {
       throw Exception('معرف طلب الحضور مطلوب');
     }
 
-    final uri = Uri.parse(ownerAttendanceRequestApprovalEndpoint.replaceAll(':id', requestId));
+    final uri = Uri.parse(
+      ownerAttendanceRequestApprovalEndpoint.replaceAll(':id', requestId),
+    );
     final response = await http.post(
       uri,
       headers: _jsonHeaders,
@@ -455,7 +543,8 @@ class RequestsApiService {
     }
 
     final body = _decodeBody(response.body);
-    final errorMessage = body['error'] ?? body['message'] ?? 'تعذر الموافقة على الطلب';
+    final errorMessage =
+        body['error'] ?? body['message'] ?? 'تعذر الموافقة على الطلب';
     throw Exception('$errorMessage (${response.statusCode})');
   }
 }

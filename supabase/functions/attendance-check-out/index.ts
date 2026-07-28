@@ -469,21 +469,32 @@ serve(async (req: Request) => {
     }
 
     const checkInTime = new Date(activeAttendance.check_in_time);
-    const diffMs = eventTimestamp.getTime() - checkInTime.getTime();
+    let effectiveCheckOutTime = eventTimestamp;
+    const minimumCheckoutMs = checkInTime.getTime() + (60 * 1000); // +1 minute guardrail
+    if (!Number.isNaN(checkInTime.getTime()) && effectiveCheckOutTime.getTime() <= checkInTime.getTime()) {
+      effectiveCheckOutTime = new Date(minimumCheckoutMs);
+      console.warn('[attendance-check-out] Adjusted checkout time to be after check-in', {
+        checkIn: checkInTime.toISOString(),
+        requestedCheckout: eventTimestamp.toISOString(),
+        adjustedCheckout: effectiveCheckOutTime.toISOString(),
+      });
+    }
+
+    const diffMs = effectiveCheckOutTime.getTime() - checkInTime.getTime();
     const hours = diffMs > 0 ? diffMs / (1000 * 60 * 60) : 0;
     const workHours = Math.max(hours, 0);
     const formattedHours = workHours.toFixed(2);
 
     console.log('[attendance-check-out] 📊 Calculating work hours:', {
       checkInTime: checkInTime.toISOString(),
-      checkOutTime: eventTimestamp.toISOString(),
+      checkOutTime: effectiveCheckOutTime.toISOString(),
       diffMs,
       hours,
       formattedHours,
     });
 
     const updatePayload: JsonRecord = {
-      check_out_time: eventTimestamp.toISOString(),
+      check_out_time: effectiveCheckOutTime.toISOString(),
       status: 'completed',
       work_hours: formattedHours,
     };
@@ -524,7 +535,7 @@ serve(async (req: Request) => {
     if (updateError) {
       console.log('[attendance-check-out] ⚠️ First update attempt failed, trying minimal update...');
       const minimalPayload: JsonRecord = {
-        check_out_time: eventTimestamp.toISOString(),
+        check_out_time: effectiveCheckOutTime.toISOString(),
         status: 'completed',
         work_hours: formattedHours,
       };
@@ -574,7 +585,7 @@ serve(async (req: Request) => {
         attendance_id: updatedAttendance.id,
         employee_id: employeeId,
         branch_id: branch.id,
-        timestamp: eventTimestamp.toISOString(),
+        timestamp: effectiveCheckOutTime.toISOString(),
         is_within_geofence: isLocationValid,
         status: 'OUT',
       };
@@ -610,8 +621,9 @@ serve(async (req: Request) => {
         second: '2-digit',
         hour12: false,
       });
-      const attendanceDate = formatter.format(eventTimestamp);
-      const checkOutTimeStr = timeFormatter.format(eventTimestamp);
+      const attendanceDate = formatter.format(checkInTime);
+      const checkInTimeStr = timeFormatter.format(checkInTime);
+      const checkOutTimeStr = timeFormatter.format(effectiveCheckOutTime);
       const totalHoursNum = Number(formattedHours);
       const hourlyRate = Number((employee as any)?.hourly_rate ?? 0) || 0;
       const dailySalary = Number((totalHoursNum * hourlyRate).toFixed(2));
@@ -619,6 +631,7 @@ serve(async (req: Request) => {
       console.log(`[attendance-check-out] Updating daily_attendance_summary:`, {
         employee_id: employeeId,
         attendance_date: attendanceDate,
+        check_in_time: checkInTimeStr,
         check_out_time: checkOutTimeStr,
         total_hours: totalHoursNum,
         hourly_rate: hourlyRate,
@@ -628,6 +641,7 @@ serve(async (req: Request) => {
       const upsertPayload: JsonRecord = {
         employee_id: employeeId,
         attendance_date: attendanceDate,
+        check_in_time: checkInTimeStr,
         check_out_time: checkOutTimeStr,
         total_hours: totalHoursNum,
         hourly_rate: hourlyRate,
@@ -666,7 +680,7 @@ serve(async (req: Request) => {
       time_context: {
         stored_timezone: 'UTC',
         display_timezone: 'Africa/Cairo',
-        check_out_time_cairo: cairoDateTimeString(eventTimestamp),
+        check_out_time_cairo: cairoDateTimeString(effectiveCheckOutTime),
       },
       validation: {
         wifi: isWifiValid,

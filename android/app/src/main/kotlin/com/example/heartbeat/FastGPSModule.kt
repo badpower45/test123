@@ -33,7 +33,7 @@ class FastGPSModule(private val context: Context) {
     companion object {
         private const val TAG = "FastGPSModule"
         private const val CACHE_DURATION_MS = 60_000L // 1 minute
-        private const val TIMEOUT_MS = 5_000L // 5 seconds
+        private const val TIMEOUT_MS = 15_000L // 15 seconds
     }
     
     /**
@@ -200,10 +200,15 @@ class FastGPSModule(private val context: Context) {
                 }
                 
                 if (bestLocation != null) {
+                    val age = System.currentTimeMillis() - bestLocation.time
+                    if (age > 7 * 60 * 1000L) {
+                        Log.w(TAG, "⚠️ Last known location is too old (${age / 1000}s), ignoring")
+                        callback(null)
+                        return
+                    }
+                    
                     cachedLocation = bestLocation
                     cacheTimestamp = System.currentTimeMillis()
-                    
-                    val age = System.currentTimeMillis() - bestLocation.time
                     Log.d(TAG, "✅ Last known location (${age / 1000}s old, ${bestLocation.accuracy}m accuracy)")
                 }
                 

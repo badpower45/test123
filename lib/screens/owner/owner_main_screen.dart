@@ -83,6 +83,12 @@ class _OwnerMainScreenState extends State<OwnerMainScreen> {
               setState(() {}); // Trigger refresh of current tab
             },
           ),
+          if (_currentIndex == 1)
+            IconButton(
+              icon: const Icon(Icons.gavel),
+              tooltip: 'قواعد الحضور والخصم',
+              onPressed: () => _showAttendanceRulesDialog(context),
+            ),
           IconButton(
             icon: const Icon(Icons.logout),
             tooltip: 'تسجيل الخروج',
@@ -189,6 +195,15 @@ class _OwnerMainScreenState extends State<OwnerMainScreen> {
     if (result == true) {
       _branchesTabKey.currentState?._refresh();
     }
+  }
+
+  void _showAttendanceRulesDialog(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => AttendanceRulesSheet(ownerId: widget.ownerId),
+    );
   }
 }
 
@@ -519,6 +534,7 @@ class _OwnerEmployeesTabState extends State<_OwnerEmployeesTab> {
         shiftEndTime: result['shiftEndTime'],
         shiftType: result['shiftType'],
         branchId: result['branchId'],
+        isSuperEmployee: result['isSuperEmployee'],
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -758,6 +774,13 @@ class _OwnerBranchesTabState extends State<_OwnerBranchesTab> {
   void initState() {
     super.initState();
     _branchesFuture = _loadBranches();
+    BranchApiService.branchesVersion.addListener(_onBranchesUpdated);
+  }
+
+  void _onBranchesUpdated() {
+    setState(() {
+      _branchesFuture = _loadBranches();
+    });
   }
 
   Future<List<Map<String, dynamic>>> _loadBranches() async {
@@ -773,6 +796,12 @@ class _OwnerBranchesTabState extends State<_OwnerBranchesTab> {
       _branchesFuture = _loadBranches();
     });
     await _branchesFuture;
+  }
+
+  @override
+  void dispose() {
+    BranchApiService.branchesVersion.removeListener(_onBranchesUpdated);
+    super.dispose();
   }
 
   String _formatCurrency(dynamic value) {
@@ -1880,6 +1909,7 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
   String? _selectedBranchId; // Changed to store UUID
   String? _selectedBranchName; // Optional: store name
   bool _isManager = false; // NEW: Is this employee a manager?
+  bool _isSuperEmployee = false;
 
   // Shift times
   TimeOfDay? _shiftStartTime;
@@ -1890,6 +1920,13 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
   void initState() {
     super.initState();
     _branchesFuture = BranchApiService.getBranches();
+    BranchApiService.branchesVersion.addListener(_onBranchesUpdated);
+  }
+
+  void _onBranchesUpdated() {
+    setState(() {
+      _branchesFuture = BranchApiService.getBranches();
+    });
   }
 
   @override
@@ -1899,6 +1936,7 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
     _pinController.dispose();
     _hourlyRateController.dispose();
     _leaveAllowanceController.dispose();
+    BranchApiService.branchesVersion.removeListener(_onBranchesUpdated);
     super.dispose();
   }
 
@@ -1935,6 +1973,7 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
         shiftEndTime: shiftEnd,
         shiftType: _shiftType,
         role: _isManager ? 'manager' : 'staff',
+        isSuperEmployee: _isSuperEmployee,
       );
 
       // If marked as manager and branch selected, assign as branch manager
@@ -1969,6 +2008,7 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
       );
     }
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -2112,6 +2152,21 @@ class _AddEmployeeSheetState extends State<_AddEmployeeSheet> {
                 onChanged: (value) {
                   setState(() {
                     _isManager = value ?? false;
+                  });
+                },
+                activeColor: AppColors.primaryOrange,
+              ),
+              const SizedBox(height: 16),
+
+              CheckboxListTile(
+                title: const Text('سوبر موظف (البصمة من أي فرع)'),
+                subtitle: const Text(
+                  'تنزيل بيانات جميع الفروع والسماح له بالبصمة من أي فرع متاح',
+                ),
+                value: _isSuperEmployee,
+                onChanged: (value) {
+                  setState(() {
+                    _isSuperEmployee = value ?? false;
                   });
                 },
                 activeColor: AppColors.primaryOrange,
@@ -3223,6 +3278,7 @@ class _EditEmployeeDialogState extends State<_EditEmployeeDialog> {
   late String _shiftType;
   late Future<List<Map<String, dynamic>>> _branchesFuture;
   String? _selectedBranchId;
+  bool _isSuperEmployee = false;
 
   @override
   void initState() {
@@ -3231,8 +3287,16 @@ class _EditEmployeeDialogState extends State<_EditEmployeeDialog> {
     _shiftEnd = widget.initialShiftEnd;
     _shiftType = widget.initialShiftType;
     _branchesFuture = BranchApiService.getBranches();
+    BranchApiService.branchesVersion.addListener(_onBranchesUpdated);
     // Try to get current branchId - could be stored as 'branchId' or need to lookup by name
     _selectedBranchId = widget.employee['branchId']?.toString();
+    _isSuperEmployee = widget.employee['isSuperEmployee'] as bool? ?? widget.employee['is_super_employee'] as bool? ?? false;
+  }
+
+  void _onBranchesUpdated() {
+    setState(() {
+      _branchesFuture = BranchApiService.getBranches();
+    });
   }
 
   String _formatTime(TimeOfDay? time) {
@@ -3370,6 +3434,15 @@ class _EditEmployeeDialogState extends State<_EditEmployeeDialog> {
               icon: const Icon(Icons.access_time),
               label: Text('نهاية الشيفت: ${_formatTime(_shiftEnd)}'),
             ),
+            const SizedBox(height: 16),
+            SwitchListTile(
+              title: const Text('سوبر موظف (البصمة من أي فرع)'),
+              value: _isSuperEmployee,
+              activeColor: AppColors.primaryOrange,
+              onChanged: (value) {
+                setState(() => _isSuperEmployee = value);
+              },
+            ),
           ],
         ),
       ),
@@ -3419,6 +3492,7 @@ class _EditEmployeeDialogState extends State<_EditEmployeeDialog> {
                   : null,
               'shiftEndTime': _shiftEnd != null ? _formatTime(_shiftEnd) : null,
               'shiftType': _shiftType,
+              'isSuperEmployee': _isSuperEmployee,
             });
           },
           child: const Text('حفظ'),
@@ -3468,6 +3542,378 @@ class _PresenceSummaryCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+// Sheet to display existing rules and allow adding/editing
+class AttendanceRulesSheet extends StatefulWidget {
+  final String ownerId;
+  const AttendanceRulesSheet({required this.ownerId, super.key});
+
+  @override
+  State<AttendanceRulesSheet> createState() => AttendanceRulesSheetState();
+}
+
+class AttendanceRulesSheetState extends State<AttendanceRulesSheet> {
+  late Future<List<Map<String, dynamic>>> _rulesFuture;
+  List<Map<String, dynamic>> _branches = [];
+  bool _isLoadingBranches = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _rulesFuture = SupabaseOwnerService.getAttendanceRules();
+    _loadBranches();
+  }
+
+  Future<void> _loadBranches() async {
+    try {
+      final branchesList = await BranchApiService.getBranches();
+      setState(() {
+        _branches = branchesList;
+        _isLoadingBranches = false;
+      });
+    } catch (e) {
+      print('Load branches error: $e');
+      setState(() => _isLoadingBranches = false);
+    }
+  }
+
+  void _refreshRules() {
+    setState(() {
+      _rulesFuture = SupabaseOwnerService.getAttendanceRules();
+    });
+  }
+
+  void _editRule(Map<String, dynamic>? rule) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => _RuleEditDialog(rule: rule, branches: _branches),
+    );
+    if (result == true) {
+      _refreshRules();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + 16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'قواعد الحضور والخصم للموظفين',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+          const Divider(),
+          const SizedBox(height: 8),
+          FutureBuilder<List<Map<String, dynamic>>>(
+            future: _rulesFuture,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: Padding(
+                  padding: EdgeInsets.all(24.0),
+                  child: CircularProgressIndicator(),
+                ));
+              }
+              if (snapshot.hasError) {
+                return Text('خطأ في تحميل القواعد: ${snapshot.error}');
+              }
+              final rules = snapshot.data ?? [];
+              if (rules.isEmpty) {
+                return const Center(child: Text('لا توجد قواعد مخصصة حالياً'));
+              }
+              return Container(
+                constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.4),
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: rules.length,
+                  itemBuilder: (context, index) {
+                    final rule = rules[index];
+                    final branchName = rule['branches'] != null ? rule['branches']['name']?.toString() ?? 'فرع' : 'العام / الافتراضي';
+                    final grace = rule['grace_period_minutes'] ?? 15;
+                    final deductionType = rule['deduction_type'] ?? 'hourly_pro_rata';
+                    
+                    String details = 'فترة السماح: $grace دقيقة';
+                    if (deductionType == 'hourly_pro_rata') {
+                      details += ' • خصم بالساعة (معامل ${rule['deduction_multiplier']})';
+                    } else if (deductionType == 'fixed_per_incident') {
+                      details += ' • خصم ثابت ${rule['fixed_deduction_amount']} ج.م لكل تأخير';
+                    } else {
+                      final List tiers = rule['tiered_rules'] is List ? rule['tiered_rules'] as List : [];
+                      details += ' • خصم شرائح (${tiers.length} شرائح)';
+                    }
+
+                    return Card(
+                      margin: const EdgeInsets.symmetric(vertical: 4),
+                      child: ListTile(
+                        title: Text(
+                          branchName,
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        subtitle: Text(details),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.edit, color: AppColors.primaryOrange),
+                          onPressed: () => _editRule(rule),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 16),
+          ElevatedButton.icon(
+            onPressed: _isLoadingBranches ? null : () => _editRule(null),
+            icon: const Icon(Icons.add, color: Colors.white),
+            label: const Text('إضافة قاعدة مخصصة لفرع', style: TextStyle(color: Colors.white)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryOrange,
+              padding: const EdgeInsets.symmetric(vertical: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// Dialog to edit or add a single rule
+class _RuleEditDialog extends StatefulWidget {
+  final Map<String, dynamic>? rule;
+  final List<Map<String, dynamic>> branches;
+
+  const _RuleEditDialog({this.rule, required this.branches});
+
+  @override
+  State<_RuleEditDialog> createState() => _RuleEditDialogState();
+}
+
+class _RuleEditDialogState extends State<_RuleEditDialog> {
+  String? _selectedBranchId;
+  final _graceController = TextEditingController(text: '15');
+  final _multiplierController = TextEditingController(text: '1.0');
+  final _fixedAmountController = TextEditingController(text: '0.0');
+  String _deductionType = 'hourly_pro_rata';
+  List<Map<String, dynamic>> _tieredRules = [];
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.rule != null) {
+      _selectedBranchId = widget.rule!['branch_id']?.toString();
+      _graceController.text = (widget.rule!['grace_period_minutes'] ?? 15).toString();
+      _multiplierController.text = (widget.rule!['deduction_multiplier'] ?? 1.0).toString();
+      _fixedAmountController.text = (widget.rule!['fixed_deduction_amount'] ?? 0.0).toString();
+      _deductionType = widget.rule!['deduction_type'] ?? 'hourly_pro_rata';
+      final rawTiers = widget.rule!['tiered_rules'];
+      if (rawTiers is List) {
+        _tieredRules = List<Map<String, dynamic>>.from(
+          rawTiers.map((e) => Map<String, dynamic>.from(e as Map)),
+        );
+      }
+    }
+  }
+
+  void _addTier() {
+    setState(() {
+      _tieredRules.add({
+        'min_minutes': 16,
+        'max_minutes': 30,
+        'deduction_value': 0.5,
+      });
+    });
+  }
+
+  void _removeTier(int index) {
+    setState(() {
+      _tieredRules.removeAt(index);
+    });
+  }
+
+  Future<void> _save() async {
+    final grace = int.tryParse(_graceController.text.trim()) ?? 15;
+    final multiplier = double.tryParse(_multiplierController.text.trim()) ?? 1.0;
+    final fixedAmount = double.tryParse(_fixedAmountController.text.trim()) ?? 0.0;
+
+    setState(() => _isSaving = true);
+    try {
+      await SupabaseOwnerService.saveAttendanceRule(
+        ruleId: widget.rule?['id']?.toString(),
+        branchId: _selectedBranchId,
+        gracePeriodMinutes: grace,
+        deductionMultiplier: multiplier,
+        deductionType: _deductionType,
+        fixedDeductionAmount: fixedAmount,
+        tieredRules: _tieredRules,
+      );
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      setState(() => _isSaving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('فشل الحفظ: $e')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.rule == null ? 'إضافة قاعدة حضور' : 'تعديل قاعدة حضور'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (widget.rule == null) ...[
+              DropdownButtonFormField<String>(
+                value: _selectedBranchId,
+                decoration: const InputDecoration(
+                  labelText: 'الفرع المستهدف',
+                  border: OutlineInputBorder(),
+                ),
+                items: [
+                  const DropdownMenuItem(value: null, child: Text('العام / الافتراضي')),
+                  ...widget.branches.map((b) {
+                    return DropdownMenuItem(
+                      value: b['id']?.toString(),
+                      child: Text(b['name']?.toString() ?? ''),
+                    );
+                  }),
+                ],
+                onChanged: (val) => setState(() => _selectedBranchId = val),
+              ),
+              const SizedBox(height: 12),
+            ],
+            TextField(
+              controller: _graceController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'فترة السماح بالدقائق (مثال: 15)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value: _deductionType,
+              decoration: const InputDecoration(
+                labelText: 'طريقة احتساب خصم التأخير',
+                border: OutlineInputBorder(),
+              ),
+              items: const [
+                DropdownMenuItem(value: 'hourly_pro_rata', child: Text('نسبة من قيمة الساعة')),
+                DropdownMenuItem(value: 'fixed_per_incident', child: Text('مبلغ ثابت لكل تأخير')),
+                DropdownMenuItem(value: 'tiered', child: Text('شرائح دقائق التأخير')),
+              ],
+              onChanged: (val) => setState(() => _deductionType = val ?? 'hourly_pro_rata'),
+            ),
+            const SizedBox(height: 12),
+            if (_deductionType == 'hourly_pro_rata')
+              TextField(
+                controller: _multiplierController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  labelText: 'معامل الخصم للمنتسب (مثال: 1.0 للخصم العادي، 1.5 للخصم بـ 1.5)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            if (_deductionType == 'fixed_per_incident')
+              TextField(
+                controller: _fixedAmountController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  labelText: 'مبلغ الخصم الثابت لكل عملية تأخير (ج.م)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            if (_deductionType == 'tiered') ...[
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('الشرائح المخصصة (ساعات خصم):', style: TextStyle(fontWeight: FontWeight.bold)),
+                  TextButton.icon(
+                    onPressed: _addTier,
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('إضافة شريحة'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              ...List.generate(_tieredRules.length, (index) {
+                final tier = _tieredRules[index];
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4.0),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          initialValue: (tier['min_minutes'] ?? tier['min'] ?? 0).toString(),
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(hintText: 'من دقائق'),
+                          onChanged: (val) => tier['min_minutes'] = int.tryParse(val) ?? 0,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextFormField(
+                          initialValue: (tier['max_minutes'] ?? tier['max'] ?? 0).toString(),
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(hintText: 'إلى دقائق'),
+                          onChanged: (val) => tier['max_minutes'] = int.tryParse(val) ?? 0,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextFormField(
+                          initialValue: (tier['deduction_value'] ?? tier['deduction_value'] ?? 0.0).toString(),
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: const InputDecoration(hintText: 'ساعات خصم'),
+                          onChanged: (val) => tier['deduction_value'] = double.tryParse(val) ?? 0.0,
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.delete, color: Colors.red),
+                        onPressed: () => _removeTier(index),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('إلغاء'),
+        ),
+        ElevatedButton(
+          onPressed: _isSaving ? null : _save,
+          style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryOrange),
+          child: _isSaving
+              ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+              : const Text('حفظ', style: TextStyle(color: Colors.white)),
+        ),
+      ],
     );
   }
 }

@@ -6,6 +6,7 @@ import '../database/offline_database.dart';
 import 'native_location_service.dart';
 import 'pulse_deduplication_service.dart';
 import 'wifi_service.dart';
+import 'pulse_tracking_service.dart';
 
 /// 🎧 Background Pulse Listener
 ///
@@ -44,9 +45,24 @@ class BackgroundPulseListener {
     switch (call.method) {
       case 'onPulseRecorded':
         return await _onPulseRecorded(call.arguments);
+      case 'onAutoCheckoutTriggered':
+        return await _onAutoCheckoutTriggered(call.arguments);
       default:
         print('⚠️ Unknown method: ${call.method}');
         return null;
+    }
+  }
+
+  /// Handle auto checkout event from Native Service
+  static Future<void> _onAutoCheckoutTriggered(dynamic arguments) async {
+    try {
+      final String reason = arguments as String? ?? 'SHIFT_END_AUTO_CHECKOUT';
+      print('🚨 Auto checkout event received from native service: $reason');
+      
+      // Notify PulseTrackingService to do auto-checkout handling
+      PulseTrackingService().triggerAutoCheckout(reason, savedOffline: true);
+    } catch (e) {
+      print('❌ Error handling auto checkout from native: $e');
     }
   }
 
@@ -77,6 +93,42 @@ class BackgroundPulseListener {
         '📋 Pulse details: Employee=$employeeId, Count=$pulseCount, Time=$timestamp',
       );
 
+      double? _toDouble(dynamic value) {
+        if (value is num) {
+          return value.toDouble();
+        }
+        if (value is String && value.isNotEmpty) {
+          return double.tryParse(value);
+        }
+        return null;
+      }
+
+      bool? _toBool(dynamic value) {
+        if (value is bool) return value;
+        if (value is num) return value != 0;
+        if (value is String) {
+          final normalized = value.toLowerCase();
+          if (normalized == 'true' || normalized == '1') {
+            return true;
+          }
+          if (normalized == 'false' || normalized == '0') {
+            return false;
+          }
+        }
+        return null;
+      }
+
+      // Prefer native-provided location payload (if available)
+      final nativeLatitude = _toDouble(data['latitude']);
+      final nativeLongitude = _toDouble(data['longitude']);
+      final nativeDistance = _toDouble(data['distance']);
+      final nativeInside = _toBool(data['inside_geofence']);
+
+      double? pulseLatitude = nativeLatitude;
+      double? pulseLongitude = nativeLongitude;
+      double distance = nativeDistance ?? 0.0;
+      bool insideGeofence = nativeInside ?? false;
+
       // Get branch data from cache to validate geofence
       Map<String, dynamic>? branchData;
       try {
@@ -92,20 +144,22 @@ class BackgroundPulseListener {
         print('⚠️ Could not load branch data: $e');
       }
 
-      // Get current location using Native GPS (ultra fast!)
-      final position = await NativeLocationService.getCurrentLocation();
-
-      if (position == null) {
-        print(
-          '⚠️ Could not get location for pulse - saving with null coordinates',
-        );
+      // Get current location using Native GPS (ultra fast!) if not provided
+      if (pulseLatitude == null || pulseLongitude == null) {
+        final position = await NativeLocationService.getCurrentLocation();
+        if (position != null) {
+          pulseLatitude = position.latitude;
+          pulseLongitude = position.longitude;
+        } else {
+          print(
+            '⚠️ Could not get location for pulse - saving with null coordinates',
+          );
+        }
       }
 
       // Calculate geofence validation
-      bool insideGeofence = false;
-      double distance = 0.0;
-      String? wifiBssid;
       bool validatedByWifi = false;
+      String? wifiBssid;
       final branchId = branchData?['id'] ?? branchData?['branch_id'];
 
       if (branchData != null) {
@@ -143,16 +197,19 @@ class BackgroundPulseListener {
 
         // If WiFi didn't validate, check GPS
         if (!validatedByWifi &&
-            position != null &&
+            pulseLatitude != null &&
+            pulseLongitude != null &&
             centerLat != null &&
             centerLng != null) {
-          distance = _calculateDistance(
-            centerLat,
-            centerLng,
-            position.latitude,
-            position.longitude,
-          );
-          insideGeofence = distance <= radius;
+          if (nativeDistance == null) {
+            distance = _calculateDistance(
+              centerLat,
+              centerLng,
+              pulseLatitude,
+              pulseLongitude,
+            );
+          }
+          insideGeofence = nativeInside ?? (distance <= radius);
           print(
             '📏 Distance: ${distance.toStringAsFixed(1)}m, Inside: $insideGeofence',
           );
@@ -165,6 +222,7 @@ class BackgroundPulseListener {
         timestamp: timestamp,
       )) {
         print('⏭️ Skipping duplicate native pulse: $employeeId @ $timestamp');
+        _onPulseRecordedCallback?.call();
         return;
       }
 
@@ -172,20 +230,21 @@ class BackgroundPulseListener {
       final db = OfflineDatabase.instance;
       final validationMethod = validatedByWifi
           ? 'WIFI'
-          : (position != null ? 'LOCATION' : 'UNKNOWN');
+          : (pulseLatitude != null && pulseLongitude != null ? 'LOCATION' : 'UNKNOWN');
       await db.insertPendingPulse(
         employeeId: employeeId,
         attendanceId: attendanceId,
         branchId: branchId?.toString(),
         timestamp: timestamp,
-        latitude: position?.latitude,
-        longitude: position?.longitude,
+        latitude: pulseLatitude,
+        longitude: pulseLongitude,
         insideGeofence: insideGeofence,
         distanceFromCenter: distance,
         wifiBssid: wifiBssid,
         validationMethod: validationMethod,
         validatedByWifi: validatedByWifi,
-        validatedByLocation: position != null && !validatedByWifi,
+        validatedByLocation:
+            pulseLatitude != null && pulseLongitude != null && !validatedByWifi,
       );
       await PulseDeduplicationService.markPulseRecorded(
         employeeId: employeeId,

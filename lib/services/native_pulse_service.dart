@@ -18,9 +18,10 @@ class NativePulseService {
     double? branchLatitude,
     double? branchLongitude,
     double? branchRadius,
+    int? shiftEndTimeEpoch,
   }) async {
-    if (!Platform.isAndroid) {
-      print('⚠️ Native pulse service only available on Android');
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      print('⚠️ Native pulse service only available on Android and iOS');
       return false;
     }
     
@@ -30,6 +31,7 @@ class NativePulseService {
       print('   Attendance: $attendanceId');
       print('   Interval: $intervalMinutes min');
       print('   Branch: ($branchLatitude, $branchLongitude), Radius: ${branchRadius}m');
+      print('   ShiftEndEpoch: $shiftEndTimeEpoch');
       
       final result = await _channel.invokeMethod('startPersistentService', {
         'employeeId': employeeId,
@@ -39,6 +41,7 @@ class NativePulseService {
         'branchLatitude': branchLatitude ?? 0.0,
         'branchLongitude': branchLongitude ?? 0.0,
         'branchRadius': branchRadius ?? 100.0,
+        'shiftEndTimeEpoch': shiftEndTimeEpoch ?? 0,
       });
       
       if (result == true) {
@@ -56,7 +59,7 @@ class NativePulseService {
   
   /// Stop persistent pulse service
   static Future<bool> stopPersistentService() async {
-    if (!Platform.isAndroid) {
+    if (!Platform.isAndroid && !Platform.isIOS) {
       return false;
     }
     
@@ -80,7 +83,7 @@ class NativePulseService {
   
   /// Check if persistent service is running
   static Future<bool> isServiceRunning() async {
-    if (!Platform.isAndroid) {
+    if (!Platform.isAndroid && !Platform.isIOS) {
       return false;
     }
     
@@ -95,7 +98,7 @@ class NativePulseService {
   
   /// Get pulse statistics from native service
   static Future<Map<String, dynamic>?> getPulseStats() async {
-    if (!Platform.isAndroid) {
+    if (!Platform.isAndroid && !Platform.isIOS) {
       return null;
     }
     

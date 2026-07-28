@@ -445,9 +445,14 @@ serve(async (req: Request) => {
       inserted += 1;
     }
 
-    // 🚀 PHASE 6+: TIME RECONCILIATION
-    // Check for time gaps in pulses and auto-close abandoned sessions
-    const reconciliationResults = await reconcileAttendanceSessions(supabase, payload);
+    // Policy: no automatic check-out from edge functions.
+    // Reconciliation remains disabled and only pulses are synced.
+    const reconciliationResults = {
+      checked: 0,
+      closed: 0,
+      sessions: [],
+      disabled: true,
+    };
 
     return response(200, {
       success: errors.length === 0,
@@ -462,113 +467,4 @@ serve(async (req: Request) => {
   }
 });
 
-/**
- * 🚀 TIME RECONCILIATION: Auto-close only when last pulse is stale
- *
- * Logic:
- * 1. For each unique employee in uploaded pulses
- * 2. Get their active attendance session
- * 3. Get latest pulse timestamp for that session
- * 4. If (now - latestPulse) > 10 minutes, close at latestPulse
- *
- * NOTE:
- * We intentionally ignore historical internal gaps to avoid false closures when
- * connectivity resumes later in the same session.
- */
-async function reconcileAttendanceSessions(
-  supabase: any,
-  uploadedPulses: PulseInput[]
-): Promise<{ checked: number; closed: number; sessions: string[] }> {
-  const uniqueEmployees = new Set<string>();
-  uploadedPulses.forEach(pulse => {
-    if (pulse.employee_id) uniqueEmployees.add(pulse.employee_id);
-  });
-
-  let checkedCount = 0;
-  let closedCount = 0;
-  const closedSessions: string[] = [];
-
-  for (const employeeId of uniqueEmployees) {
-    try {
-      // Get active attendance for this employee
-      const { data: activeAttendance } = await supabase
-        .from('attendance')
-        .select('id, check_in_time, employee_id')
-        .eq('employee_id', employeeId)
-        .eq('status', 'active')
-        .order('check_in_time', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (!activeAttendance) continue;
-
-      checkedCount++;
-      const attendanceId = activeAttendance.id;
-      const checkInTime = new Date(activeAttendance.check_in_time);
-
-      // Get ALL pulses for this session, sorted by time
-      const { data: pulses } = await supabase
-        .from('pulses')
-        .select('id, timestamp, is_within_geofence, distance_from_center')
-        .eq('attendance_id', attendanceId)
-        .order('timestamp', { ascending: true });
-
-      if (!pulses || pulses.length === 0) continue;
-
-      const MAX_GAP_MS = 10 * 60 * 1000;
-      const latestPulse = pulses[pulses.length - 1];
-      const latestPulseTime = new Date(latestPulse.timestamp);
-
-      if (Number.isNaN(latestPulseTime.getTime())) {
-        console.warn(`[Reconciliation] Invalid latest pulse timestamp for session ${attendanceId}`);
-        continue;
-      }
-
-      const gapFromNowMs = Date.now() - latestPulseTime.getTime();
-      if (gapFromNowMs <= MAX_GAP_MS) {
-        console.log(`[Reconciliation] ✅ Session ${attendanceId} latest pulse is fresh - OK`);
-        continue;
-      }
-
-      if (!Number.isNaN(checkInTime.getTime()) && latestPulseTime < checkInTime) {
-        console.warn(
-          `[Reconciliation] Skipping auto-close: latest pulse (${latestPulseTime.toISOString()}) before check-in (${checkInTime.toISOString()})`
-        );
-        continue;
-      }
-
-      const closeAt = !Number.isNaN(checkInTime.getTime()) && latestPulseTime < checkInTime
-        ? checkInTime
-        : latestPulseTime;
-
-      console.log(`[Reconciliation] Stale session detected for employee ${employeeId}: ${gapFromNowMs / 1000 / 60} min since latest pulse`);
-      console.log(`[Reconciliation] Closing session at latest pulse: ${closeAt.toISOString()}`);
-
-      const { error: updateError } = await supabase
-        .from('attendance')
-        .update({
-          check_out_time: closeAt.toISOString(),
-          status: 'completed',
-          notes: `Auto-closed by Time Reconciliation: ${gapFromNowMs / 1000 / 60} min stale since latest pulse`,
-        })
-        .eq('id', attendanceId);
-
-      if (!updateError) {
-        closedCount++;
-        closedSessions.push(attendanceId);
-        console.log(`[Reconciliation] ✅ Session ${attendanceId} auto-closed`);
-      } else {
-        console.error(`[Reconciliation] ❌ Failed to close session ${attendanceId}:`, updateError);
-      }
-
-    } catch (err) {
-      console.error(`[Reconciliation] Error processing employee ${employeeId}:`, err);
-    }
-  }
-
-  return {
-    checked: checkedCount,
-    closed: closedCount,
-    sessions: closedSessions,
-  };
-}
+// Reconciliation auto-close intentionally removed by policy.

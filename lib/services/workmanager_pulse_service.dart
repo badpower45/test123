@@ -10,6 +10,8 @@ import '../services/wifi_service.dart';
 import 'notification_service.dart';
 import 'pulse_deduplication_service.dart';
 import 'supabase_attendance_service.dart';
+import 'attendance_timer_service.dart';
+import '../config/supabase_config.dart';
 
 /// Background Pulse Service using WorkManager
 /// Sends location pulses every 5 minutes even when app is closed
@@ -210,9 +212,8 @@ void _callbackDispatcher() {
       // Initialize Supabase in background isolate (idempotent-safe).
       try {
         await Supabase.initialize(
-          url: 'https://okwmvkpmvpblnekecwlh.supabase.co',
-          anonKey:
-              'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9rd212a3BtdnBibG5la2Vjd2xoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Mjk4NTEyMTQsImV4cCI6MjA0NTQyNzIxNH0.LglZZZGRmP_tg4Y5gHs0VaTc_oKn5-DpTfx3sLZJX7U',
+          url: SupabaseConfig.supabaseUrl,
+          anonKey: SupabaseConfig.supabaseAnonKey,
         );
       } catch (e) {
         print('⚠️ Supabase initialize skipped/reused: $e');
@@ -250,10 +251,29 @@ void _callbackDispatcher() {
       // Get current location
       Position? position;
       try {
+        late final LocationSettings locationSettings;
+        if (Platform.isAndroid) {
+          locationSettings = AndroidSettings(
+            accuracy: LocationAccuracy.high,
+            forceLocationManager: true,
+            timeLimit: const Duration(seconds: 10),
+          );
+        } else if (Platform.isIOS) {
+          locationSettings = AppleSettings(
+            accuracy: LocationAccuracy.high,
+            timeLimit: const Duration(seconds: 10),
+            allowBackgroundLocationUpdates: true,
+            showBackgroundLocationIndicator: true,
+          );
+        } else {
+          locationSettings = const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            timeLimit: Duration(seconds: 10),
+          );
+        }
+
         position = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.medium,
-          forceAndroidLocationManager: true,
-          timeLimit: const Duration(seconds: 10),
+          locationSettings: locationSettings,
         );
       } catch (e) {
         print('⚠️ Could not get location in background: $e');
@@ -261,25 +281,37 @@ void _callbackDispatcher() {
         position = await Geolocator.getLastKnownPosition();
       }
 
-      if (position == null) {
-        print('❌ No location available for pulse');
-        return Future.value(true); // Success but skip this pulse
+      final double? latResult;
+      final double? lngResult;
+      final double distance;
+      final bool gpsReliable;
+      final bool gpsInside;
+
+      if (position != null) {
+        latResult = position.latitude;
+        lngResult = position.longitude;
+        distance = Geolocator.distanceBetween(
+          position.latitude,
+          position.longitude,
+          branchLat,
+          branchLng,
+        );
+        final bool staleLocation =
+            DateTime.now().difference(position.timestamp).abs() >
+            _maxBackgroundLocationAge;
+        final bool weakAccuracy =
+            position.accuracy > _maxBackgroundLocationAccuracyMeters;
+        gpsReliable = !staleLocation && !weakAccuracy;
+        gpsInside = distance <= radius;
+      } else {
+        // Fallback when position is null (deep sleep / GPS lookup timeout)
+        latResult = branchLat;
+        lngResult = branchLng;
+        distance = 0.0;
+        gpsReliable = false;
+        gpsInside = true;
+        print('⚠️ Position is null. Using safety fallback (INSIDE).');
       }
-
-      // Calculate distance
-      final distance = Geolocator.distanceBetween(
-        position.latitude,
-        position.longitude,
-        branchLat,
-        branchLng,
-      );
-
-      final bool staleLocation =
-          DateTime.now().difference(position.timestamp).abs() >
-          _maxBackgroundLocationAge;
-      final bool weakAccuracy =
-          position.accuracy > _maxBackgroundLocationAccuracyMeters;
-      final bool gpsReliable = !staleLocation && !weakAccuracy;
 
       // Get WiFi BSSID
       String? wifiBssid;
@@ -293,18 +325,22 @@ void _callbackDispatcher() {
         print('⚠️ Could not get WiFi in background: $e');
       }
 
-      final bool gpsInside = distance <= radius;
       final actualInside = wifiValid || (gpsReliable && gpsInside);
       bool insideGeofence = actualInside;
+      bool skipViolationEscalation = false;
 
       final validationMethod = wifiValid
           ? 'WIFI'
           : (gpsReliable ? 'LOCATION' : 'UNKNOWN');
 
       if (!wifiValid && !gpsReliable) {
+        skipViolationEscalation = true;
+        insideGeofence = true;
+        final accuracyStr = position != null ? '${position.accuracy.toStringAsFixed(1)}m' : 'null';
+        final staleStr = position != null ? (DateTime.now().difference(position.timestamp).abs() > _maxBackgroundLocationAge).toString() : 'true';
         print(
-          '⚠️ Skipping violation escalation due to unreliable GPS sample '
-          '(accuracy: ${position.accuracy.toStringAsFixed(1)}m, stale: $staleLocation)',
+          '⚠️ Unreliable GPS sample - skipping violation escalation '
+          '(accuracy: $accuracyStr, stale: $staleStr)',
         );
       }
 
@@ -337,7 +373,11 @@ void _callbackDispatcher() {
         }
       }
 
-      if (insideGeofence && !breakOverride) {
+      if (skipViolationEscalation) {
+        recordAsInside = true;
+        consecutiveOutPulses = 0;
+        print('✅ Skipped violation escalation for unreliable sample');
+      } else if (insideGeofence && !breakOverride) {
         // ✅ User is INSIDE
         consecutiveOutPulses = 0;
         print('✅ User is INSIDE. Resetting violation counter.');
@@ -362,104 +402,15 @@ void _callbackDispatcher() {
           );
           print('📢 STAGE 1: Warning Notification Sent');
         } else {
-          // 🔴 AUTO CHECKOUT at 2nd consecutive outside (10 mins total)
+          // 🔴 Stage 2 alert only.
+          // Policy: auto checkout is handled by the foreground app pulse flow only.
           recordAsInside = false;
 
           await notificationService.showGeofenceViolation(
             employeeName: 'الموظف',
-            message: '⛔ تم تسجيل انصراف تلقائي بعد نبضتين خارج النطاق.',
+            message: '⛔ مخالفة: نبضتين متتاليتين خارج النطاق. افتح التطبيق فوراً.',
           );
-          print('📢 AUTO CHECKOUT Triggered (2 consecutive outside pulses)');
-
-          try {
-            final checkOutTime = DateTime.now().toUtc();
-
-            final attendance = await supabase
-                .from('attendance')
-                .select('check_in_time')
-                .eq('id', attendanceId)
-                .single();
-
-            DateTime checkInTime;
-            try {
-              checkInTime = DateTime.parse(
-                attendance['check_in_time'].toString(),
-              );
-            } catch (e) {
-              checkInTime = checkOutTime.subtract(
-                const Duration(hours: 8),
-              ); // Fallback
-            }
-            final totalHours =
-                checkOutTime.difference(checkInTime).inMinutes / 60.0;
-
-            await supabase
-                .from('attendance')
-                .update({
-                  'check_out_time': checkOutTime.toIso8601String(),
-                  'status': 'completed',
-                  'work_hours': totalHours.toStringAsFixed(2),
-                  'notes':
-                      'Auto-checkout by system (Background Pulse Violation)',
-                })
-                .eq('id', attendanceId);
-
-            print('✅ Auto-checkout successful');
-
-            await SupabaseAttendanceService.markForcedCheckoutNotice(
-              timestamp: checkOutTime,
-              distanceMeters: distance,
-              pendingSync: false,
-              message:
-                  'تم تسجيل انصراف تلقائي في الخلفية بسبب الابتعاد عن الفرع.',
-            );
-
-            await Workmanager().cancelByUniqueName(
-              WorkManagerPulseService.periodicUniqueTaskName,
-            );
-            await prefs.remove('active_employee_id');
-            await prefs.remove('active_attendance_id');
-            await prefs.remove('active_branch_id');
-
-            return Future.value(true);
-          } catch (e) {
-            print('❌ Auto-checkout failed (likely offline): $e');
-
-            try {
-              final db = OfflineDatabase.instance;
-              final offlineTimestamp = DateTime.now();
-
-              await db.insertPendingCheckout(
-                employeeId: employeeId,
-                attendanceId: attendanceId,
-                timestamp: offlineTimestamp,
-                latitude: position.latitude,
-                longitude: position.longitude,
-                notes:
-                    'Auto-checkout by system (Background Pulse Violation - Offline)',
-              );
-              print('✅ Offline Auto-checkout saved to local DB');
-
-              await SupabaseAttendanceService.markForcedCheckoutNotice(
-                timestamp: offlineTimestamp,
-                distanceMeters: distance,
-                pendingSync: true,
-                message:
-                    'تم حفظ انصراف تلقائي في الخلفية وسيتم رفعه عند توفر الإنترنت.',
-              );
-
-              await Workmanager().cancelByUniqueName(
-                WorkManagerPulseService.periodicUniqueTaskName,
-              );
-              await prefs.remove('active_employee_id');
-              await prefs.remove('active_attendance_id');
-              await prefs.remove('active_branch_id');
-
-              return Future.value(true);
-            } catch (dbError) {
-              print('❌ Failed to save offline auto-checkout: $dbError');
-            }
-          }
+          print('📢 STAGE 2: Background violation alert sent (no auto-checkout)');
         }
       }
 
@@ -469,6 +420,13 @@ void _callbackDispatcher() {
         'last_pulse_timestamp',
         DateTime.now().millisecondsSinceEpoch,
       );
+      await prefs.setDouble('last_known_distance_$employeeId', distance);
+
+      if (actualInside) {
+        await AttendanceTimerService.resumeTimerLocally();
+      } else {
+        await AttendanceTimerService.pauseTimerLocally(reason: 'خارج نطاق الفرع');
+      }
 
       // ---------------------------------------------------------
 
@@ -488,8 +446,8 @@ void _callbackDispatcher() {
           'employee_id': employeeId,
           'attendance_id': attendanceId,
           'branch_id': branchId,
-          'latitude': position.latitude,
-          'longitude': position.longitude,
+          'latitude': latResult,
+          'longitude': lngResult,
           'inside_geofence': recordAsInside, // Use the modified status
           'is_within_geofence': recordAsInside,
           'distance_from_center': distance, // ✅ FIXED: Always send distance
@@ -518,8 +476,8 @@ void _callbackDispatcher() {
           attendanceId: attendanceId,
           branchId: branchId,
           timestamp: now,
-          latitude: position.latitude,
-          longitude: position.longitude,
+          latitude: latResult,
+          longitude: lngResult,
           insideGeofence: recordAsInside,
           distanceFromCenter: distance,
           wifiBssid: wifiBssid,

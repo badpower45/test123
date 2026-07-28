@@ -4,8 +4,10 @@ import 'package:hive/hive.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import '../database/offline_database.dart';
+import '../models/employee.dart';
 import 'pulse_deduplication_service.dart';
 import 'supabase_function_client.dart';
+import '../utils/time_utils.dart';
 
 /// Service for managing offline data storage and sync
 /// Downloads branch data from Supabase and stores it locally
@@ -72,6 +74,81 @@ class OfflineDataService {
         '📥 Downloading branch data for: $employeeBranch (Branch ID: $branchId, Employee: $employeeId)',
       );
 
+      // 1. Fetch employee info first to check if they are a super employee
+      Map<String, dynamic>? employeeInfo;
+      double? hourlyRate;
+      bool isSuper = false;
+
+      if (employeeId != null) {
+        try {
+          employeeInfo = await _supabase
+              .from('employees')
+              .select('shift_start_time, shift_end_time, hourly_rate, is_super_employee')
+              .eq('id', employeeId)
+              .maybeSingle();
+
+          if (employeeInfo != null) {
+            final rateValue = employeeInfo['hourly_rate'];
+            if (rateValue is num) {
+              hourlyRate = rateValue.toDouble();
+            }
+            isSuper = employeeInfo['is_super_employee'] as bool? ?? false;
+            
+            // Update Hive employee box if open
+            try {
+              if (Hive.isBoxOpen('employees')) {
+                final empBox = Hive.box<Employee>('employees');
+                final emp = empBox.get(employeeId);
+                if (emp != null) {
+                  emp.isSuperEmployee = isSuper;
+                  if (employeeInfo['shift_start_time'] != null) emp.shiftStartTime = employeeInfo['shift_start_time'];
+                  if (employeeInfo['shift_end_time'] != null) emp.shiftEndTime = employeeInfo['shift_end_time'];
+                  if (hourlyRate != null) emp.hourlyRate = hourlyRate;
+                  await emp.save();
+                  print('💾 Updated local Hive employee isSuperEmployee: $isSuper');
+                }
+              }
+            } catch (hiveErr) {
+              print('⚠️ Failed to update Hive employee info: $hiveErr');
+            }
+          }
+        } catch (e) {
+          print('⚠️ Failed to load employee info: $e');
+        }
+      }
+
+      // If it's a super employee, download ALL active branches!
+      if (isSuper) {
+        print('⭐ Employee is Super Employee! Downloading all branches...');
+        try {
+          final branchesQuery = await _supabase
+              .from('branches')
+              .select('id, name, latitude, longitude, wifi_bssid, geofence_radius, distance_from_radius, created_at')
+              .eq('is_active', true);
+          
+          if (branchesQuery != null && branchesQuery is List) {
+            final List<Map<String, dynamic>> allBranches = [];
+            for (final b in branchesQuery) {
+              allBranches.add(Map<String, dynamic>.from(b));
+            }
+
+            // Cache all branches locally
+            if (kIsWeb) {
+              final box = Hive.isBoxOpen(_branchDataBox) 
+                  ? Hive.box(_branchDataBox) 
+                  : await Hive.openBox(_branchDataBox);
+              await box.put('super_branches_$employeeId', allBranches);
+            } else {
+              final db = OfflineDatabase.instance;
+              await db.cacheSuperBranches(employeeId: employeeId!, branches: allBranches);
+            }
+            print('✅ Successfully cached ${allBranches.length} branches for super employee $employeeId');
+          }
+        } catch (superErr) {
+          print('⚠️ Error caching super employee branches: $superErr');
+        }
+      }
+
       // Reuse cached coordinates for same branch while cache is still fresh.
       final cachedBranchData = await getCachedBranchData(
         employeeId: employeeId,
@@ -122,28 +199,6 @@ class OfflineDataService {
                   response['distanceFromRadius'] ??
                   100.0)
               .toDouble();
-
-      Map<String, dynamic>? employeeInfo;
-      double? hourlyRate;
-
-      if (employeeId != null) {
-        try {
-          employeeInfo = await _supabase
-              .from('employees')
-              .select('shift_start_time, shift_end_time, hourly_rate')
-              .eq('id', employeeId)
-              .maybeSingle();
-
-          if (employeeInfo != null) {
-            final rateValue = employeeInfo['hourly_rate'];
-            if (rateValue is num) {
-              hourlyRate = rateValue.toDouble();
-            }
-          }
-        } catch (e) {
-          print('⚠️ Failed to load employee shift info: $e');
-        }
-      }
 
       final dynamic wifiSource = response['wifi_bssid'];
       final List<String> wifiBssids = [];
@@ -610,8 +665,8 @@ class OfflineDataService {
           final rawTimestamp = record['timestamp'];
           if (rawTimestamp == null || rawTimestamp.toString().isEmpty) continue;
           try {
-            final timestamp = DateTime.parse(rawTimestamp.toString());
-            if (timestamp.isAfter(startOfDay) && timestamp.isBefore(endOfDay)) {
+            final timestamp = TimeUtils.parseTimestamp(rawTimestamp);
+            if (timestamp != null && timestamp.isAfter(startOfDay) && timestamp.isBefore(endOfDay)) {
               pulses.add(Map<String, dynamic>.from(record));
             }
           } catch (e) {
@@ -626,9 +681,12 @@ class OfflineDataService {
       // Sort by timestamp - ✅ FIX: Safe parsing in sort
       pulses.sort((a, b) {
         try {
-          final aTime = DateTime.parse(a['timestamp']?.toString() ?? '');
-          final bTime = DateTime.parse(b['timestamp']?.toString() ?? '');
-          return aTime.compareTo(bTime);
+          final aTime = TimeUtils.parseTimestamp(a['timestamp']);
+          final bTime = TimeUtils.parseTimestamp(b['timestamp']);
+          if (aTime != null && bTime != null) {
+            return aTime.compareTo(bTime);
+          }
+          return 0;
         } catch (e) {
           return 0; // Keep original order if parsing fails
         }
@@ -689,10 +747,8 @@ class OfflineDataService {
       summary['totalPulses'] = (summary['totalPulses'] as int) + 1;
 
       // ✅ FIX: Safe timestamp parsing
-      DateTime timestamp;
-      try {
-        timestamp = DateTime.parse(pulse['timestamp']?.toString() ?? '');
-      } catch (e) {
+      DateTime? timestamp = TimeUtils.parseTimestamp(pulse['timestamp']);
+      if (timestamp == null) {
         continue; // Skip this pulse if timestamp is invalid
       }
       final hour = timestamp.hour;

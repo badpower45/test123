@@ -1,0 +1,23 @@
+# قائمة المهام للتطوير (Tasks List)
+
+- [x] المرحلة 1: تحديثات قاعدة البيانات وسيرفر سوبابيس (DB & Backend Setup)
+    - [x] إنشاء وتشغيل ملف الميجريشن لعمود السوبر موظف وجدول قواعد الحضور في Supabase
+    - [x] تحديث كود Edge Function الخاص بحساب الرواتب `calculate-payroll/index.ts` لدعم القواعد الديناميكية
+- [x] المرحلة 2: تحديثات الموديلات والتخزين المحلي في Flutter (Local Storage & Models)
+    - [x] إضافة حزم `excel` و `share_plus` لملف `pubspec.yaml` وتشغيل `flutter pub get`
+    - [x] تعديل موديل الموظف `Employee` لإضافة حقل `isSuperEmployee` وتحديث الـ Hive Adapter والـ Serializers
+    - [x] تعديل SQLite في `offline_database.dart` لإنشاء جدول `super_employee_branches` والوظائف الخاصة به
+    - [x] تعديل `offline_data_service.dart` لدعم تحميل ومزامنة كل الفروع للموظف السوبر
+- [x] المرحلة 3: تعديل شروط البصمة والنبضات للموظف السوبر (Geofence & Pulses Validation)
+    - [x] تحديث `geofence_service.dart` للتحقق من البصمة ضد جميع الفروع المتاحة للموظف السوبر
+    - [x] تحديث `pulse_tracking_service.dart` و `alarm_manager_pulse_service.dart` لمطابقة إحداثيات نبضات الخلفية والـ WiFi مع كل الفروع
+- [x] المرحلة 4: واجهات التحكم للمالك (Owner UI Modules)
+    - [x] بناء شاشة إعدادات القواعد `owner_rules_settings_screen.dart` لتمكين المالك من التحكم بخصومات التأخير
+    - [x] ربط شاشة الإعدادات بزر في AppBar الخاص بـ `owner_main_screen.dart`
+    - [x] إضافة خيار السوبر موظف في شاشات الإضافة والتعديل بـ `owner_main_screen.dart`
+    - [x] تحديث `supabase_owner_service.dart` لإرسال القيمة الجديدة عند الإضافة والتعديل
+- [x] المرحلة 5: تصفية وتصدير رواتب الموظفين لـ Excel
+    - [x] بناء خدمة تصدير الـ Excel `excel_export_service.dart`
+    - [x] تحديث صفحة `owner_comprehensive_payroll_page.dart` لإضافة فلتر الفروع وزر التصدير لـ Excel
+- [x] المرحلة 6: التحقق والتشغيل
+    - [x] التحقق من بناء التطبيق بنجاح (build success) وعدم وجود أي أخطاء ترجمة

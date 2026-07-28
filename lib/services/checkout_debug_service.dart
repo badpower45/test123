@@ -130,9 +130,28 @@ class CheckoutDebugService {
       // Try to get current location
       if (serviceEnabled && permission == LocationPermission.always) {
         try {
+          late final LocationSettings locationSettings;
+          if (Platform.isAndroid) {
+            locationSettings = AndroidSettings(
+              accuracy: LocationAccuracy.high,
+              timeLimit: const Duration(seconds: 10),
+            );
+          } else if (Platform.isIOS) {
+            locationSettings = AppleSettings(
+              accuracy: LocationAccuracy.high,
+              timeLimit: const Duration(seconds: 10),
+              allowBackgroundLocationUpdates: true,
+              showBackgroundLocationIndicator: true,
+            );
+          } else {
+            locationSettings = const LocationSettings(
+              accuracy: LocationAccuracy.high,
+              timeLimit: Duration(seconds: 10),
+            );
+          }
+
           final position = await Geolocator.getCurrentPosition(
-            desiredAccuracy: LocationAccuracy.medium,
-            timeLimit: const Duration(seconds: 10),
+            locationSettings: locationSettings,
           );
           report['location']['currentPosition'] = {
             'lat': position.latitude,

@@ -57,14 +57,13 @@ class _ReportsPageState extends State<ReportsPage> {
   }
 
   bool get _isReportAvailable {
-    final day = DateTime.now().day;
-    return day == 1 || day == 16;
+    return true;
   }
 
   int get _daysUntilNextReport {
     final now = DateTime.now();
     final day = now.day;
-    
+
     if (day < 16) {
       return 16 - day;
     } else {
@@ -76,7 +75,7 @@ class _ReportsPageState extends State<ReportsPage> {
   String get _nextReportDate {
     final now = DateTime.now();
     final day = now.day;
-    
+
     if (day < 16) {
       return '16 ${_getMonthName(now.month)}';
     } else {
@@ -87,8 +86,18 @@ class _ReportsPageState extends State<ReportsPage> {
 
   String _getMonthName(int month) {
     const months = [
-      'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
-      'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'
+      'يناير',
+      'فبراير',
+      'مارس',
+      'أبريل',
+      'مايو',
+      'يونيو',
+      'يوليو',
+      'أغسطس',
+      'سبتمبر',
+      'أكتوبر',
+      'نوفمبر',
+      'ديسمبر',
     ];
     return months[month - 1];
   }
@@ -129,9 +138,9 @@ class _ReportsPageState extends State<ReportsPage> {
         _isLoading = false;
       });
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('خطأ: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('خطأ: $e')));
       }
     }
   }
@@ -199,7 +208,7 @@ class _ReportsPageState extends State<ReportsPage> {
                 ],
               ),
             ),
-            
+
             Expanded(
               child: RefreshIndicator(
                 onRefresh: reloadData,
@@ -221,7 +230,9 @@ class _ReportsPageState extends State<ReportsPage> {
                               children: [
                                 Text(
                                   'تقرير الفترة: ${DateFormat('yyyy-MM-dd').format(_startDate!)} إلى ${DateFormat('yyyy-MM-dd').format(_endDate!)}',
-                                  style: const TextStyle(fontWeight: FontWeight.bold),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                  ),
                                 ),
                               ],
                             ),
@@ -251,7 +262,9 @@ class _ReportsPageState extends State<ReportsPage> {
                               borderRadius: BorderRadius.circular(16),
                               boxShadow: [
                                 BoxShadow(
-                                  color: AppColors.primaryOrange.withOpacity(0.3),
+                                  color: AppColors.primaryOrange.withOpacity(
+                                    0.3,
+                                  ),
                                   blurRadius: 10,
                                   offset: const Offset(0, 4),
                                 ),
@@ -290,17 +303,21 @@ class _ReportsPageState extends State<ReportsPage> {
                                       Navigator.push(
                                         context,
                                         MaterialPageRoute(
-                                          builder: (context) => EmployeePayrollReportPage(
-                                            employeeId: widget.employeeId,
-                                            employeeName: _employeeName ?? '',
-                                          ),
+                                          builder: (context) =>
+                                              EmployeePayrollReportPage(
+                                                employeeId: widget.employeeId,
+                                                employeeName:
+                                                    _employeeName ?? '',
+                                              ),
                                         ),
                                       );
                                     },
                                     style: ElevatedButton.styleFrom(
                                       backgroundColor: Colors.white,
                                       foregroundColor: AppColors.primaryOrange,
-                                      padding: const EdgeInsets.symmetric(vertical: 16),
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 16,
+                                      ),
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(12),
                                       ),
@@ -317,7 +334,7 @@ class _ReportsPageState extends State<ReportsPage> {
                               ],
                             ),
                           ),
-                        ]
+                        ],
                       ] else ...[
                         // Countdown Card
                         Container(
@@ -382,7 +399,8 @@ class _ReportsPageState extends State<ReportsPage> {
                                     ),
                                     const SizedBox(width: 12),
                                     Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         const Text(
                                           'التقرير القادم',
@@ -409,7 +427,8 @@ class _ReportsPageState extends State<ReportsPage> {
                                         vertical: 8,
                                       ),
                                       decoration: BoxDecoration(
-                                        color: AppColors.primaryOrange.withOpacity(0.1),
+                                        color: AppColors.primaryOrange
+                                            .withOpacity(0.1),
                                         borderRadius: BorderRadius.circular(20),
                                       ),
                                       child: Text(
@@ -439,19 +458,40 @@ class _ReportsPageState extends State<ReportsPage> {
     );
   }
 
-
   Widget _buildTable() {
     return DataTable(
       columnSpacing: 20,
-      headingRowColor: MaterialStateProperty.all(AppColors.primaryOrange.withOpacity(0.2)),
+      headingRowColor: MaterialStateProperty.all(
+        AppColors.primaryOrange.withOpacity(0.2),
+      ),
       columns: const [
-        DataColumn(label: Text('التاريخ', style: TextStyle(fontWeight: FontWeight.bold))),
-        DataColumn(label: Text('حضور', style: TextStyle(fontWeight: FontWeight.bold))),
-        DataColumn(label: Text('انصراف', style: TextStyle(fontWeight: FontWeight.bold))),
-        DataColumn(label: Text('الساعات', style: TextStyle(fontWeight: FontWeight.bold))),
-        DataColumn(label: Text('السلف', style: TextStyle(fontWeight: FontWeight.bold))),
-        DataColumn(label: Text('بدل إجازة', style: TextStyle(fontWeight: FontWeight.bold))),
-        DataColumn(label: Text('الخصومات', style: TextStyle(fontWeight: FontWeight.bold))),
+        DataColumn(
+          label: Text('التاريخ', style: TextStyle(fontWeight: FontWeight.bold)),
+        ),
+        DataColumn(
+          label: Text('حضور', style: TextStyle(fontWeight: FontWeight.bold)),
+        ),
+        DataColumn(
+          label: Text('انصراف', style: TextStyle(fontWeight: FontWeight.bold)),
+        ),
+        DataColumn(
+          label: Text('الساعات', style: TextStyle(fontWeight: FontWeight.bold)),
+        ),
+        DataColumn(
+          label: Text('السلف', style: TextStyle(fontWeight: FontWeight.bold)),
+        ),
+        DataColumn(
+          label: Text(
+            'بدل إجازة',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ),
+        DataColumn(
+          label: Text(
+            'الخصومات',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ),
       ],
       rows: _tableRows.map((row) {
         return DataRow(
@@ -464,8 +504,12 @@ class _ReportsPageState extends State<ReportsPage> {
               Text(
                 row['advances'] ?? '0.00',
                 style: TextStyle(
-                  color: double.parse(row['advances'] ?? '0') > 0 ? Colors.red : Colors.black,
-                  fontWeight: double.parse(row['advances'] ?? '0') > 0 ? FontWeight.bold : FontWeight.normal,
+                  color: double.parse(row['advances'] ?? '0') > 0
+                      ? Colors.red
+                      : Colors.black,
+                  fontWeight: double.parse(row['advances'] ?? '0') > 0
+                      ? FontWeight.bold
+                      : FontWeight.normal,
                 ),
               ),
             ),
@@ -476,7 +520,11 @@ class _ReportsPageState extends State<ReportsPage> {
                   if (row['hasLeave'] == true)
                     const Padding(
                       padding: EdgeInsets.only(right: 4),
-                      child: Icon(Icons.check_circle, color: Colors.green, size: 16),
+                      child: Icon(
+                        Icons.check_circle,
+                        color: Colors.green,
+                        size: 16,
+                      ),
                     ),
                 ],
               ),
@@ -485,8 +533,12 @@ class _ReportsPageState extends State<ReportsPage> {
               Text(
                 row['deductions'] ?? '0.00',
                 style: TextStyle(
-                  color: double.parse(row['deductions'] ?? '0') > 0 ? Colors.red : Colors.black,
-                  fontWeight: double.parse(row['deductions'] ?? '0') > 0 ? FontWeight.bold : FontWeight.normal,
+                  color: double.parse(row['deductions'] ?? '0') > 0
+                      ? Colors.red
+                      : Colors.black,
+                  fontWeight: double.parse(row['deductions'] ?? '0') > 0
+                      ? FontWeight.bold
+                      : FontWeight.normal,
                 ),
               ),
             ),
@@ -503,12 +555,18 @@ class _ReportsPageState extends State<ReportsPage> {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [AppColors.primaryOrange.withOpacity(0.05), AppColors.primaryOrange.withOpacity(0.1)],
+          colors: [
+            AppColors.primaryOrange.withOpacity(0.05),
+            AppColors.primaryOrange.withOpacity(0.1),
+          ],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.primaryOrange.withOpacity(0.3), width: 2),
+        border: Border.all(
+          color: AppColors.primaryOrange.withOpacity(0.3),
+          width: 2,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -524,11 +582,29 @@ class _ReportsPageState extends State<ReportsPage> {
             ],
           ),
           const Divider(thickness: 2),
-          _summaryRow('إجمالي أيام العمل', _summary!['totalWorkDays'].toString()),
-          _summaryRow('إجمالي ساعات العمل', _summary!['totalWorkHours'].toString()),
-          _summaryRow('إجمالي السلف', '${_summary!['totalAdvances']} جنيه', color: Colors.red.shade700),
-          _summaryRow('إجمالي بدل الإجازات', '${_summary!['totalLeaveAllowances']} جنيه', color: Colors.blue.shade700),
-          _summaryRow('إجمالي الخصومات', '${_summary!['totalDeductions']} جنيه', color: Colors.red.shade700),
+          _summaryRow(
+            'إجمالي أيام العمل',
+            _summary!['totalWorkDays'].toString(),
+          ),
+          _summaryRow(
+            'إجمالي ساعات العمل',
+            _summary!['totalWorkHours'].toString(),
+          ),
+          _summaryRow(
+            'إجمالي السلف',
+            '${_summary!['totalAdvances']} جنيه',
+            color: Colors.red.shade700,
+          ),
+          _summaryRow(
+            'إجمالي بدل الإجازات',
+            '${_summary!['totalLeaveAllowances']} جنيه',
+            color: Colors.blue.shade700,
+          ),
+          _summaryRow(
+            'إجمالي الخصومات',
+            '${_summary!['totalDeductions']} جنيه',
+            color: Colors.red.shade700,
+          ),
           const Divider(thickness: 2),
           _summaryRow(
             'الراتب الإجمالي',
@@ -548,7 +624,13 @@ class _ReportsPageState extends State<ReportsPage> {
     );
   }
 
-  Widget _summaryRow(String label, String value, {Color? color, bool isBold = false, double fontSize = 14}) {
+  Widget _summaryRow(
+    String label,
+    String value, {
+    Color? color,
+    bool isBold = false,
+    double fontSize = 14,
+  }) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(

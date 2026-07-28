@@ -3,12 +3,18 @@ import 'dart:ui' show FontFeature;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import '../../services/location_permission_service.dart';
+import '../permissions_onboarding_page.dart';
+import 'employee_main_screen.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:universal_io/io.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:wifi_scan/wifi_scan.dart';
 import 'package:optimize_battery/optimize_battery.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import '../../constants/restaurant_config.dart';
 import '../../config/supabase_config.dart';
@@ -28,14 +34,17 @@ import '../../services/pulse_tracking_service.dart';
 import '../../services/workmanager_pulse_service.dart';
 import '../../services/foreground_attendance_service.dart';
 import '../../services/alarm_manager_pulse_service.dart';
+import '../../services/native_pulse_bridge.dart';
 import '../../services/session_validation_service.dart';
 import '../../services/app_logger.dart';
 import '../../services/device_compatibility_service.dart';
 import '../../services/checkout_debug_service.dart';
 import '../../services/aggressive_keep_alive_service.dart';
 import '../../services/attendance_timer_service.dart'; // 🚀 PHASE 4
+import '../../services/offline_transition_helper.dart';
 import '../../database/offline_database.dart';
 import '../../services/wifi_service.dart';
+import '../../widgets/location_verification_dialog.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/battery_optimization_guide.dart';
 
@@ -48,7 +57,7 @@ class EmployeeHomePage extends StatefulWidget {
   State<EmployeeHomePage> createState() => _EmployeeHomePageState();
 }
 
-class _EmployeeHomePageState extends State<EmployeeHomePage> {
+class _EmployeeHomePageState extends State<EmployeeHomePage> with WidgetsBindingObserver {
   bool _isCheckedIn = false;
   DateTime? _checkInTime;
   // 🚀 PHASE 4: Timer moved to service - no longer stored in UI
@@ -81,12 +90,17 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
   StreamSubscription<dynamic>? _connectivitySubscription;
   bool _isDisposing = false;
 
+  double? _distanceFromBranch;
+  int _distanceUpdateCounter = 0;
+
   // 🚨 NEW: Subscription for auto-checkout events
   StreamSubscription<AutoCheckoutEvent>? _autoCheckoutSubscription;
 
   @override
   void initState() {
     super.initState();
+    _loadLastKnownDistance();
+    WidgetsBinding.instance.addObserver(this);
 
     // 🚀 PHASE 4: Add listener for timer updates
     _timerService.addListener(_onTimerUpdate);
@@ -133,6 +147,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _showForcedCheckoutNoticeIfNeeded();
+      _updateDistanceFromBranch();
     });
   }
 
@@ -221,6 +236,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
   @override
   void dispose() {
     _isDisposing = true;
+    WidgetsBinding.instance.removeObserver(this);
     // 🚀 PHASE 4: Remove timer listener
     _timerService.removeListener(_onTimerUpdate);
 
@@ -232,17 +248,98 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
     super.dispose();
   }
 
-  /// � PHASE 4: Timer update listener
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      print('📱 EmployeeHomePage: App resumed - checking status and refreshing pulse counts');
+      _checkCurrentStatus();
+    }
+  }
+
+  /// 🚀 PHASE 4: Timer update listener
   /// Called by AttendanceTimerService when timer updates
   void _onTimerUpdate(String elapsedTime, double earnings) {
     if (mounted) {
       setState(() {
         _currentEarnings = earnings;
       });
+      _checkAutoCheckoutInstant();
+      
+      _distanceUpdateCounter++;
+      if (_distanceUpdateCounter >= 10) {
+        _distanceUpdateCounter = 0;
+        _updateDistanceFromBranch();
+      }
     }
   }
 
-  /// �🚨 Handle auto-checkout event from PulseTrackingService
+  Future<void> _loadLastKnownDistance() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final lastDistance = prefs.getDouble('last_known_distance_${widget.employeeId}');
+      if (lastDistance != null && mounted) {
+        setState(() {
+          _distanceFromBranch = lastDistance;
+        });
+        print('📱 [Employee] Restored last known distance from cache: ${lastDistance.toStringAsFixed(1)}m');
+      }
+    } catch (e) {
+      print('⚠️ Error loading last known distance: $e');
+    }
+  }
+
+  Future<void> _updateDistanceFromBranch() async {
+    if (_branchData == null) return;
+    final centerLat = (_branchData!['latitude'] as num?)?.toDouble();
+    final centerLng = (_branchData!['longitude'] as num?)?.toDouble();
+    if (centerLat == null || centerLng == null) return;
+    
+    try {
+      final position = await Geolocator.getLastKnownPosition() ?? 
+                       await Geolocator.getCurrentPosition(
+                         desiredAccuracy: LocationAccuracy.high,
+                         timeLimit: const Duration(seconds: 5),
+                       );
+      
+      final distance = Geolocator.distanceBetween(
+        position.latitude,
+        position.longitude,
+        centerLat,
+        centerLng,
+      );
+      
+      if (mounted) {
+        setState(() {
+          _distanceFromBranch = distance;
+        });
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setDouble('last_known_distance_${widget.employeeId}', distance);
+
+        // ✅ Immediate foreground geofence pause check
+        if (_isCheckedIn) {
+          final isOnActiveBreak = prefs.getBool('is_break_active') ?? false;
+          if (isOnActiveBreak) {
+            await AttendanceTimerService.resumeTimerLocally();
+          } else {
+            final radius = (_branchData!['geofence_radius'] as num?)?.toDouble() ?? 100.0;
+            if (distance > radius) {
+              await AttendanceTimerService.pauseTimerLocally(reason: 'خارج نطاق الفرع');
+            } else {
+              await AttendanceTimerService.resumeTimerLocally();
+            }
+          }
+        }
+      }
+    } catch (e) {
+      print('⚠️ Error updating distance: $e');
+    }
+  }
+
+  void _checkAutoCheckoutInstant() {
+    _checkAutoCheckout();
+  }
+
+  /// 🚨 Handle auto-checkout event from PulseTrackingService
   /// This is called when 2 consecutive pulses are outside the zone
   void _handleAutoCheckout(AutoCheckoutEvent event) {
     if (!mounted) return;
@@ -253,6 +350,9 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
 
     // ✅ PHASE 4: Stop timer service
     _timerService.stopTimer();
+
+    // 🛑 Stop unified pulse background services!
+    _stopUnifiedPulseSystem();
 
     setState(() {
       _isCheckedIn = false;
@@ -718,13 +818,11 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         }
 
         // Start pulse tracking if not running
-        if (!_pulseService.isTracking) {
-          await _pulseService.startTracking(
-            widget.employeeId,
-            attendanceId: savedAttendanceId,
-          );
-          print('🎯 Resumed pulse tracking for offline attendance');
-        }
+        await _ensurePulseTrackingActive(
+          employeeId: widget.employeeId,
+          attendanceId: savedAttendanceId,
+          checkInTime: _checkInTime,
+        );
 
         print('✅ Restored offline attendance state');
         return; // Don't query server for offline attendance
@@ -759,13 +857,11 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
 
         _startTimer();
 
-        if (!_pulseService.isTracking) {
-          await _pulseService.startTracking(
-            widget.employeeId,
-            attendanceId: savedAttendanceId,
-          );
-          print('🎯 Resumed pulse tracking for cached attendance');
-        }
+        await _ensurePulseTrackingActive(
+          employeeId: widget.employeeId,
+          attendanceId: savedAttendanceId,
+          checkInTime: restoredCheckIn,
+        );
 
         print('✅ Restored cached online attendance state');
         restoredFromCache = true;
@@ -777,8 +873,89 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
       );
 
       final wasCheckedIn = _isCheckedIn;
+
+      // ✅ Cache personal shift start and end times
+      final personalShiftStart = status['employee']?['shift_start_time']?.toString();
+      final personalShiftEnd = status['employee']?['shift_end_time']?.toString();
+      if (personalShiftStart != null && personalShiftStart.isNotEmpty) {
+        await prefs.setString('employee_shift_start_time', personalShiftStart);
+      } else {
+        await prefs.remove('employee_shift_start_time');
+      }
+      if (personalShiftEnd != null && personalShiftEnd.isNotEmpty) {
+        await prefs.setString('employee_shift_end_time', personalShiftEnd);
+      } else {
+        await prefs.remove('employee_shift_end_time');
+      }
+
+      // ✅ Sync & Pending Check-ins Guard:
+      // Prevent automatic check-out if a sync is in progress or check-ins are pending
+      final isCurrentlySyncing = SyncService.instance.isSyncing || _isSyncing;
+      final pendingCheckins = await OfflineDatabase.instance.getPendingCheckins();
+      
+      // Determine check-in time to pass to helper if needed
+      DateTime? resolvedCheckInTime = _checkInTime;
+      if (resolvedCheckInTime == null) {
+        final sourceTime = resolvedCachedCheckinTimeStr ??
+            offlineCheckinTimeStr ??
+            persistedTimerCheckInTimeStr;
+        if (sourceTime != null) {
+          try {
+            resolvedCheckInTime = DateTime.parse(sourceTime).toLocal();
+          } catch (_) {}
+        }
+      }
+
+      final pendingCheckouts = await OfflineDatabase.instance.getPendingCheckouts();
+      final hasPendingCheckout = pendingCheckouts.any((c) {
+        final checkoutAttId = c['attendance_id']?.toString();
+        final matchesId = checkoutAttId != null &&
+            (checkoutAttId == _currentAttendanceId ||
+             checkoutAttId == savedAttendanceId);
+        
+        bool isRecent = false;
+        if (!matchesId && (checkoutAttId == null || checkoutAttId.isEmpty || checkoutAttId.contains('local') || checkoutAttId.contains('pending'))) {
+          final checkoutTimeStr = c['timestamp']?.toString() ?? c['created_at']?.toString();
+          if (checkoutTimeStr != null && resolvedCheckInTime != null) {
+            try {
+              final checkoutTime = DateTime.parse(checkoutTimeStr);
+              if (checkoutTime.isAfter(resolvedCheckInTime)) {
+                isRecent = true;
+              }
+            } catch (_) {}
+          }
+        }
+        return matchesId || isRecent;
+      });
+
+      if (!hasPendingCheckout && (isCurrentlySyncing || pendingCheckins.isNotEmpty) && wasCheckedIn) {
+        print('🛡️ [StatusCheck] Sync is in progress or pending check-ins exist. Protecting local check-in state.');
+        _safeSetState(() {
+          _isCheckedIn = true;
+          _isCheckingStatus = false;
+        });
+        return;
+      }
+
+      final shiftEndTimeStr = prefs.getString('employee_shift_end_time');
+
+      final keepLocalCheckedIn = await OfflineTransitionHelper.shouldKeepLocalCheckIn(
+        localCheckedInFlag: isCheckedInFlag,
+        wasCheckedIn: wasCheckedIn,
+        checkInTime: resolvedCheckInTime,
+        shiftEndTimeStr: shiftEndTimeStr,
+        isOfflineAttendance: isOfflineAttendance,
+        cachedAttendanceStillActive: cachedAttendanceStillActive,
+      );
+
+      final serverReportsCheckedIn = status['isCheckedIn'] as bool? ?? false;
+      final targetCheckedIn = !hasPendingCheckout && (serverReportsCheckedIn || keepLocalCheckedIn);
+
       _safeSetState(() {
-        _isCheckedIn = status['isCheckedIn'] as bool? ?? false;
+        _isCheckedIn = targetCheckedIn;
+        _currentAttendanceId =
+            status['attendance']?['id']?.toString() ??
+            (targetCheckedIn ? (savedAttendanceId ?? _currentAttendanceId ?? status['attendance']?['id']?.toString()) : null);
         // Parse checkInTime and convert from UTC to local time (with safe parsing)
         if (status['attendance']?['check_in_time'] != null) {
           try {
@@ -786,24 +963,14 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
               status['attendance']['check_in_time'].toString(),
             ).toLocal();
           } catch (e) {
-            _checkInTime = null;
+            _checkInTime = resolvedCheckInTime;
           }
         } else {
-          final sourceTime =
-              resolvedCachedCheckinTimeStr ?? persistedTimerCheckInTimeStr;
-          if (sourceTime != null) {
-            try {
-              _checkInTime = DateTime.parse(sourceTime).toLocal();
-            } catch (_) {
-              _checkInTime = null;
-            }
-          } else {
-            _checkInTime = null;
-          }
+          _checkInTime = resolvedCheckInTime;
         }
         // Load hourly rate for earnings computation
         _hourlyRate =
-            (status['employee']?['hourly_rate'] as num?)?.toDouble() ?? 0.0;
+            (status['employee']?['hourly_rate'] as num?)?.toDouble() ?? _hourlyRate;
 
         // ✅ Clear attendance ID if checked out
         if (!_isCheckedIn) {
@@ -811,6 +978,25 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           _timerService.stopTimer(); // 🚀 PHASE 4: Stop timer service
         }
       });
+
+      // ✅ Cache active attendance ID on device for safe offline retrieval
+      if (_isCheckedIn && _currentAttendanceId != null && !isOfflineAttendance) {
+        try {
+          await SupabaseAttendanceService.cacheActiveAttendanceOnDevice(
+            employeeId: widget.employeeId,
+            attendanceId: _currentAttendanceId!,
+            checkInIso: _checkInTime?.toIso8601String(),
+            isOfflineAttendance: false,
+          );
+        } catch (e) {
+          print('⚠️ Failed to cache online attendance in status check: $e');
+        }
+      }
+
+      // 🛑 Also stop all pulse background services if server status says we checked out!
+      if (!_isCheckedIn) {
+        await _stopUnifiedPulseSystem();
+      }
 
       print('✅ Status updated: isCheckedIn=$_isCheckedIn (was: $wasCheckedIn)');
       if (restoredFromCache && !_isCheckedIn) {
@@ -860,12 +1046,11 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
 
             _startTimer();
 
-            if (!_pulseService.isTracking) {
-              await _pulseService.startTracking(
-                widget.employeeId,
-                attendanceId: restoredId,
-              );
-            }
+            await _ensurePulseTrackingActive(
+              employeeId: widget.employeeId,
+              attendanceId: restoredId,
+              checkInTime: restoredCheckIn,
+            );
 
             AppLogger.instance.log(
               'Auto-resumed active attendance from local context after status mismatch',
@@ -888,9 +1073,10 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
       if (_isCheckedIn && !_pulseService.isTracking) {
         try {
           final attendanceId = status['attendance']?['id'] as String?;
-          await _pulseService.startTracking(
-            widget.employeeId,
+          await _ensurePulseTrackingActive(
+            employeeId: widget.employeeId,
             attendanceId: attendanceId,
+            checkInTime: _checkInTime,
           );
           AppLogger.instance.log(
             'Resumed pulse tracking based on status check',
@@ -909,6 +1095,11 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
       }
       // Always refresh today's total when status is fetched
       await _refreshTodayTotal();
+      if (_isCheckedIn && _pulseService.isTracking) {
+        await _pulseService.refreshPulseCounts(checkInTime: _checkInTime);
+        _timerService.forceTickUpdate();
+        _updateDistanceFromBranch();
+      }
     } catch (e) {
       print('❌ Error checking status: $e');
 
@@ -957,7 +1148,13 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
             await _pulseService.startTracking(
               widget.employeeId,
               attendanceId: savedAttendanceId,
+              checkInTime: _checkInTime,
             );
+          } else {
+            // Already tracking - update the counts & timer UI
+            await _pulseService.refreshPulseCounts(checkInTime: _checkInTime);
+            _timerService.forceTickUpdate();
+            _updateDistanceFromBranch();
           }
         }
       } catch (prefsError) {
@@ -1070,13 +1267,14 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
     }
   }
 
-  /// 🚀 PHASE 4: Start timer using AttendanceTimerService
-  /// Timer continues even if page is closed
-  void _startTimer() {
+  Future<void> _startTimer() async {
     if (_checkInTime != null) {
+      final prefs = await SharedPreferences.getInstance();
+      final personalShiftEndTime = prefs.getString('employee_shift_end_time');
       _timerService.startTimer(
         checkInTime: _checkInTime!,
         hourlyRate: _hourlyRate > 0 ? _hourlyRate : 0.0,
+        shiftEndTimeStr: personalShiftEndTime,
       );
     }
   }
@@ -1410,60 +1608,94 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
 
   /// ⏰ NEW: Check for automatic checkout at shift end
   Future<void> _checkAutoCheckout() async {
-    if (!_isCheckedIn) return; // Not checked in
+    // Disabled by policy: shift-end auto-checkout is completely disabled.
+    return;
+    if (!_isCheckedIn || _checkInTime == null) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final personalShiftEnd = prefs.getString('employee_shift_end_time');
+    
+    // Prioritize personal shift end time. If not set, do not trigger auto-checkout.
+    final shiftEndStr = personalShiftEnd;
+    if (shiftEndStr == null || shiftEndStr.isEmpty) return;
 
     try {
-      // Get employee data with shift times
-      final employeeData = await SupabaseAttendanceService.getEmployeeStatus(
-        widget.employeeId,
-      );
-      final emp = employeeData['employee'];
-
-      if (emp == null || emp['shift_end_time'] == null) {
-        // No shift time defined, no auto checkout
-        return;
-      }
-
-      final shiftEndTime = emp['shift_end_time'] as String; // "17:00"
+      final shiftEndTime = AttendanceTimerService.getShiftEndTime(_checkInTime!, shiftEndStr);
       final now = DateTime.now();
-      final currentTime = TimeOfDay(hour: now.hour, minute: now.minute);
 
-      // Parse shift end time
-      final parts = shiftEndTime.split(':');
-      if (parts.length != 2) return;
-
-      final endHour = int.tryParse(parts[0]);
-      final endMinute = int.tryParse(parts[1]);
-      if (endHour == null || endMinute == null) return;
-
-      final shiftEnd = TimeOfDay(hour: endHour, minute: endMinute);
-
-      // Check if current time is past shift end time
-      final currentMinutes = currentTime.hour * 60 + currentTime.minute;
-      final endMinutes = shiftEnd.hour * 60 + shiftEnd.minute;
-
-      if (currentMinutes >= endMinutes) {
-        print('⏰ Auto checkout triggered: Current time past shift end');
-
-        // Show notification
+      if (now.isAfter(shiftEndTime) || now.millisecondsSinceEpoch == shiftEndTime.millisecondsSinceEpoch) {
+        print('⏰ [ShiftEndAutoCheckout] Shift end time reached ($shiftEndTime). Triggering auto checkout.');
+        
+        // Show auto-checkout snackbar or notification
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                '⏰ تم تسجيل الانصراف تلقائياً - انتهى موعد الشيفت ($shiftEndTime)',
-              ),
-              backgroundColor: AppColors.warning,
-              duration: const Duration(seconds: 5),
+            const SnackBar(
+              content: Text('⏰ انتهى وقت الشيفت! جاري تسجيل الانصراف التلقائي...'),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 4),
             ),
           );
         }
 
-        // Trigger automatic checkout
+        // Trigger checkout
         await _handleCheckOut();
       }
     } catch (e) {
-      print('❌ Error in auto checkout check: $e');
-      // Don't show error to user, just log it
+      print('⚠️ Error in _checkAutoCheckout: $e');
+    }
+  }
+
+  Future<void> _ensurePulseTrackingActive({
+    required String employeeId,
+    required String? attendanceId,
+    required DateTime? checkInTime,
+  }) async {
+    if (attendanceId == null || attendanceId.isEmpty) {
+      print('⚠️ [ensurePulseTrackingActive] attendanceId is null or empty');
+      return;
+    }
+
+    if (checkInTime != null) {
+      _checkInTime = checkInTime;
+    }
+
+    if (_branchData == null) {
+      try {
+        if (!kIsWeb) {
+          _branchData = await OfflineDatabase.instance.getCachedBranchData(employeeId);
+        } else {
+          _branchData = await _offlineService.getCachedBranchData(employeeId: employeeId);
+        }
+      } catch (e) {
+        print('⚠️ Error loading branch data from cache in _ensurePulseTrackingActive: $e');
+      }
+    }
+
+    if (_branchData != null) {
+      final branchIdForPulse =
+          _branchData!['id']?.toString() ??
+          _branchData!['branch_id']?.toString() ??
+          '';
+
+      await _startUnifiedPulseSystem(
+        employeeId: employeeId,
+        attendanceId: attendanceId,
+        branchId: branchIdForPulse,
+      );
+
+      if (!kIsWeb) {
+        SyncService.instance.startPeriodicSync();
+      }
+      _updateDistanceFromBranch();
+    } else {
+      print('⚠️ _branchData is null in _ensurePulseTrackingActive, starting primary tracking only');
+      if (!_pulseService.isTracking) {
+        await _pulseService.startTracking(
+          employeeId,
+          attendanceId: attendanceId,
+          checkInTime: checkInTime ?? _checkInTime,
+        );
+      }
     }
   }
 
@@ -1497,13 +1729,34 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
 
     try {
       if (Platform.isIOS) {
-        print('🍎 iOS unified pulse path: PulseTracking + WorkManager');
+        print('🍎 iOS unified pulse path: PulseTracking + WorkManager + Native Audio KeepAlive');
         if (!_pulseService.isTracking) {
           await _pulseService.startTracking(
             employeeId,
             attendanceId: attendanceId,
+            checkInTime: _checkInTime,
           );
         }
+
+        // Start native iOS silent audio to keep app awake in background
+        int? shiftEndTimeEpoch;
+        if (_checkInTime != null) {
+          final prefs = await SharedPreferences.getInstance();
+          final personalShiftEnd = prefs.getString('employee_shift_end_time');
+          final shiftEndStr = personalShiftEnd ?? 
+                              _branchData?['shift_end_time']?.toString() ?? 
+                              _branchData?['shift_end']?.toString();
+          if (shiftEndStr != null && shiftEndStr.isNotEmpty) {
+            final shiftEndDateTime = AttendanceTimerService.getShiftEndTime(_checkInTime!, shiftEndStr);
+            shiftEndTimeEpoch = shiftEndDateTime.millisecondsSinceEpoch;
+          }
+        }
+        await NativePulseBridge.startForAttendance(
+          employeeId: employeeId,
+          attendanceId: attendanceId,
+          branchId: branchId,
+          shiftEndTimeEpoch: shiftEndTimeEpoch,
+        );
 
         await WorkManagerPulseService.instance.startPeriodicPulses(
           employeeId: employeeId,
@@ -1512,7 +1765,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         );
 
         AppLogger.instance.log(
-          'Unified Pulse System started on iOS (PulseTracking + WorkManager)',
+          'Unified Pulse System started on iOS (PulseTracking + WorkManager + Native Audio)',
           tag: 'UnifiedPulse',
         );
         return;
@@ -1528,8 +1781,30 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         await _pulseService.startTracking(
           employeeId,
           attendanceId: attendanceId,
+          checkInTime: _checkInTime,
         );
       }
+
+      // ✅ LAYER 1.5: Start Native Persistent Pulses (Android only)
+      print('🛰️ Layer 1.5: Starting NativePulseService...');
+      int? shiftEndTimeEpoch;
+      if (_checkInTime != null) {
+        final prefs = await SharedPreferences.getInstance();
+        final personalShiftEnd = prefs.getString('employee_shift_end_time');
+        final shiftEndStr = personalShiftEnd ?? 
+                            _branchData?['shift_end_time']?.toString() ?? 
+                            _branchData?['shift_end']?.toString();
+        if (shiftEndStr != null && shiftEndStr.isNotEmpty) {
+          final shiftEndDateTime = AttendanceTimerService.getShiftEndTime(_checkInTime!, shiftEndStr);
+          shiftEndTimeEpoch = shiftEndDateTime.millisecondsSinceEpoch;
+        }
+      }
+      await NativePulseBridge.startForAttendance(
+        employeeId: employeeId,
+        attendanceId: attendanceId,
+        branchId: branchId,
+        shiftEndTimeEpoch: shiftEndTimeEpoch,
+      );
 
       // ✅ LAYER 2: Start ForegroundAttendanceService (Persistent Notification)
       print('🔔 Layer 2: Starting ForegroundAttendanceService...');
@@ -1599,6 +1874,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
       if (Platform.isIOS) {
         print('🍎 Stopping iOS unified pulse path');
         _pulseService.stopTracking();
+        await NativePulseBridge.stop();
         await WorkManagerPulseService.instance.stopPeriodicPulses();
         AppLogger.instance.log(
           'Unified Pulse System stopped on iOS',
@@ -1611,6 +1887,10 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
       print('🛑 Layer 1: Stopping PulseTrackingService...');
       _pulseService.stopTracking();
       print('✅ PulseTrackingService stopped');
+
+      // ✅ LAYER 1.5: Stop Native Persistent Pulses
+      print('🛑 Layer 1.5: Stopping NativePulseService...');
+      await NativePulseBridge.stop();
 
       // ✅ LAYER 2: Stop ForegroundAttendanceService
       print('🛑 Layer 2: Stopping ForegroundAttendanceService...');
@@ -2060,48 +2340,81 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
   Future<bool> checkHardPermissions() async {
     if (kIsWeb) return true; // Web doesn't need these checks
 
-    final List<String> missingPermissions = [];
-
     try {
-      // 1. فحص تحسين البطارية (لأجهزة سامسونج وريلمي)
-      if (Platform.isAndroid) {
-        bool isOptimized = false;
-        try {
-          isOptimized = await OptimizeBattery.isIgnoringBatteryOptimizations();
-        } catch (e) {
-          AppLogger.instance.log(
-            'Failed to check battery optimization: $e',
-            level: AppLogger.warning,
-            tag: 'HardPermission',
-          );
-          // If check fails, don't block - just log
-        }
-
-        if (!isOptimized) {
-          missingPermissions.add(
-            '🔋 يجب تعطيل "تحسين البطارية" لضمان تسجيل نبضاتك بدقة',
-          );
-        }
-      }
-
-      // 2. فحص إذن الموقع (Always)
+      bool notifOk = await Permission.notification.isGranted;
       final locationStatus = await Geolocator.checkPermission();
-      if (locationStatus != LocationPermission.always &&
-          locationStatus != LocationPermission.whileInUse) {
-        missingPermissions.add(
-          '📍 يجب ضبط إذن الموقع على "السماح طوال الوقت" لتجنب الانصراف التلقائي',
-        );
-      }
-
-      // 3. فحص GPS مفعل
+      bool locationAlwaysOk = locationStatus == LocationPermission.always;
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        missingPermissions.add('🛰️ يجب تفعيل خدمات الموقع (GPS) على جهازك');
+      
+      bool exactAlarmOk = true;
+      bool wifiEnabled = true;
+      bool batteryOptOk = true;
+      bool overlayOk = true;
+
+      if (Platform.isAndroid) {
+        final androidInfo = await DeviceInfoPlugin().androidInfo;
+        final sdkInt = androidInfo.version.sdkInt;
+        
+        if (sdkInt >= 33) {
+          notifOk = await Permission.notification.isGranted;
+        } else {
+          notifOk = true;
+        }
+
+        if (sdkInt >= 31) {
+          exactAlarmOk = await Permission.scheduleExactAlarm.isGranted;
+        }
+
+        batteryOptOk = await Permission.ignoreBatteryOptimizations.isGranted;
+        overlayOk = await Permission.systemAlertWindow.isGranted;
+
+        try {
+          final canStart = await WiFiScan.instance.canStartScan(askPermissions: false);
+          wifiEnabled = canStart != CanStartScan.failed && canStart != CanStartScan.notSupported;
+        } catch (_) {
+          wifiEnabled = false;
+        }
       }
 
-      // إذا كانت هناك صلاحيات ناقصة، أظهر dialog
-      if (missingPermissions.isNotEmpty && mounted) {
-        await _showPermissionDialog(missingPermissions);
+      final hasAll = notifOk && locationAlwaysOk && serviceEnabled && exactAlarmOk && wifiEnabled && batteryOptOk && overlayOk;
+
+      if (!hasAll) {
+        if (mounted) {
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => AlertDialog(
+              title: const Text('⚠️ صلاحيات مطلوبة', textAlign: TextAlign.right),
+              content: const Text(
+                'يجب تفعيل جميع صلاحيات الموقع طوال الوقت، الإشعارات، المنبه الدقيق، الواي فاي، تعطيل تحسين البطارية، والظهور فوق التطبيقات لتسجيل الحضور.',
+                textAlign: TextAlign.right,
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () async {
+                    Navigator.pop(ctx);
+                    final loginData = await AuthService.getLoginData();
+                    final role = loginData['role'] ?? 'staff';
+                    final branch = loginData['branch'] ?? '';
+                    if (!mounted) return;
+                    Navigator.of(context).pushReplacement(
+                      MaterialPageRoute(
+                        builder: (_) => PermissionsOnboardingPage(
+                          nextScreen: EmployeeMainScreen(
+                            employeeId: widget.employeeId,
+                            role: role,
+                            branch: branch,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                  child: const Text('الانتقال للتفعيل'),
+                ),
+              ],
+            ),
+          );
+        }
         return false;
       }
 
@@ -2113,8 +2426,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         tag: 'HardPermission',
         error: e,
       );
-      // On error, allow check-in but log the issue
-      return true;
+      return false;
     }
   }
 
@@ -2245,7 +2557,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
       );
 
       // 🔒 NEW: Hard Permission Check - يجب أن تمر جميع الفحوصات
-      if (!kIsWeb && Platform.isAndroid) {
+      if (!kIsWeb) {
         final hasAllPermissions = await checkHardPermissions();
         if (!hasAllPermissions) {
           setState(() => _isLoading = false);
@@ -2339,7 +2651,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
                 builder: (context) => AlertDialog(
                   title: const Text('صلاحية مطلوبة'),
                   content: const Text(
-                    'تم رفض صلاحية الموقع بشكل دائم.\n\nيرجى الذهاب إلى الإعدادات → التطبيقات → Oldies Workers → الأذونات وتفعيل "الموقع".',
+                    'تم رفض صلاحية الموقع بشكل دائم.\n\nيرجى الذهاب إلى الإعدادات → التطبيقات → recap attendee → الأذونات وتفعيل "الموقع".',
                   ),
                   actions: [
                     TextButton(
@@ -2440,6 +2752,17 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         );
 
         // ✅ NEW: Check for session gap > 5.5 minutes
+        if (_branchData == null) {
+          try {
+            if (!kIsWeb) {
+              _branchData = await OfflineDatabase.instance.getCachedBranchData(widget.employeeId);
+            } else {
+              _branchData = await _offlineService.getCachedBranchData(employeeId: widget.employeeId);
+            }
+          } catch (e) {
+            print('⚠️ Error loading branch data from cache during session resume: $e');
+          }
+        }
         if (timeAgo.inSeconds > 330 && _branchData != null) {
           try {
             final employeeData =
@@ -2451,7 +2774,15 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
                 _branchData!['manager_id'] ??
                 employeeData['employee']?['branch']?['manager_id'];
 
-            if (branchId != null && managerId != null && attendanceId != null) {
+            final resolvedBranchId = branchId?.toString() ??
+                _branchData!['branch_id']?.toString() ??
+                _branchData!['id']?.toString() ??
+                '';
+            final resolvedManagerId = managerId?.toString() ??
+                _branchData!['manager_id']?.toString() ??
+                '';
+
+            if (resolvedBranchId.isNotEmpty && resolvedManagerId.isNotEmpty && attendanceId != null) {
               AppLogger.instance.log(
                 'Checking for session gap (${timeAgo.inMinutes} minutes)',
                 level: AppLogger.warning,
@@ -2462,8 +2793,8 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
                   .checkAndCreateSessionValidation(
                     employeeId: widget.employeeId,
                     attendanceId: attendanceId,
-                    branchId: branchId,
-                    managerId: managerId,
+                    branchId: resolvedBranchId,
+                    managerId: resolvedManagerId,
                   );
 
               if (validationCreated && mounted) {
@@ -2494,9 +2825,10 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         _currentAttendanceId = attendanceId;
 
         // Start pulse tracking immediately
-        await _pulseService.startTracking(
-          widget.employeeId,
+        await _ensurePulseTrackingActive(
+          employeeId: widget.employeeId,
           attendanceId: attendanceId,
+          checkInTime: checkInTime,
         );
 
         // ✅ NEW: Restore UI timer & earnings when resuming existing attendance
@@ -2568,9 +2900,19 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
       print('👤 Employee: ${employee.fullName} (${employee.id})');
       print('🏢 Branch: ${employee.branch}');
 
-      // Use the new validation method for check-in (WiFi OR Location)
-      print('⏳ Starting validation...');
-      final validation = await GeofenceService.validateForCheckIn(employee);
+      // Use the new validation method with dialog overlay (WiFi OR Location)
+      print('⏳ Starting validation with dialog...');
+      if (!mounted) return;
+      final validation = await showDialog<GeofenceValidationResult?>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => LocationVerificationDialog(employee: employee),
+      );
+
+      if (validation == null) {
+        print('❌ Validation canceled or failed!');
+        throw Exception('تم إلغاء التحقق من الموقع أو فشل الجلب');
+      }
 
       print('📊 Validation Result: ${validation.isValid}');
       print('💬 Message: ${validation.message}');
@@ -2688,6 +3030,18 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           );
 
           // Check shift absence (if employee has shift times)
+          if (_branchData == null) {
+            try {
+              if (!kIsWeb) {
+                _branchData = await OfflineDatabase.instance.getCachedBranchData(widget.employeeId);
+              } else {
+                _branchData = await _offlineService.getCachedBranchData(employeeId: widget.employeeId);
+              }
+            } catch (e) {
+              print('⚠️ Error loading branch data from cache during absence check: $e');
+            }
+          }
+
           if (_branchData != null) {
             try {
               final employeeData =
@@ -2697,9 +3051,14 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
               final emp = employeeData['employee'];
 
               if (emp != null && emp['shift_start_time'] != null) {
+                final branchIdForAbsence =
+                    _branchData!['branch_id']?.toString() ??
+                    _branchData!['id']?.toString() ??
+                    validation.branchId ??
+                    '';
                 await AbsenceService.checkShiftAbsence(
                   employeeId: widget.employeeId,
-                  branchId: _branchData!['branch_id'],
+                  branchId: branchIdForAbsence,
                   managerId: emp['branch']?['manager_id'] ?? '',
                   shiftStartTime: emp['shift_start_time'],
                   shiftEndTime: emp['shift_end_time'] ?? '17:00',
@@ -2730,6 +3089,16 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           // ✅ Store attendance_id for check-out
           _currentAttendanceId = attendanceId;
 
+          // ✅ Cache active attendance ID on device for safe offline retrieval
+          if (attendanceId != null && attendanceId.isNotEmpty) {
+            await SupabaseAttendanceService.cacheActiveAttendanceOnDevice(
+              employeeId: widget.employeeId,
+              attendanceId: attendanceId,
+              checkInIso: _checkInTime?.toIso8601String() ?? DateTime.now().toIso8601String(),
+              isOfflineAttendance: false,
+            );
+          }
+
           // Check-in successful (online)
           if (_optimisticCheckInStarted) {
             // Keep original optimistic start time, just clear loading
@@ -2748,12 +3117,29 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           await _refreshTodayTotal();
 
           // ✅ Start pulse tracking when check-in succeeds
+          if (_branchData == null) {
+            try {
+              if (!kIsWeb) {
+                _branchData = await OfflineDatabase.instance.getCachedBranchData(widget.employeeId);
+              } else {
+                _branchData = await _offlineService.getCachedBranchData(employeeId: widget.employeeId);
+              }
+            } catch (e) {
+              print('⚠️ Error loading branch data from cache during check-in: $e');
+            }
+          }
+
           if (_branchData != null) {
+            final branchIdForPulse =
+                _branchData!['id']?.toString() ??
+                _branchData!['branch_id']?.toString() ??
+                validation.branchId ??
+                '';
             // 🚀 PHASE 2: Unified Pulse System with 5-Layer Protection
             await _startUnifiedPulseSystem(
               employeeId: widget.employeeId,
               attendanceId: attendanceId,
-              branchId: _branchData!['id'] as String,
+              branchId: branchIdForPulse,
             );
 
             // 🚀 PHASE 6: Start sync service for offline pulses
@@ -2761,6 +3147,9 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
               SyncService.instance.startPeriodicSync();
               print('✅ Started sync service for offline pulses');
             }
+            _updateDistanceFromBranch();
+          } else {
+            print('⚠️ _branchData is still null, cannot start unified pulse system');
           }
 
           if (mounted) {
@@ -2903,11 +3292,24 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         await _refreshTodayTotal();
 
         // ✅ Start pulse tracking when check-in succeeds (offline mode, with offline attendance_id)
+        if (_branchData == null) {
+          try {
+            if (!kIsWeb) {
+              _branchData = await OfflineDatabase.instance.getCachedBranchData(widget.employeeId);
+            } else {
+              _branchData = await _offlineService.getCachedBranchData(employeeId: widget.employeeId);
+            }
+          } catch (e) {
+            print('⚠️ Error loading branch data from cache during offline check-in: $e');
+          }
+        }
         if (_branchData != null) {
-          await _pulseService.startTracking(
-            widget.employeeId,
+          await _ensurePulseTrackingActive(
+            employeeId: widget.employeeId,
             attendanceId: offlineAttendanceId,
+            checkInTime: _checkInTime,
           );
+          _updateDistanceFromBranch();
           print('🎯 Started pulse tracking after offline check-in');
         }
 
@@ -3079,7 +3481,11 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         }
 
         if (attendanceId == null) {
-          throw Exception('لا يوجد سجل حضور نشط\nيرجى تسجيل الحضور أولاً');
+          if (_isCheckedIn) {
+            print('⚠️ Failsafe: UI is checked-in but attendanceId is null. Allowing checkout.');
+          } else {
+            throw Exception('لا يوجد سجل حضور نشط\nيرجى تسجيل الحضور أولاً');
+          }
         }
       } else {
         // Check if current attendance is offline
@@ -3128,6 +3534,9 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
         }
       }
 
+      final double calculatedWorkHours = _timerService.calculateWorkedSeconds() / 3600.0;
+      print('⏱️ Calculated worked hours for checkout: $calculatedWorkHours');
+
       // Try online mode first, fallback to offline if it fails
       bool checkOutSuccess = false;
 
@@ -3148,9 +3557,11 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
 
         final success = await SupabaseAttendanceService.checkOut(
           attendanceId: attendanceId,
+          employeeId: widget.employeeId,
           latitude: latitude,
           longitude: longitude,
           wifiBssid: wifiBSSID,
+          workHours: calculatedWorkHours,
         );
 
         if (success) {
@@ -3173,20 +3584,21 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
             }
 
             if (emp != null &&
-                emp['hourly_rate'] != null &&
-                activeAttendanceRecord != null) {
+                emp['hourly_rate'] != null) {
               final hourlyRate =
                   (emp['hourly_rate'] as num?)?.toDouble() ?? 0.0;
               final checkOutTimeStr = TimeOfDay.now().format(context);
 
               // Get check-in time from active attendance (with safe parsing)
-              DateTime? checkInDateTime;
-              try {
-                checkInDateTime = DateTime.parse(
-                  activeAttendanceRecord['check_in_time'].toString(),
-                );
-              } catch (e) {
-                checkInDateTime = null;
+              DateTime? checkInDateTime = _checkInTime;
+              if (activeAttendanceRecord != null && activeAttendanceRecord!['check_in_time'] != null) {
+                try {
+                  checkInDateTime = DateTime.parse(
+                    activeAttendanceRecord!['check_in_time'].toString(),
+                  );
+                } catch (e) {
+                  checkInDateTime = _checkInTime;
+                }
               }
               final checkInTimeStr = checkInDateTime != null
                   ? TimeOfDay.fromDateTime(checkInDateTime).format(context)
@@ -3198,6 +3610,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
                 checkInTime: checkInTimeStr,
                 checkOutTime: checkOutTimeStr,
                 hourlyRate: hourlyRate,
+                workHoursOverride: calculatedWorkHours,
               );
             }
           } catch (e) {
@@ -3235,6 +3648,7 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
           timestamp: DateTime.now(),
           latitude: latitude,
           longitude: longitude,
+          workHours: calculatedWorkHours,
         );
 
         // Start sync service if not already running
@@ -4132,25 +4546,115 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> {
                             ),
                             child: Column(
                               children: [
-                                const Text(
-                                  'مدة العمل الحالية',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    color: AppColors.textSecondary,
-                                  ),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        children: [
+                                          Text(
+                                            'مدة العمل المحتسبة',
+                                            style: GoogleFonts.tajawal(
+                                              fontSize: 13,
+                                              color: AppColors.textSecondary,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            _timerService.elapsedTime,
+                                            style: const TextStyle(
+                                              fontSize: 24,
+                                              fontWeight: FontWeight.w800,
+                                              color: AppColors.primaryOrange,
+                                              fontFeatures: [
+                                                FontFeature.tabularFigures(),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    Container(
+                                      height: 40,
+                                      width: 1,
+                                      color: Colors.orange.withOpacity(0.2),
+                                    ),
+                                    Expanded(
+                                      child: Column(
+                                        children: [
+                                          Text(
+                                            (_branchData?['shift_end_time'] == null || _branchData?['shift_end_time']?.toString().isEmpty == true)
+                                                ? 'الوقت المنقضي بالوردية'
+                                                : 'المتبقي على الشيفت',
+                                            style: GoogleFonts.tajawal(
+                                              fontSize: 13,
+                                              color: AppColors.textSecondary,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            _timerService.shiftCountdown,
+                                            style: TextStyle(
+                                              fontSize: 24,
+                                              fontWeight: FontWeight.w800,
+                                              color: Colors.blue.shade700,
+                                              fontFeatures: const [
+                                                FontFeature.tabularFigures(),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                                const SizedBox(height: 6),
+                                const SizedBox(height: 12),
                                 Text(
-                                  _timerService.elapsedTime,
-                                  style: const TextStyle(
-                                    fontSize: 32,
-                                    fontWeight: FontWeight.w800,
-                                    color: AppColors.primaryOrange,
-                                    fontFeatures: [
-                                      FontFeature.tabularFigures(),
-                                    ],
+                                  _distanceFromBranch != null
+                                      ? 'المسافة الحالية عن الفرع: ${_distanceFromBranch!.toStringAsFixed(0)} متر'
+                                      : 'جاري تحديد المسافة عن الفرع...',
+                                  style: GoogleFonts.tajawal(
+                                    color: AppColors.textSecondary,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
                                   ),
                                 ),
+                                if (_isCheckedIn && (_timerService.isPausedDueToOutside || !_pulseService.isCurrentlyInside)) ...[
+                                  const SizedBox(height: 6),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 4,
+                                      horizontal: 10,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.danger.withOpacity(0.08),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const Icon(
+                                          Icons.pause_circle_filled_rounded,
+                                          color: AppColors.danger,
+                                          size: 14,
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          _timerService.isPausedDueToOutside
+                                              ? 'الوقت متوقف مؤقتاً (${_timerService.pausedReason})'
+                                              : 'الوقت متوقف مؤقتاً (خارج النطاق)',
+                                          style: GoogleFonts.tajawal(
+                                            color: AppColors.danger,
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
                               ],
                             ),
                           ),

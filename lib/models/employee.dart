@@ -25,6 +25,7 @@ class Employee extends HiveObject {
     this.leaveAllowance = 100,
     this.shiftStartTime,
     this.shiftEndTime,
+    this.isSuperEmployee = false,
     this.address,
     this.birthDate,
     this.email,
@@ -46,6 +47,7 @@ class Employee extends HiveObject {
   double leaveAllowance; // بدل الإجازة لكل موظف
   String? shiftStartTime; // وقت بداية الشيفت (e.g., "09:00")
   String? shiftEndTime; // وقت نهاية الشيفت (e.g., "17:00")
+  bool isSuperEmployee; // سوبر موظف
   String? address;
   DateTime? birthDate;
   String? email;
@@ -60,13 +62,13 @@ class Employee extends HiveObject {
   // JSON Serialization for Supabase
   factory Employee.fromJson(Map<String, dynamic> json) {
     return Employee(
-      id: json['id'] as String,
-      fullName: json['full_name'] as String,
-      pin: json['pin'] as String,
+      id: json['id']?.toString() ?? '',
+      fullName: json['full_name']?.toString() ?? '',
+      pin: json['pin']?.toString() ?? '',
       role: _roleFromString(json['role'] as String?),
       permissions: [], // Permissions not in Supabase yet
       isActive: json['is_active'] as bool? ?? true,
-      branch: json['branch'] as String? ?? 'المركز الرئيسي',
+      branch: _extractBranchName(json),
       hourlyRate: (json['hourly_rate'] as num?)?.toDouble() ?? 0,
       leaveAllowance:
           (json['leave_allowance'] as num?)?.toDouble() ??
@@ -74,6 +76,7 @@ class Employee extends HiveObject {
           100,
       shiftStartTime: json['shift_start_time'] as String?,
       shiftEndTime: json['shift_end_time'] as String?,
+      isSuperEmployee: json['is_super_employee'] as bool? ?? json['isSuperEmployee'] as bool? ?? false,
       address: json['address'] as String?,
       birthDate: json['birth_date'] != null
           ? DateTime.tryParse(json['birth_date'] as String)
@@ -89,6 +92,34 @@ class Employee extends HiveObject {
     );
   }
 
+  static String _extractBranchName(Map<String, dynamic> json) {
+    final branches = json['branches'];
+
+    if (branches is Map<String, dynamic>) {
+      final relationName = branches['name']?.toString().trim();
+      if (relationName != null && relationName.isNotEmpty) {
+        return relationName;
+      }
+    }
+
+    if (branches is List && branches.isNotEmpty) {
+      final first = branches.first;
+      if (first is Map) {
+        final relationName = first['name']?.toString().trim();
+        if (relationName != null && relationName.isNotEmpty) {
+          return relationName;
+        }
+      }
+    }
+
+    final branch = json['branch']?.toString().trim();
+    if (branch != null && branch.isNotEmpty) {
+      return branch;
+    }
+
+    return 'المركز الرئيسي';
+  }
+
   Map<String, dynamic> toJson() {
     return {
       'id': id,
@@ -101,6 +132,7 @@ class Employee extends HiveObject {
       'leave_allowance': leaveAllowance,
       'shift_start_time': shiftStartTime,
       'shift_end_time': shiftEndTime,
+      'is_super_employee': isSuperEmployee,
       'address': address,
       'birth_date': birthDate?.toIso8601String(),
       'email': email,
@@ -145,6 +177,7 @@ class EmployeeAdapter extends TypeAdapter<Employee> {
     final leaveAllowance = (fields[17] as num?)?.toDouble() ?? 100;
     final shiftStart = fields[15] as String?;
     final shiftEnd = fields[16] as String?;
+    final isSuper = fields[18] as bool? ?? false;
     return Employee(
       id: fields[0] as String,
       fullName: fields[1] as String,
@@ -162,6 +195,7 @@ class EmployeeAdapter extends TypeAdapter<Employee> {
       leaveAllowance: leaveAllowance,
       shiftStartTime: shiftStart,
       shiftEndTime: shiftEnd,
+      isSuperEmployee: isSuper,
       address: fields[10] as String?,
       birthDate: fields[11] != null
           ? DateTime.tryParse(fields[11] as String)
@@ -180,7 +214,7 @@ class EmployeeAdapter extends TypeAdapter<Employee> {
   @override
   void write(BinaryWriter writer, Employee obj) {
     writer
-      ..writeByte(17)
+      ..writeByte(18)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -214,7 +248,9 @@ class EmployeeAdapter extends TypeAdapter<Employee> {
       ..writeByte(16)
       ..write(obj.shiftEndTime)
       ..writeByte(17)
-      ..write(obj.leaveAllowance);
+      ..write(obj.leaveAllowance)
+      ..writeByte(18)
+      ..write(obj.isSuperEmployee);
   }
 }
 

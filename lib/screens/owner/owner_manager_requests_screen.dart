@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../theme/app_colors.dart';
+import '../../services/supabase_function_client.dart';
 import '../../services/supabase_requests_service.dart';
 import '../../utils/owner_time_utils.dart';
 
 class OwnerManagerRequestsScreen extends StatefulWidget {
-  const OwnerManagerRequestsScreen({super.key});
+  const OwnerManagerRequestsScreen({super.key, required this.ownerId});
+
+  final String ownerId;
 
   @override
   State<OwnerManagerRequestsScreen> createState() => _OwnerManagerRequestsScreenState();
@@ -152,17 +155,25 @@ class _OwnerManagerRequestsScreenState extends State<OwnerManagerRequestsScreen>
 
   Future<void> _actOn(String type, String id, String action) async {
     try {
-      final client = Supabase.instance.client;
-      final newStatus = action == 'approve' ? 'approved' : 'rejected';
-      if (type == 'leave') {
-        await client.from('leave_requests').update({'status': newStatus}).eq('id', id);
-      } else if (type == 'advance') {
-        await client.from('salary_advances').update({'status': newStatus}).eq('id', id);
-      } else if (type == 'attendance') {
-        await client.from('attendance_requests').update({'status': newStatus}).eq('id', id);
-      } else if (type == 'break') {
-        await client.from('breaks').update({'status': newStatus.toUpperCase()}).eq('id', id);
+      final payload = <String, dynamic>{
+        'type': type,
+        'id': id,
+        'action': action,
+      };
+
+      // Always include reviewerId from the owner navigation state.
+      if (widget.ownerId.isNotEmpty) {
+        payload['reviewerId'] = widget.ownerId;
       }
+
+      final response = await SupabaseFunctionClient.post('branch-request-action', payload);
+
+      if (response == null || response['success'] == false) {
+        throw Exception(
+          response?['error']?.toString() ?? 'فشل تنفيذ العملية',
+        );
+      }
+
       await _load();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('✓ تم تنفيذ العملية')));

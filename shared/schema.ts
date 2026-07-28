@@ -51,6 +51,7 @@ export const employees = pgTable('employees', {
   email: text('email'),
   phone: text('phone'),
   active: boolean('active').default(true).notNull(),
+  isSuperEmployee: boolean('is_super_employee').default(false).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
@@ -953,3 +954,21 @@ export type NewPayroll = typeof payroll.$inferInsert;
 
 export type PayrollHistory = typeof payrollHistory.$inferSelect;
 export type NewPayrollHistory = typeof payrollHistory.$inferInsert;
+
+// Attendance rules table
+export const attendanceRules = pgTable('attendance_rules', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  branchId: uuid('branch_id').references(() => branches.id, { onDelete: 'cascade' }),
+  gracePeriodMinutes: integer('grace_period_minutes').default(15).notNull(),
+  deductionMultiplier: numeric('deduction_multiplier').default('1.0').notNull(),
+  deductionType: text('deduction_type').default('hourly_pro_rata').notNull(), // 'hourly_pro_rata', 'fixed_per_incident', 'tiered'
+  fixedDeductionAmount: numeric('fixed_deduction_amount').default('0').notNull(),
+  tieredRules: text('tiered_rules').default('[]').notNull(), // JSONB represented as text
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  branchIdIdx: index('idx_attendance_rules_branch').on(table.branchId),
+}));
+
+export type AttendanceRule = typeof attendanceRules.$inferSelect;
+export type NewAttendanceRule = typeof attendanceRules.$inferInsert;

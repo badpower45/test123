@@ -14,6 +14,8 @@ import 'manager/manager_absences_page.dart';
 import 'manager/manager_dashboard_simple.dart';
 import 'manager/manager_daily_attendance_page.dart';
 import 'manager/manager_penalties_page.dart';
+import '../services/location_permission_service.dart';
+import 'permissions_onboarding_page.dart';
 
 class BranchManagerScreen extends StatefulWidget {
   final String managerId;
@@ -29,7 +31,7 @@ class BranchManagerScreen extends StatefulWidget {
 }
 
 class _BranchManagerScreenState extends State<BranchManagerScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   bool _loading = true;
   String? _error;
   Map<String, dynamic>? _requests;
@@ -47,6 +49,8 @@ class _BranchManagerScreenState extends State<BranchManagerScreen>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _checkPermissions();
     _tabController = TabController(length: 5, vsync: this);
     _downloadBranchData();
     _loadPendingCount();
@@ -57,10 +61,34 @@ class _BranchManagerScreenState extends State<BranchManagerScreen>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _requestsChannel?.unsubscribe();
     _tabController.dispose();
     _syncService.stopPeriodicSync();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkPermissions();
+    }
+  }
+
+  Future<void> _checkPermissions() async {
+    final hasPermissions = await LocationPermissionService.hasAllRequiredPermissions();
+    if (!hasPermissions && mounted) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => PermissionsOnboardingPage(
+            nextScreen: BranchManagerScreen(
+              managerId: widget.managerId,
+              branchName: widget.branchName,
+            ),
+          ),
+        ),
+      );
+    }
   }
 
   void _setupRealtimeSubscription() {

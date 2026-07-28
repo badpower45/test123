@@ -26,8 +26,7 @@ class AuthService with ChangeNotifier {
     return _instance!;
   }
 
-  AuthService._() {
-  }
+  AuthService._() {}
 
   // Save login credentials
   static Future<void> saveLoginData({
@@ -44,6 +43,14 @@ class AuthService with ChangeNotifier {
     await prefs.setBool(_keyIsLoggedIn, true);
   }
 
+  static Future<void> updateSavedBranch(String branch) async {
+    final normalized = branch.trim();
+    if (normalized.isEmpty) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyBranch, normalized);
+  }
+
   // Static logout method for backward compatibility
   static Future<void> logout() async {
     final instance = AuthService();
@@ -54,7 +61,7 @@ class AuthService with ChangeNotifier {
   static Future<Map<String, String?>> getLoginData() async {
     final prefs = await SharedPreferences.getInstance();
     final isLoggedIn = prefs.getBool(_keyIsLoggedIn) ?? false;
-    
+
     if (!isLoggedIn) {
       return {};
     }
@@ -78,13 +85,13 @@ class AuthService with ChangeNotifier {
     // Get employee ID before clearing
     final loginData = await getLoginData();
     final employeeId = loginData['employeeId'];
-    
+
     // 1. التحقق إذا كان المستخدم "حاضر" حالياً (من Supabase مباشرة)
     if (employeeId != null) {
       try {
         // Check active attendance from Supabase
         final hasActiveAttendance = await _checkActiveAttendance(employeeId);
-        
+
         if (hasActiveAttendance) {
           // 2. إذا كان كذلك، قم بتشغيل الانصراف الإجباري
           print('⚠️ [Logout] Active attendance found, forcing checkout...');
@@ -96,7 +103,9 @@ class AuthService with ChangeNotifier {
             // لا نرسل throw error، يجب أن تتم عملية تسجيل الخروج محلياً
           }
         } else {
-          print('ℹ️ [Logout] No active attendance found, proceeding with logout');
+          print(
+            'ℹ️ [Logout] No active attendance found, proceeding with logout',
+          );
         }
       } catch (e) {
         print('⚠️ [Logout] Error checking active attendance: $e');
@@ -129,17 +138,24 @@ class AuthService with ChangeNotifier {
   /// Check if employee has active attendance from Supabase
   Future<bool> _checkActiveAttendance(String employeeId) async {
     try {
-      final status = await SupabaseAttendanceService.getEmployeeStatus(employeeId);
+      final status = await SupabaseAttendanceService.getEmployeeStatus(
+        employeeId,
+      );
       final attendance = status['attendance'] as Map<String, dynamic>?;
-      
+
       if (attendance != null) {
         final attendanceStatus = attendance['status']?.toString().toLowerCase();
         final hasCheckout = attendance['check_out_time'] != null;
-        final isActive = !hasCheckout && attendanceStatus != 'completed' && attendanceStatus != 'checked_out';
-        print('🔍 [Logout] Attendance status: $attendanceStatus, isActive: $isActive');
+        final isActive =
+            !hasCheckout &&
+            attendanceStatus != 'completed' &&
+            attendanceStatus != 'checked_out';
+        print(
+          '🔍 [Logout] Attendance status: $attendanceStatus, isActive: $isActive',
+        );
         return isActive;
       }
-      
+
       return false;
     } catch (e) {
       print('⚠️ [Logout] Error checking attendance status: $e');

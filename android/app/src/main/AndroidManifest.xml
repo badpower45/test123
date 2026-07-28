@@ -23,6 +23,9 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     
+    <!-- Activity Recognition Permission -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    
     <!-- ✅ V2: Additional permissions for old and new devices -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
@@ -104,19 +107,22 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="location|dataSync"
-            android:stopWithTask="false" />
+            android:stopWithTask="false"
+            android:process=":background" />
 
         <!-- Pulse Alarm Receiver - Resurrects service if killed -->
         <receiver
             android:name=".PulseAlarmReceiver"
             android:enabled="true"
-            android:exported="false" />
+            android:exported="false"
+            android:process=":background" />
 
         <!-- Boot Receiver - Restores persistent pulse service after reboot/app update -->
         <receiver
             android:name=".BootReceiver"
             android:enabled="true"
             android:exported="false"
+            android:process=":background"
             android:directBootAware="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />

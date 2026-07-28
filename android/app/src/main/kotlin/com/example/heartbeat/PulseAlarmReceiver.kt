@@ -56,8 +56,9 @@ class PulseAlarmReceiver : BroadcastReceiver() {
         val branchLatitude = intent.getDoubleExtra("branchLatitude", 0.0)
         val branchLongitude = intent.getDoubleExtra("branchLongitude", 0.0)
         val branchRadius = intent.getDoubleExtra("branchRadius", 100.0)
+        val shiftEndTimeEpoch = intent.getLongExtra("shiftEndTimeEpoch", 0L)
         
-        Log.d(TAG, "📋 Params - Employee: $employeeId, Attendance: $attendanceId")
+        Log.d(TAG, "📋 Params - Employee: $employeeId, Attendance: $attendanceId, ShiftEnd: $shiftEndTimeEpoch")
         
         // If we have valid parameters, ensure service is running
         if (!employeeId.isNullOrEmpty() && !attendanceId.isNullOrEmpty()) {
@@ -68,12 +69,14 @@ class PulseAlarmReceiver : BroadcastReceiver() {
                 "interval" to interval,
                 "branchLatitude" to branchLatitude,
                 "branchLongitude" to branchLongitude,
-                "branchRadius" to branchRadius
+                "branchRadius" to branchRadius,
+                "shiftEndTimeEpoch" to shiftEndTimeEpoch,
+                "fromAlarm" to true
             )
             
             // Restart the service
             PersistentPulseService.start(context, params)
-            Log.d(TAG, "🔄 Service restart triggered")
+            Log.d(TAG, "🔄 Service restart triggered from alarm")
         } else {
             Log.w(TAG, "⚠️ Missing parameters - cannot restart service")
         }

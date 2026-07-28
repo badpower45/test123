@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart' as ll;
 import 'dart:async';
 import '../../services/supabase_branch_service.dart';
 import '../../services/supabase_auth_service.dart';
@@ -42,14 +44,17 @@ class _OwnerBranchesScreenState extends State<OwnerBranchesScreen> {
         );
         branch['employee_count'] = employees.length;
         
-        // Find manager
-        final manager = employees.firstWhere(
-          (e) => e['role'] == 'manager',
-          orElse: () => {},
-        );
-        if (manager.isNotEmpty) {
-          branch['manager_name'] = manager['full_name'];
-          branch['manager_id'] = manager['id'];
+        // Find all managers
+        final managers = employees.where((e) => e['role'] == 'manager').toList();
+        branch['managers'] = managers;
+        final managerNames = managers.map((e) => e['full_name'] as String).toList();
+        final managerIds = managers.map((e) => e['id'] as String).toList();
+        branch['manager_names'] = managerNames;
+        branch['manager_ids'] = managerIds;
+
+        if (managerNames.isNotEmpty) {
+          branch['manager_name'] = managerNames.join('، ');
+          branch['manager_id'] = managerIds.first;
         }
       }
 
@@ -310,14 +315,16 @@ class _BranchCard extends StatelessWidget {
                   '$employeeCount موظف',
                   style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
                 ),
-                if (managerName != null) ...[
+                if (managerName != null && managerName.isNotEmpty) ...[
                   const SizedBox(width: 12),
-                  const Icon(Icons.person, size: 14, color: Colors.blue),
+                  const Icon(Icons.manage_accounts, size: 14, color: Colors.blue),
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
-                      'المدير: $managerName',
-                      style: const TextStyle(fontSize: 12, color: Colors.blue),
+                      'المديرون: $managerName',
+                      style: const TextStyle(fontSize: 12, color: Colors.blue, fontWeight: FontWeight.w600),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
                 ],
@@ -422,7 +429,7 @@ class _BranchCard extends StatelessWidget {
                     ElevatedButton.icon(
                       onPressed: onAssignManager,
                       icon: const Icon(Icons.person_add, size: 18),
-                      label: Text(managerName != null ? 'تغيير المدير' : 'تعيين مدير'),
+                      label: Text(managerName != null && managerName.isNotEmpty ? 'تعيين/تغيير المديرين' : 'تعيين مديرين'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.green,
                         foregroundColor: Colors.white,
@@ -682,11 +689,13 @@ class _BranchFormDialogState extends State<_BranchFormDialog> {
   }
 
   Future<void> _pickLocationOnMap() async {
+    final radius = double.tryParse(_radiusController.text) ?? 100.0;
     final result = await showDialog<Map<String, double>>(
       context: context,
       builder: (context) => _MapPickerDialog(
         initialLat: double.tryParse(_latitudeController.text),
         initialLng: double.tryParse(_longitudeController.text),
+        radius: radius,
       ),
     );
 
@@ -1193,7 +1202,7 @@ class _AssignManagerDialog extends StatefulWidget {
 
 class _AssignManagerDialogState extends State<_AssignManagerDialog> {
   List<Employee> _employees = [];
-  String? _selectedManagerId;
+  Set<String> _selectedManagerIds = {};
   bool _loading = true;
   bool _submitting = false;
 
@@ -1206,16 +1215,21 @@ class _AssignManagerDialogState extends State<_AssignManagerDialog> {
   Future<void> _loadEmployees() async {
     try {
       final employees = await SupabaseAuthService.getAllEmployees();
-      
-      // Filter: Only managers or employees without manager role
-      final available = employees.where((e) {
-        return e.role == EmployeeRole.manager || e.role == EmployeeRole.staff;
-      }).toList();
+
+      // Find current managers for this branch
+      final currentManagerIds = <String>{};
+      final branchManagerIds = widget.branch['manager_ids'];
+      if (branchManagerIds is List) {
+        currentManagerIds.addAll(branchManagerIds.map((e) => e.toString()));
+      }
+      if (widget.branch['manager_id'] != null) {
+        currentManagerIds.add(widget.branch['manager_id'].toString());
+      }
 
       if (!mounted) return;
       setState(() {
-        _employees = available;
-        _selectedManagerId = widget.branch['manager_id'] as String?;
+        _employees = employees;
+        _selectedManagerIds = currentManagerIds;
         _loading = false;
       });
     } catch (e) {
@@ -1225,34 +1239,49 @@ class _AssignManagerDialogState extends State<_AssignManagerDialog> {
   }
 
   Future<void> _submit() async {
-    if (_selectedManagerId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('يرجى اختيار المدير'),
-          backgroundColor: AppColors.error,
-        ),
-      );
-      return;
-    }
-
     setState(() => _submitting = true);
 
     try {
       final branchId = widget.branch['id'] as String;
-      final success = await SupabaseBranchService.assignManager(
-        branchId: branchId,
-        managerId: _selectedManagerId!,
-      );
+      final branchName = widget.branch['name'] as String;
 
-      if (!success) {
-        throw Exception('فشل في تعيين المدير');
+      final supabase = Supabase.instance.client;
+
+      // 1. Assign all selected employees as managers for this branch
+      for (final empId in _selectedManagerIds) {
+        await supabase
+            .from('employees')
+            .update({
+              'role': 'manager',
+              'branch': branchName,
+              'branch_id': branchId,
+            })
+            .eq('id', empId);
       }
+
+      // 2. Unassign any unselected previous managers
+      final previousManagerIds = (widget.branch['manager_ids'] as List?)?.map((e) => e.toString()).toList() ?? [];
+      for (final prevId in previousManagerIds) {
+        if (!_selectedManagerIds.contains(prevId)) {
+          await supabase
+              .from('employees')
+              .update({'role': 'staff'})
+              .eq('id', prevId);
+        }
+      }
+
+      // 3. Update main manager_id in branches table
+      final primaryId = _selectedManagerIds.isNotEmpty ? _selectedManagerIds.first : null;
+      await SupabaseBranchService.assignManager(
+        branchId: branchId,
+        managerId: primaryId ?? '',
+      );
 
       if (!mounted) return;
       Navigator.pop(context, true);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('✓ تم تعيين المدير بنجاح'),
+        SnackBar(
+          content: Text('✓ تم تحديد مديري فرع "$branchName" بنجاح (${_selectedManagerIds.length} مدير)'),
           backgroundColor: AppColors.success,
         ),
       );
@@ -1268,31 +1297,70 @@ class _AssignManagerDialogState extends State<_AssignManagerDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text('تعيين مدير - ${widget.branch['name']}'),
+      title: Row(
+        children: [
+          const Icon(Icons.manage_accounts_rounded, color: AppColors.primaryOrange),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'تعيين/تعديل مديري فرع ${widget.branch['name']}',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
       content: _loading
           ? const SizedBox(
-              height: 100,
+              height: 120,
               child: Center(child: CircularProgressIndicator()),
             )
           : _employees.isEmpty
-              ? const Text('لا يوجد موظفون متاحون')
+              ? const Text('لا يوجد موظفون متاحيين')
               : SizedBox(
-                  width: 300,
-                  child: DropdownButtonFormField<String>(
-                    value: _selectedManagerId,
-                    decoration: const InputDecoration(
-                      labelText: 'اختر المدير',
-                      border: OutlineInputBorder(),
-                    ),
-                    items: _employees.map((emp) {
-                      return DropdownMenuItem(
-                        value: emp.id,
-                        child: Text('${emp.fullName} (${emp.id})'),
-                      );
-                    }).toList(),
-                    onChanged: (value) {
-                      setState(() => _selectedManagerId = value);
-                    },
+                  width: 380,
+                  height: 320,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'قم بتحديد الموظفين المراد تعيينهم كمديرين لهذا الفرع:',
+                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                      const SizedBox(height: 8),
+                      Expanded(
+                        child: ListView.builder(
+                          itemCount: _employees.length,
+                          itemBuilder: (context, index) {
+                            final emp = _employees[index];
+                            final isSelected = _selectedManagerIds.contains(emp.id);
+
+                            return CheckboxListTile(
+                              value: isSelected,
+                              activeColor: AppColors.primaryOrange,
+                              title: Text(
+                                emp.fullName,
+                                style: TextStyle(
+                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                ),
+                              ),
+                              subtitle: Text(
+                                'الفرع الحقيقي: ${emp.branch} • الدور: ${emp.role.name}',
+                                style: const TextStyle(fontSize: 11, color: Colors.grey),
+                              ),
+                              onChanged: (val) {
+                                setState(() {
+                                  if (val == true) {
+                                    _selectedManagerIds.add(emp.id);
+                                  } else {
+                                    _selectedManagerIds.remove(emp.id);
+                                  }
+                                });
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                    ],
                   ),
                 ),
       actions: [
@@ -1309,7 +1377,7 @@ class _AssignManagerDialogState extends State<_AssignManagerDialog> {
                   height: 20,
                   child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                 )
-              : const Text('تعيين'),
+              : Text('حفظ المديرين (${_selectedManagerIds.length})'),
         ),
       ],
     );
@@ -1457,14 +1525,16 @@ class _BranchEmployeesDialog extends StatelessWidget {
   }
 }
 
-// Map Picker Dialog Widget
+// Map Picker Dialog Widget (OpenStreetMap + Geofence CircleMarker + Zoom Controls)
 class _MapPickerDialog extends StatefulWidget {
   final double? initialLat;
   final double? initialLng;
+  final double radius;
 
   const _MapPickerDialog({
     this.initialLat,
     this.initialLng,
+    this.radius = 100.0,
   });
 
   @override
@@ -1474,8 +1544,7 @@ class _MapPickerDialog extends StatefulWidget {
 class _MapPickerDialogState extends State<_MapPickerDialog> {
   late double _selectedLat;
   late double _selectedLng;
-  GoogleMapController? _mapController;
-  Set<Marker> _markers = {};
+  final MapController _mapController = MapController();
 
   @override
   void initState() {
@@ -1483,43 +1552,29 @@ class _MapPickerDialogState extends State<_MapPickerDialog> {
     // Default to Cairo if no initial location
     _selectedLat = widget.initialLat ?? 30.0444;
     _selectedLng = widget.initialLng ?? 31.2357;
-    _updateMarker();
   }
 
-  @override
-  void dispose() {
-    _mapController?.dispose();
-    super.dispose();
-  }
-
-  void _updateMarker() {
+  void _onMapTapped(TapPosition tapPosition, ll.LatLng point) {
     setState(() {
-      _markers = {
-        Marker(
-          markerId: const MarkerId('selected_location'),
-          position: LatLng(_selectedLat, _selectedLng),
-          draggable: true,
-          onDragEnd: (newPosition) {
-            setState(() {
-              _selectedLat = newPosition.latitude;
-              _selectedLng = newPosition.longitude;
-            });
-          },
-        ),
-      };
+      _selectedLat = point.latitude;
+      _selectedLng = point.longitude;
     });
   }
 
-  void _onMapTapped(LatLng position) {
-    setState(() {
-      _selectedLat = position.latitude;
-      _selectedLng = position.longitude;
-      _updateMarker();
-    });
+  void _zoomIn() {
+    final currentZoom = _mapController.camera.zoom;
+    _mapController.move(ll.LatLng(_selectedLat, _selectedLng), currentZoom + 0.5);
+  }
+
+  void _zoomOut() {
+    final currentZoom = _mapController.camera.zoom;
+    _mapController.move(ll.LatLng(_selectedLat, _selectedLng), currentZoom - 0.5);
   }
 
   @override
   Widget build(BuildContext context) {
+    final currentPoint = ll.LatLng(_selectedLat, _selectedLng);
+
     return Dialog(
       child: Container(
         width: MediaQuery.of(context).size.width * 0.85,
@@ -1530,10 +1585,10 @@ class _MapPickerDialogState extends State<_MapPickerDialog> {
             // Header
             Row(
               children: [
-                const Icon(Icons.map, color: Colors.blue),
+                const Icon(Icons.map_rounded, color: AppColors.primaryOrange),
                 const SizedBox(width: 8),
                 const Text(
-                  'اختر الموقع على الخريطة',
+                  'اختر موقع الفرع على الخريطة التفاعلية',
                   style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
@@ -1548,53 +1603,115 @@ class _MapPickerDialogState extends State<_MapPickerDialog> {
             ),
             const SizedBox(height: 12),
 
-            // Current coordinates display
+            // Current coordinates & Radius display
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Colors.blue.withOpacity(0.1),
+                color: AppColors.primaryOrange.withOpacity(0.08),
                 borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppColors.primaryOrange.withOpacity(0.2)),
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Icon(Icons.south, size: 16, color: Colors.blue),
+                  const Icon(Icons.south, size: 16, color: AppColors.primaryOrange),
                   const SizedBox(width: 4),
                   Text(
                     'Lat: ${_selectedLat.toStringAsFixed(6)}',
-                    style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+                    style: const TextStyle(fontFamily: 'monospace', fontSize: 13, fontWeight: FontWeight.bold),
                   ),
-                  const SizedBox(width: 16),
-                  const Icon(Icons.east, size: 16, color: Colors.blue),
+                  const SizedBox(width: 14),
+                  const Icon(Icons.east, size: 16, color: AppColors.primaryOrange),
                   const SizedBox(width: 4),
                   Text(
                     'Lng: ${_selectedLng.toStringAsFixed(6)}',
-                    style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+                    style: const TextStyle(fontFamily: 'monospace', fontSize: 13, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(width: 14),
+                  const Icon(Icons.circle_outlined, size: 16, color: Colors.blue),
+                  const SizedBox(width: 4),
+                  Text(
+                    'الدائرة: ${widget.radius.toInt()} م',
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.blue),
                   ),
                 ],
               ),
             ),
             const SizedBox(height: 12),
 
-            // Google Map
+            // FlutterMap OpenStreetMap Widget with Geofence Circle & Zoom Controls
             Expanded(
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
-                child: GoogleMap(
-                  initialCameraPosition: CameraPosition(
-                    target: LatLng(_selectedLat, _selectedLng),
-                    zoom: 15,
-                  ),
-                  onMapCreated: (controller) {
-                    _mapController = controller;
-                  },
-                  onTap: _onMapTapped,
-                  markers: _markers,
-                  myLocationEnabled: true,
-                  myLocationButtonEnabled: true,
-                  zoomControlsEnabled: true,
-                  mapToolbarEnabled: false,
-                  compassEnabled: true,
+                child: Stack(
+                  children: [
+                    FlutterMap(
+                      mapController: _mapController,
+                      options: MapOptions(
+                        initialCenter: currentPoint,
+                        initialZoom: 16.0,
+                        onTap: _onMapTapped,
+                      ),
+                      children: [
+                        TileLayer(
+                          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                          userAgentPackageName: 'com.oldies.workers.app',
+                        ),
+                        CircleLayer(
+                          circles: [
+                            CircleMarker(
+                              point: currentPoint,
+                              radius: widget.radius,
+                              useRadiusInMeter: true,
+                              color: AppColors.primaryOrange.withOpacity(0.25),
+                              borderColor: AppColors.primaryOrange,
+                              borderStrokeWidth: 2,
+                            ),
+                          ],
+                        ),
+                        MarkerLayer(
+                          markers: [
+                            Marker(
+                              point: currentPoint,
+                              width: 50,
+                              height: 50,
+                              child: const Icon(
+                                Icons.location_on_rounded,
+                                color: Colors.red,
+                                size: 48,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+
+                    // Floating Interactive Zoom Controls (+ / -)
+                    Positioned(
+                      bottom: 20,
+                      right: 16,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          FloatingActionButton.small(
+                            heroTag: 'zoom_in_btn',
+                            backgroundColor: Colors.white,
+                            foregroundColor: AppColors.primaryOrange,
+                            onPressed: _zoomIn,
+                            child: const Icon(Icons.add, size: 22),
+                          ),
+                          const SizedBox(height: 8),
+                          FloatingActionButton.small(
+                            heroTag: 'zoom_out_btn',
+                            backgroundColor: Colors.white,
+                            foregroundColor: AppColors.primaryOrange,
+                            onPressed: _zoomOut,
+                            child: const Icon(Icons.remove, size: 22),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -1604,20 +1721,20 @@ class _MapPickerDialogState extends State<_MapPickerDialog> {
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Colors.orange.withOpacity(0.1),
+                color: Colors.amber.shade50,
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                border: Border.all(color: Colors.amber.shade200),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.info_outline, color: Colors.orange, size: 20),
+                  const Icon(Icons.info_outline, color: Colors.amber, size: 20),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'اضغط على الخريطة أو اسحب العلامة لتحديد الموقع',
+                      'انقر في أي مكان على الخريطة لتحديد الموقع؛ ستلاحظ ظهور الدائرة الزرقاء التي تمثل نصف القطر المسموح به للحضور (${widget.radius.toInt()} متر).',
                       style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.orange[900],
+                        fontSize: 12,
+                        color: Colors.amber.shade900,
                       ),
                     ),
                   ),
@@ -1645,7 +1762,7 @@ class _MapPickerDialogState extends State<_MapPickerDialog> {
                   icon: const Icon(Icons.check),
                   label: const Text('تأكيد الموقع'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blue,
+                    backgroundColor: AppColors.primaryOrange,
                     foregroundColor: Colors.white,
                   ),
                 ),

@@ -10,6 +10,9 @@ class SupabaseAttendanceService {
   static const String _activeAttendanceSnapshotKey =
       'device_active_attendance_snapshot_v1';
 
+  // Public getter for SupabaseClient (needed for manager branch resolution)
+  static SupabaseClient get client => _supabase;
+
   static bool _isActiveAttendanceRow(Map<String, dynamic> row) {
     final status = row['status']?.toString().toLowerCase();
     final hasCheckout = row['check_out_time'] != null;
@@ -343,7 +346,10 @@ class SupabaseAttendanceService {
           print('⚠️ Failed to insert fallback pulse: $pulseError');
         }
 
-        // ✅ Daily summary will be updated by Edge Function via persist flag
+        await _upsertDailySummaryFromAttendance(
+          employeeId: employeeId,
+          checkInTime: now,
+        );
         
         return insertedAttendance as Map<String, dynamic>?;
       } catch (fallbackError) {
@@ -369,50 +375,202 @@ class SupabaseAttendanceService {
         msg.contains('duplicate key value violates unique constraint');
   }
 
-  /// Check-out employee (using Edge Function)
-  static Future<bool> checkOut({
+  static String _twoDigits(int value) => value.toString().padLeft(2, '0');
+
+  static String _formatDateKey(DateTime value) {
+    final local = value.toLocal();
+    return '${local.year}-${_twoDigits(local.month)}-${_twoDigits(local.day)}';
+  }
+
+  static String _formatTimeOnly(DateTime value) {
+    final local = value.toLocal();
+    return '${_twoDigits(local.hour)}:${_twoDigits(local.minute)}:${_twoDigits(local.second)}';
+  }
+
+  static Future<void> _upsertDailySummaryFromAttendance({
+    required String employeeId,
+    required DateTime checkInTime,
+    DateTime? checkOutTime,
+    double? totalHours,
+  }) async {
+    try {
+      final employee = await _supabase
+          .from('employees')
+          .select('hourly_rate')
+          .eq('id', employeeId)
+          .maybeSingle();
+
+      final hourlyRate = (employee?['hourly_rate'] as num?)?.toDouble() ?? 0.0;
+      final safeHours = totalHours ?? 0.0;
+
+      final payload = <String, dynamic>{
+        'employee_id': employeeId,
+        'attendance_date': _formatDateKey(checkInTime),
+        'check_in_time': _formatTimeOnly(checkInTime),
+        'hourly_rate': hourlyRate,
+        'total_hours': double.parse(safeHours.toStringAsFixed(2)),
+        'daily_salary': double.parse((safeHours * hourlyRate).toStringAsFixed(2)),
+        'is_absent': false,
+        'is_on_leave': false,
+      };
+
+      if (checkOutTime != null) {
+        payload['check_out_time'] = _formatTimeOnly(checkOutTime);
+      }
+
+      await _supabase
+          .from('daily_attendance_summary')
+          .upsert(payload, onConflict: 'employee_id,attendance_date');
+
+      print('✅ Daily attendance summary synced for $employeeId');
+    } catch (e) {
+      print('⚠️ Failed to sync daily attendance summary: $e');
+    }
+  }
+
+  /// Sync calculated check-out work hours to attendance and daily_attendance_summary tables
+  static Future<void> syncCheckOutWorkHours({
     required String attendanceId,
+    required String employeeId,
+    required double workHours,
+  }) async {
+    try {
+      print('🔄 Syncing exact check-out work hours: id=$attendanceId, hours=$workHours');
+      
+      // Update attendance table work_hours
+      await _supabase
+          .from('attendance')
+          .update({
+            'work_hours': double.parse(workHours.toStringAsFixed(2)),
+          })
+          .eq('id', attendanceId);
+      print('✅ Updated attendance table work_hours to $workHours');
+
+      // Fetch check_in/check_out times from attendance to update daily_attendance_summary
+      final attendance = await _supabase
+          .from('attendance')
+          .select('check_in_time, check_out_time')
+          .eq('id', attendanceId)
+          .maybeSingle();
+
+      if (attendance != null) {
+        final checkInStr = attendance['check_in_time'];
+        final checkOutStr = attendance['check_out_time'];
+        if (checkInStr != null) {
+          final checkInTime = DateTime.parse(checkInStr.toString());
+          final checkOutTime = checkOutStr != null
+              ? DateTime.parse(checkOutStr.toString())
+              : DateTime.now();
+
+          await _upsertDailySummaryFromAttendance(
+            employeeId: employeeId,
+            checkInTime: checkInTime,
+            checkOutTime: checkOutTime,
+            totalHours: workHours,
+          );
+        }
+      }
+    } catch (e) {
+      print('⚠️ Failed to sync checkout work hours: $e');
+    }
+  }
+
+  /// Check-out employee (using Edge Function)
+  static bool _isUuid(String value) {
+    final uuidRegex = RegExp(
+      r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+    );
+    return uuidRegex.hasMatch(value);
+  }
+
+  static Future<bool> checkOut({
+    String? attendanceId,
+    String? employeeId,
     double? latitude,
     double? longitude,
     String? wifiBssid,
     bool forceCheckout = false,
+    double? workHours,
   }) async {
+    String? resolvedEmployeeId = employeeId;
+    String? resolvedAttendanceId = attendanceId;
     try {
-      // First, get employee_id from attendance record
-      final attendance = await _supabase
-          .from('attendance')
-          .select('employee_id')
-          .eq('id', attendanceId)
-          .maybeSingle();
-      
-      if (attendance == null) {
-        print('❌ Attendance record not found: $attendanceId');
+
+      if (resolvedAttendanceId != null && resolvedAttendanceId.isNotEmpty && _isUuid(resolvedAttendanceId)) {
+        // Try to get employee_id from attendance record if not provided
+        if (resolvedEmployeeId == null || resolvedEmployeeId.isEmpty) {
+          try {
+            final attendance = await _supabase
+                .from('attendance')
+                .select('employee_id')
+                .eq('id', resolvedAttendanceId)
+                .maybeSingle()
+                .timeout(const Duration(seconds: 4));
+            
+            if (attendance != null) {
+              resolvedEmployeeId = attendance['employee_id'] as String?;
+            }
+          } catch (e) {
+            print('⚠️ Error resolving employee_id from attendance: $e');
+          }
+        }
+      }
+
+      // If we don't have employee_id, try to get it from current active preferences
+      if (resolvedEmployeeId == null || resolvedEmployeeId.isEmpty) {
+        final prefs = await SharedPreferences.getInstance();
+        resolvedEmployeeId = prefs.getString('active_employee_id');
+      }
+
+      // If we still don't have employee_id, we cannot proceed
+      if (resolvedEmployeeId == null || resolvedEmployeeId.isEmpty) {
+        print('❌ Cannot check-out: no employee_id or attendance_id available');
         return false;
       }
-      
-      final employeeId = attendance['employee_id'] as String;
-      
-      // Use Edge Function for check-out (same as check-in)
+
+      // If we don't have attendanceId, try to retrieve it from active attendance cache or query
+      if (resolvedAttendanceId == null || resolvedAttendanceId.isEmpty) {
+        try {
+          final active = await getActiveAttendance(resolvedEmployeeId);
+          if (active != null) {
+            resolvedAttendanceId = active['id']?.toString();
+          }
+        } catch (e) {
+          print('⚠️ Error retrieving active attendance for checkout: $e');
+        }
+      }
+
+      // Use Edge Function for check-out
       print('📤 Calling attendance-check-out Edge Function');
-      print('   Employee ID: $employeeId');
-      print('   Attendance ID: $attendanceId');
+      print('   Employee ID: $resolvedEmployeeId');
+      print('   Attendance ID: $resolvedAttendanceId');
       print('   Location: $latitude, $longitude');
       print('   WiFi: $wifiBssid');
-      
-      final response = await SupabaseFunctionClient.post('attendance-check-out', {
-        'employee_id': employeeId,
-        'attendance_id': attendanceId,
+
+      final payload = {
+        'employee_id': resolvedEmployeeId,
+        if (resolvedAttendanceId != null && resolvedAttendanceId.isNotEmpty && _isUuid(resolvedAttendanceId))
+          'attendance_id': resolvedAttendanceId,
         'latitude': latitude,
         'longitude': longitude,
         if (wifiBssid != null) 'wifi_bssid': wifiBssid,
         if (forceCheckout) 'force_checkout': true,
-      });
-      
+      };
+
+      print('📤 Check-out payload: $payload');
+      final response = await SupabaseFunctionClient.post('attendance-check-out', payload);
       print('✅ Check-out Edge Function response: $response');
       
       // Check for success in multiple ways
       if ((response ?? {})['success'] == true) {
         print('✅ Check-out successful (success flag)');
+        if (resolvedAttendanceId != null && workHours != null && _isUuid(resolvedAttendanceId)) {
+          await syncCheckOutWorkHours(
+            attendanceId: resolvedAttendanceId,
+            employeeId: resolvedEmployeeId,
+            workHours: workHours,
+          );
+        }
         await clearActiveAttendanceCache();
         return true;
       }
@@ -420,6 +578,14 @@ class SupabaseAttendanceService {
       // Also check if attendance was returned (indicates success)
       if ((response ?? {})['attendance'] != null) {
         print('✅ Check-out successful (attendance returned)');
+        final returnedId = (response?['attendance'] as Map?)?['id']?.toString() ?? resolvedAttendanceId;
+        if (workHours != null && returnedId != null && _isUuid(returnedId)) {
+          await syncCheckOutWorkHours(
+            attendanceId: returnedId,
+            employeeId: resolvedEmployeeId,
+            workHours: workHours,
+          );
+        }
         await clearActiveAttendanceCache();
         return true;
       }
@@ -427,17 +593,25 @@ class SupabaseAttendanceService {
       // Check for alreadyCheckedOut flag
       if ((response ?? {})['alreadyCheckedOut'] == true) {
         print('ℹ️ Already checked out');
+        if (workHours != null && resolvedAttendanceId != null && _isUuid(resolvedAttendanceId)) {
+          await syncCheckOutWorkHours(
+            attendanceId: resolvedAttendanceId,
+            employeeId: resolvedEmployeeId,
+            workHours: workHours,
+          );
+        }
         await clearActiveAttendanceCache();
         return true;
       }
       
       print('❌ Check-out failed - no success indicator in response');
-      if (forceCheckout) {
+      if (forceCheckout && resolvedAttendanceId != null && _isUuid(resolvedAttendanceId)) {
         return await _forceCheckoutDirect(
-          attendanceId: attendanceId,
+          attendanceId: resolvedAttendanceId,
           latitude: latitude,
           longitude: longitude,
           note: 'Auto-checkout by system (Forced outside geofence)',
+          workHours: workHours,
         );
       }
       return false;
@@ -446,21 +620,23 @@ class SupabaseAttendanceService {
       print('❌ Error details: ${e.toString()}');
       
       // Fallback to direct update if Edge Function fails
-      try {
-        print('⚠️ Falling back to direct Supabase update...');
-        
-        // First verify attendance exists and is active
-        return await _forceCheckoutDirect(
-          attendanceId: attendanceId,
-          latitude: latitude,
-          longitude: longitude,
-          note: 'Auto-checkout fallback (Edge failure)',
-        );
-      } catch (e2) {
-        print('❌ Direct check-out also failed: $e2');
-        print('❌ Direct update error details: ${e2.toString()}');
-        return false;
+      if (resolvedAttendanceId != null && _isUuid(resolvedAttendanceId)) {
+        try {
+          print('⚠️ Falling back to direct Supabase update...');
+          return await _forceCheckoutDirect(
+            attendanceId: resolvedAttendanceId,
+            latitude: latitude,
+            longitude: longitude,
+            note: 'Auto-checkout fallback (Edge failure)',
+            workHours: workHours,
+          );
+        } catch (e2) {
+          print('❌ Direct check-out also failed: $e2');
+          print('❌ Direct update error details: ${e2.toString()}');
+          return false;
+        }
       }
+      return false;
     }
   }
 
@@ -469,12 +645,14 @@ class SupabaseAttendanceService {
     double? latitude,
     double? longitude,
     String note = 'Auto-checkout by system (Forced)',
+    double? workHours,
   }) async {
     return _forceCheckoutDirect(
       attendanceId: attendanceId,
       latitude: latitude,
       longitude: longitude,
       note: note,
+      workHours: workHours,
     );
   }
 
@@ -483,6 +661,7 @@ class SupabaseAttendanceService {
     double? latitude,
     double? longitude,
     required String note,
+    double? workHours,
   }) async {
     final attendance = await _supabase
         .from('attendance')
@@ -515,8 +694,12 @@ class SupabaseAttendanceService {
       print('⚠️ Error parsing check_in_time: $e');
       checkInTime = DateTime.now().toUtc();
     }
-    final checkOutTime = DateTime.now().toUtc();
-    final totalHours = checkOutTime.difference(checkInTime).inMinutes / 60.0;
+    var checkOutTime = DateTime.now().toUtc();
+    if (!checkOutTime.isAfter(checkInTime)) {
+      checkOutTime = checkInTime.add(const Duration(minutes: 1));
+      print('⚠️ Adjusted fallback checkout time to avoid matching check-in timestamp');
+    }
+    final totalHours = workHours ?? (checkOutTime.difference(checkInTime).inMinutes / 60.0);
 
     print('🔄 Force-updating attendance: id=$attendanceId, time=${checkOutTime.toIso8601String()}');
 
@@ -540,6 +723,12 @@ class SupabaseAttendanceService {
     }
 
       print('✅ Direct force check-out update successful: $updateResult');
+      await _upsertDailySummaryFromAttendance(
+        employeeId: attendance['employee_id'].toString(),
+        checkInTime: checkInTime,
+        checkOutTime: checkOutTime,
+        totalHours: totalHours,
+      );
       await clearActiveAttendanceCache();
     return true;
   }
@@ -553,7 +742,8 @@ class SupabaseAttendanceService {
           .eq('employee_id', employeeId)
           .or('status.eq.active,status.eq.ACTIVE')
           .order('check_in_time', ascending: false)
-          .limit(1);
+          .limit(1)
+          .timeout(const Duration(seconds: 4));
 
       if (response.isNotEmpty) {
         return Map<String, dynamic>.from(response.first as Map);
@@ -566,7 +756,8 @@ class SupabaseAttendanceService {
           .eq('employee_id', employeeId)
           .isFilter('check_out_time', null)
           .order('check_in_time', ascending: false)
-          .limit(5);
+          .limit(5)
+          .timeout(const Duration(seconds: 4));
 
       if (openRows.isNotEmpty) {
         for (final row in openRows) {
@@ -587,7 +778,8 @@ class SupabaseAttendanceService {
               .from('attendance')
               .select()
               .eq('id', cachedAttendanceId)
-              .maybeSingle();
+              .maybeSingle()
+              .timeout(const Duration(seconds: 4));
 
           if (cached != null) {
             final mapped = Map<String, dynamic>.from(cached as Map);
@@ -601,7 +793,7 @@ class SupabaseAttendanceService {
       return null;
     } catch (e) {
       print('Get active attendance error: $e');
-      return null;
+      rethrow;
     }
   }
 
@@ -725,40 +917,44 @@ class SupabaseAttendanceService {
           .eq('employee_id', employeeId)
           .eq('status', 'ACTIVE')
           .order('break_start', ascending: false)
-          .maybeSingle();
+          .maybeSingle()
+          .timeout(const Duration(seconds: 4));
 
       return response;
     } catch (e) {
       print('Get active break error: $e');
-      return null;
+      rethrow;
     }
   }
 
   /// Get employee status (check-in status + active attendance + employee data)
   static Future<Map<String, dynamic>> getEmployeeStatus(String employeeId) async {
     try {
-      // Get employee data from employees table
-      final employeeData = await _supabase
-          .from('employees')
-          .select('*, branches(id, name)')
-          .eq('id', employeeId)
-          .maybeSingle();
+      return await Future(() async {
+        // Get employee data from employees table
+        final employeeData = await _supabase
+            .from('employees')
+            .select('*, branches(id, name)')
+            .eq('id', employeeId)
+            .maybeSingle()
+            .timeout(const Duration(seconds: 4));
 
-      print('✅ Employee data from Supabase: $employeeData');
-      
-      // Get active attendance
-      final activeAttendance = await getActiveAttendance(employeeId);
-      
-      // Get active break
-      final activeBreak = await getActiveBreak(employeeId);
-      
-      return {
-        'employee': employeeData,
-        'attendance': activeAttendance,
-        'break': activeBreak,
-        'isCheckedIn': activeAttendance != null,
-        'isOnBreak': activeBreak != null,
-      };
+        print('✅ Employee data from Supabase: $employeeData');
+        
+        // Get active attendance
+        final activeAttendance = await getActiveAttendance(employeeId);
+        
+        // Get active break
+        final activeBreak = await getActiveBreak(employeeId);
+        
+        return {
+          'employee': employeeData,
+          'attendance': activeAttendance,
+          'break': activeBreak,
+          'isCheckedIn': activeAttendance != null,
+          'isOnBreak': activeBreak != null,
+        };
+      }).timeout(const Duration(seconds: 5));
     } catch (e) {
       print('❌ Get employee status error: $e');
 
@@ -784,7 +980,8 @@ class SupabaseAttendanceService {
                 .from('attendance')
                 .select()
                 .eq('id', cachedAttendanceId)
-                .maybeSingle();
+                .maybeSingle()
+                .timeout(const Duration(seconds: 2));
 
             if (cachedRow != null) {
               final mapped = Map<String, dynamic>.from(cachedRow as Map);

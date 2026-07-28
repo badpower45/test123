@@ -101,10 +101,28 @@ class NativeLocationService {
 
       // Get current position with medium accuracy
       print('📡 Requesting location via plugin...');
+      late final LocationSettings locationSettings;
+      if (Platform.isAndroid) {
+        locationSettings = AndroidSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: const Duration(seconds: 15),
+        );
+      } else if (Platform.isIOS) {
+        locationSettings = AppleSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: const Duration(seconds: 15),
+          allowBackgroundLocationUpdates: true,
+          showBackgroundLocationIndicator: true,
+        );
+      } else {
+        locationSettings = const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 15),
+        );
+      }
+
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium,
-        forceAndroidLocationManager: false,
-        timeLimit: const Duration(seconds: 15),
+        locationSettings: locationSettings,
       ).timeout(
         const Duration(seconds: 17),
         onTimeout: () => throw TimeoutException('Location timeout'),
@@ -132,6 +150,13 @@ class NativeLocationService {
     final position = await getCurrentLocation();
     
     if (position == null) {
+      return null;
+    }
+
+    // 🚨 Reject location if it is stale (older than 90 seconds)
+    final age = DateTime.now().difference(position.timestamp).inSeconds;
+    if (age.abs() > 90) {
+      print('⚠️ [NativeLocationService] Rejecting stale location: age is ${age}s');
       return null;
     }
 

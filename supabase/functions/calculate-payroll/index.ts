@@ -214,6 +214,15 @@ serve(async (req) => {
       throw new Error(`Failed to fetch attendance: ${attendanceError.message}`);
     }
 
+    // Fetch all attendance rules
+    const { data: rulesData, error: rulesError } = await supabase
+      .from('attendance_rules')
+      .select('*');
+
+    if (rulesError) {
+      console.error(`[Payroll Calculation] Warning: Failed to fetch attendance rules: ${rulesError.message}. Using defaults.`);
+    }
+
     if (!attendanceRecords || attendanceRecords.length === 0) {
       return new Response(
         JSON.stringify({
@@ -335,15 +344,60 @@ serve(async (req) => {
         const dailyRate = hourlyRate * 8; // Assuming 8-hour work day
         const absenceDeductions = Math.round(absenceDays * dailyRate * 100) / 100;
 
-        // Calculate late deductions from attendance records
+        // Resolve rule for employee's branch
+        let rule = rulesData?.find(r => r.branch_id === employee.branch_id);
+        if (!rule) {
+          // Fallback to global rule
+          rule = rulesData?.find(r => r.branch_id === null);
+        }
+
+        const gracePeriod = rule ? (rule.grace_period_minutes !== undefined ? rule.grace_period_minutes : 15) : 15;
+        const multiplier = rule ? (rule.deduction_multiplier !== undefined ? Number(rule.deduction_multiplier) : 1.0) : 1.0;
+        const deductionType = rule ? (rule.deduction_type || 'hourly_pro_rata') : 'hourly_pro_rata';
+        const fixedAmount = rule ? (rule.fixed_deduction_amount !== undefined ? Number(rule.fixed_deduction_amount) : 0.0) : 0.0;
+        const tieredRules = rule ? (typeof rule.tiered_rules === 'string' ? JSON.parse(rule.tiered_rules) : (rule.tiered_rules || [])) : [];
+
+        // Calculate late deductions from attendance records based on dynamic rules
+        let lateDeductions = 0;
+        let lateIncidents = 0;
         let totalLateMinutes = 0;
+
         for (const record of records) {
           const lateMinutes = record.late_minutes || 0;
-          totalLateMinutes += lateMinutes;
+          if (lateMinutes > 0) {
+            totalLateMinutes += lateMinutes;
+            
+            // Check if exceeds grace period
+            if (lateMinutes > gracePeriod) {
+              lateIncidents++;
+              
+              if (deductionType === 'hourly_pro_rata') {
+                const chargeableMinutes = lateMinutes * multiplier;
+                const recordDeduction = (chargeableMinutes / 60) * hourlyRate;
+                lateDeductions += recordDeduction;
+              } else if (deductionType === 'fixed_per_incident') {
+                lateDeductions += fixedAmount;
+              } else if (deductionType === 'tiered') {
+                // Find matching tier
+                const matchedTier = tieredRules.find((tier: any) => {
+                  const min = tier.min_minutes || tier.min || 0;
+                  const max = tier.max_minutes || tier.max || 999999;
+                  return lateMinutes >= min && lateMinutes <= max;
+                });
+                
+                if (matchedTier) {
+                  const deductHours = matchedTier.deduction_value || matchedTier.deduct_hours || 0;
+                  lateDeductions += deductHours * hourlyRate;
+                } else {
+                  // Fallback to pro-rata if no tier matched
+                  lateDeductions += (lateMinutes / 60) * hourlyRate;
+                }
+              }
+            }
+          }
         }
-        // Deduct 1/60 of hourly rate per late minute (after 15 min grace period per day)
-        const chargeableLateMinutes = Math.max(0, totalLateMinutes - (workDays * 15));
-        const lateDeductions = Math.round((chargeableLateMinutes / 60) * hourlyRate * 100) / 100;
+        
+        lateDeductions = Math.round(lateDeductions * 100) / 100;
 
         // Calculate net pay
         // Total Deductions = Advances + Other Deductions + Absences + Lates
@@ -388,8 +442,11 @@ serve(async (req) => {
             },
             late_arrivals: {
               total_late_minutes: totalLateMinutes,
-              grace_period_minutes: workDays * 15,
-              chargeable_minutes: chargeableLateMinutes,
+              grace_period_minutes: gracePeriod,
+              deduction_type: deductionType,
+              multiplier: multiplier,
+              fixed_amount: fixedAmount,
+              late_incidents: lateIncidents,
               total: lateDeductions,
             },
           },

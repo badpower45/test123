@@ -23,8 +23,6 @@ class _HRDashboardScreenState extends State<HRDashboardScreen> {
   int _totalBranches = 0;
   int _pendingRequests = 0;
   int _checkedInToday = 0;
-  int _absencesToday = 0;
-  double _totalPayroll = 0;
 
   @override
   void initState() {
@@ -34,6 +32,14 @@ class _HRDashboardScreenState extends State<HRDashboardScreen> {
 
   final _supabase = Supabase.instance.client;
 
+  Future<T> _safeQuery<T>(Future<T> Function() operation) async {
+    try {
+      return await operation();
+    } catch (e) {
+      throw Exception(e.toString());
+    }
+  }
+
   Future<void> _loadStats() async {
     setState(() {
       _loading = true;
@@ -41,20 +47,27 @@ class _HRDashboardScreenState extends State<HRDashboardScreen> {
     });
 
     try {
-      final employeesResp = await _supabase.from('employees').select('id').neq('role', 'owner');
-      final branchesResp = await _supabase.from('branches').select('id');
-      final leaveResp = await _supabase.from('leave_requests').select('id').eq('status', 'pending');
-      final advanceResp = await _supabase.from('salary_advances').select('id').eq('status', 'pending');
-      final attendanceResp = await _supabase.from('attendance_requests').select('id').eq('status', 'pending');
-      final todayStats = await _getTodayStats();
+      final results = await Future.wait<dynamic>([
+        _safeQuery(() async => _supabase.from('employees').select('id').neq('role', 'owner')),
+        _safeQuery(() async => _supabase.from('branches').select('id')),
+        _safeQuery(() async => _supabase.from('leave_requests').select('id').eq('status', 'pending')),
+        _safeQuery(() async => _supabase.from('salary_advances').select('id').eq('status', 'pending')),
+        _safeQuery(() async => _supabase.from('attendance_requests').select('id').eq('status', 'pending')),
+        _safeQuery(_getTodayStats),
+      ]);
+
+      final employeesResp = results[0];
+      final branchesResp = results[1];
+      final leaveResp = results[2];
+      final advanceResp = results[3];
+      final attendanceResp = results[4];
+      final todayStats = results[5] as Map<String, dynamic>;
 
       setState(() {
         _totalEmployees = (employeesResp as List).length;
         _totalBranches = (branchesResp as List).length;
         _pendingRequests = (leaveResp as List).length + (advanceResp as List).length + (attendanceResp as List).length;
         _checkedInToday = todayStats['checkedIn'] as int? ?? 0;
-        _absencesToday = todayStats['absences'] as int? ?? 0;
-        _totalPayroll = todayStats['totalPayroll'] as double? ?? 0;
         _loading = false;
       });
     } catch (e) {
@@ -190,12 +203,6 @@ class _HRDashboardScreenState extends State<HRDashboardScreen> {
   }
 
   Widget _buildStatsGrid() {
-    final currencyFormat = NumberFormat.currency(
-      locale: 'ar',
-      symbol: 'ج.م',
-      decimalDigits: 0,
-    );
-
     return GridView.count(
       crossAxisCount: 2,
       shrinkWrap: true,

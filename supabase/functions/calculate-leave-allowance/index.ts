@@ -163,23 +163,34 @@ serve(async (req: Request) => {
       leaveAllowance = 0;
       console.log('[calculate-leave-allowance] More than 2 leaves, setting allowance to 0');
     } else if (leaveCount === 0) {
-      // No leaves → calculate based on last work day's hours within or before the period
+      // No leaves → calculate based on last work day's hours (ANY time, not just current period)
+      console.log('[calculate-leave-allowance] No leaves found, looking for last work day...');
+      
       const { data: lastWorkDay, error: workDayError } = await supabase
         .from('attendance')
-        .select('date, total_hours, work_hours')
+        .select('date, total_hours, work_hours, hourly_rate')
         .eq('employee_id', resolvedEmployeeId)
-        .lte('date', periodEnd) // on or before period end
         .order('date', { ascending: false })
         .limit(1)
         .maybeSingle();
 
-      if (!workDayError && lastWorkDay) {
-        const lastWorkHours = Number(lastWorkDay.total_hours ?? lastWorkDay.work_hours ?? 8);
-        leaveAllowance = lastWorkHours * hourlyRate;
-        console.log(`[calculate-leave-allowance] No leaves, calculated from last work day (${lastWorkDay.date}): ${lastWorkHours} hours × ${hourlyRate} = ${leaveAllowance}`);
+      console.log(`[calculate-leave-allowance] Last work day query result:`, lastWorkDay, workDayError);
+
+      if (lastWorkDay) {
+        // Get work hours - try multiple fields
+        let lastWorkHours = Number(lastWorkDay.total_hours) || 
+                           Number(lastWorkDay.work_hours) || 
+                           8;
+        
+        // Use hourly rate from attendance record if available, otherwise from employee
+        let rate = Number(lastWorkDay.hourly_rate) || hourlyRate;
+        
+        leaveAllowance = lastWorkHours * rate;
+        
+        console.log(`[calculate-leave-allowance] ✓ Calculated from last work day (${lastWorkDay.date}): ${lastWorkHours} hours × ${rate}/hr = ${leaveAllowance} EGP`);
       } else {
-        // No work records, use default or persisted
-        console.log('[calculate-leave-allowance] No work records found, using persisted or default');
+        // No work records found - still use persisted
+        console.log('[calculate-leave-allowance] ⚠️ No work records found, using persisted value: ' + persistedLeaveAllowance);
         leaveAllowance = persistedLeaveAllowance;
       }
     } else {

@@ -37,6 +37,24 @@ class TimeUtils {
     }
   }
 
+  static DateTime? parseTimestamp(dynamic ts) {
+    if (ts == null) return null;
+    if (ts is num) {
+      return DateTime.fromMillisecondsSinceEpoch(ts.toInt()).toLocal();
+    }
+    final str = ts.toString().trim();
+    if (str.isEmpty) return null;
+    final asInt = int.tryParse(str);
+    if (asInt != null) {
+      return DateTime.fromMillisecondsSinceEpoch(asInt).toLocal();
+    }
+    try {
+      return DateTime.parse(_normalizeIso(str)).toLocal();
+    } catch (_) {
+      return null;
+    }
+  }
+
   static String formatTimeShort(String? iso) {
     if (iso == null || iso.trim().isEmpty) return '-';
 

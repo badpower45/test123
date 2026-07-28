@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../services/attendance_api_service.dart';
+import '../../services/supabase_owner_service.dart';
 import '../../theme/app_colors.dart';
 
 class AttendancePage extends StatefulWidget {
@@ -22,13 +22,11 @@ class _AttendancePageState extends State<AttendancePage> {
   }
 
   Future<List<Map<String, dynamic>>> _fetchAttendanceRecords() async {
-    // Replace with actual API call for manager's branch
-    final report = await AttendanceApiService.fetchAttendanceReport(
-      employeeId: widget.managerId,
+    return await SupabaseOwnerService.getAttendanceTable(
+      branchName: widget.branch.isNotEmpty ? widget.branch : null,
       startDate: DateTime.now().subtract(const Duration(days: 30)),
       endDate: DateTime.now(),
     );
-    return report.attendance;
   }
 
   @override

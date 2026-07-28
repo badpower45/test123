@@ -1,7 +1,33 @@
 import 'dart:convert';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, compute;
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
+
+/// Top-level function for compute() isolate offloading of pulse row formatting
+Map<String, dynamic> _formatPulseRowPayload(Map<String, dynamic> rawParams) {
+  final employeeId = rawParams['employeeId'] as String;
+  final timestampMs = rawParams['timestampMs'] as int;
+  final timestampUtc = DateTime.fromMillisecondsSinceEpoch(timestampMs, isUtc: true).toIso8601String();
+  final id = '${employeeId}_$timestampMs';
+
+  return {
+    'id': id,
+    'employee_id': employeeId,
+    'attendance_id': rawParams['attendanceId'],
+    'branch_id': rawParams['branchId'],
+    'timestamp': timestampUtc,
+    'latitude': rawParams['latitude'],
+    'longitude': rawParams['longitude'],
+    'inside_geofence': (rawParams['insideGeofence'] as bool? ?? false) ? 1 : 0,
+    'distance_from_center': rawParams['distanceFromCenter'],
+    'wifi_bssid': rawParams['wifiBssid'],
+    'validation_method': rawParams['validationMethod'],
+    'validated_by_wifi': (rawParams['validatedByWifi'] as bool? ?? false) ? 1 : 0,
+    'validated_by_location': (rawParams['validatedByLocation'] as bool? ?? false) ? 1 : 0,
+    'created_at': DateTime.now().toUtc().toIso8601String(),
+    'synced': (rawParams['synced'] as bool? ?? false) ? 1 : 0,
+  };
+}
 
 class OfflineDatabase {
   static final OfflineDatabase instance = OfflineDatabase._init();
@@ -53,14 +79,14 @@ class OfflineDatabase {
     final dbExists = await databaseExists(path);
 
     if (!dbExists) {
-      print('� Database does not exist - creating new database');
+      print('📂 Database does not exist - creating new database');
     } else {
       print('✅ Database file found at: $path');
     }
 
     return await openDatabase(
       path,
-      version: 8, // Version 8: Add validation_method for pulses
+      version: 10, // Version 10: Add super_employee_branches table
       onCreate: (db, version) async {
         print('🆕 Creating new database (version $version)');
         await _createDB(db, version);
@@ -239,6 +265,42 @@ class OfflineDatabase {
         print('ℹ️ validation_method column may already exist: $e');
       }
     }
+
+    if (oldVersion < 9) {
+      try {
+        await db.execute(
+          'ALTER TABLE pending_checkouts ADD COLUMN work_hours REAL',
+        );
+        print('✅ Added work_hours column to pending_checkouts table');
+      } catch (e) {
+        print('ℹ️ work_hours column may already exist: $e');
+      }
+    }
+
+    if (oldVersion < 10) {
+      try {
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS super_employee_branches (
+            employee_id TEXT NOT NULL,
+            branch_id TEXT NOT NULL,
+            branch_name TEXT,
+            wifi_bssids TEXT,
+            latitude REAL,
+            longitude REAL,
+            geofence_radius INTEGER,
+            distance_from_radius INTEGER,
+            shift_start_time TEXT,
+            shift_end_time TEXT,
+            hourly_rate REAL,
+            last_updated TEXT NOT NULL,
+            PRIMARY KEY (employee_id, branch_id)
+          )
+        ''');
+        print('✅ Created super_employee_branches table on upgrade');
+      } catch (e) {
+        print('⚠️ Error creating super_employee_branches table: $e');
+      }
+    }
   }
 
   Future _createDB(Database db, int version) async {
@@ -272,6 +334,7 @@ class OfflineDatabase {
         latitude $realType,
         longitude $realType,
         notes $textTypeNull,
+        work_hours $realType,
         created_at $textType,
         synced $integerType DEFAULT 0
       )
@@ -327,6 +390,25 @@ class OfflineDatabase {
         hourly_rate $realType,
         last_updated $textType,
         data_version $integerType DEFAULT 1
+      )
+    ''');
+
+    // Super employee branches (فروع الموظف السوبر)
+    await db.execute('''
+      CREATE TABLE super_employee_branches (
+        employee_id $textType,
+        branch_id $textType,
+        branch_name $textTypeNull,
+        wifi_bssids $textTypeNull,
+        latitude $realType,
+        longitude $realType,
+        geofence_radius $integerType,
+        distance_from_radius $integerType,
+        shift_start_time $textTypeNull,
+        shift_end_time $textTypeNull,
+        hourly_rate $realType,
+        last_updated $textType,
+        PRIMARY KEY (employee_id, branch_id)
       )
     ''');
   }
@@ -391,6 +473,7 @@ class OfflineDatabase {
     required double latitude,
     required double longitude,
     String? notes,
+    double? workHours,
   }) async {
     final db = await instance.database;
     final id = '${employeeId}_${timestamp.millisecondsSinceEpoch}';
@@ -403,6 +486,7 @@ class OfflineDatabase {
       'latitude': latitude,
       'longitude': longitude,
       'notes': notes,
+      'work_hours': workHours,
       'created_at': DateTime.now().toUtc().toIso8601String(),
       'synced': 0,
     });
@@ -515,6 +599,11 @@ class OfflineDatabase {
     );
   }
 
+  Future<List<Map<String, dynamic>>> getAllPulses() async {
+    final db = await instance.database;
+    return await db.query('pending_pulses');
+  }
+
   /// Backfill attendance_id for pulses that were captured before server attendance was created
   Future<int> backfillAttendanceIdForPulses({
     required String employeeId,
@@ -526,8 +615,8 @@ class OfflineDatabase {
       'pending_pulses',
       {'attendance_id': attendanceId},
       where:
-          'employee_id = ? AND (attendance_id IS NULL OR attendance_id = "" OR attendance_id LIKE ?)',
-      whereArgs: [employeeId, '%pending%'],
+          'employee_id = ? AND (attendance_id IS NULL OR attendance_id = "" OR attendance_id LIKE ? OR attendance_id LIKE ? OR attendance_id LIKE ?)',
+      whereArgs: [employeeId, '%pending%', '%offline%', '%local%'],
     );
     return result; // number of rows affected
   }
@@ -788,6 +877,91 @@ class OfflineDatabase {
 
     print('✅ Found cached branch data for employee $employeeId');
     return data;
+  }
+
+  /// Cache all branches for a Super Employee
+  Future<void> cacheSuperBranches({
+    required String employeeId,
+    required List<Map<String, dynamic>> branches,
+  }) async {
+    if (kIsWeb) return;
+    final db = await instance.database;
+
+    // Delete existing cached branches for this employee to prevent stale entries
+    await db.delete(
+      'super_employee_branches',
+      where: 'employee_id = ?',
+      whereArgs: [employeeId],
+    );
+
+    for (final branch in branches) {
+      final branchId = branch['id']?.toString() ?? branch['branch_id']?.toString() ?? '';
+      final branchName = branch['name']?.toString() ?? branch['branch_name']?.toString();
+      
+      // WiFi BSSIDs handling
+      String? bssidsJson;
+      final wifiBssids = branch['wifi_bssids'] ?? branch['wifi_bssids_array'] ?? branch['wifi_bssid'];
+      if (wifiBssids is List) {
+        bssidsJson = jsonEncode(wifiBssids);
+      } else if (wifiBssids is String) {
+        if (wifiBssids.startsWith('[')) {
+          bssidsJson = wifiBssids;
+        } else {
+          bssidsJson = jsonEncode(wifiBssids.split(',').map((e) => e.trim()).toList());
+        }
+      }
+
+      await db.insert('super_employee_branches', {
+        'employee_id': employeeId,
+        'branch_id': branchId,
+        'branch_name': branchName,
+        'wifi_bssids': bssidsJson,
+        'latitude': branch['latitude']?.toDouble(),
+        'longitude': branch['longitude']?.toDouble(),
+        'geofence_radius': (branch['geofence_radius'] ?? branch['geofenceRadius'] ?? 100) is num 
+            ? (branch['geofence_radius'] ?? branch['geofenceRadius'] ?? 100).toInt()
+            : int.tryParse((branch['geofence_radius'] ?? branch['geofenceRadius'] ?? '100').toString()) ?? 100,
+        'distance_from_radius': (branch['distance_from_radius'] ?? branch['distanceFromRadius'] ?? 100) is num
+            ? (branch['distance_from_radius'] ?? branch['distanceFromRadius'] ?? 100).toInt()
+            : int.tryParse((branch['distance_from_radius'] ?? branch['distanceFromRadius'] ?? '100').toString()) ?? 100,
+        'shift_start_time': branch['shift_start_time']?.toString() ?? branch['shiftStartTime']?.toString(),
+        'shift_end_time': branch['shift_end_time']?.toString() ?? branch['shiftEndTime']?.toString(),
+        'hourly_rate': branch['hourly_rate']?.toDouble() ?? branch['hourlyRate']?.toDouble(),
+        'last_updated': DateTime.now().toIso8601String(),
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+
+    print('✅ Cached ${branches.length} super employee branches for employee $employeeId');
+  }
+
+  /// Get cached branches for a Super Employee
+  Future<List<Map<String, dynamic>>> getCachedSuperBranches(String employeeId) async {
+    if (kIsWeb) return [];
+    final db = await instance.database;
+
+    final result = await db.query(
+      'super_employee_branches',
+      where: 'employee_id = ?',
+      whereArgs: [employeeId],
+    );
+
+    return result.map((row) {
+      final data = Map<String, dynamic>.from(row);
+      // Compatibility aliases
+      data['name'] = data['branch_name'];
+      data['id'] = data['branch_id'];
+
+      if (data['wifi_bssids'] != null && data['wifi_bssids'].toString().isNotEmpty) {
+        try {
+          data['wifi_bssids_array'] = jsonDecode(data['wifi_bssids']) as List<dynamic>;
+        } catch (e) {
+          data['wifi_bssids_array'] = [];
+        }
+      } else {
+        data['wifi_bssids_array'] = [];
+      }
+      return data;
+    }).toList();
   }
 
   /// Check if branch data is cached (for offline mode check)

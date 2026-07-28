@@ -5,11 +5,13 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../theme/app_colors.dart';
 import '../services/auth_service.dart';
+import '../services/location_permission_service.dart';
 import 'login_screen.dart';
 import 'owner/owner_main_screen_new.dart';
 import 'employee/employee_main_screen.dart';
 import 'branch_manager_screen.dart';
 import 'hr/hr_main_screen.dart';
+import 'permissions_onboarding_page.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -101,6 +103,12 @@ class _SplashScreenState extends State<SplashScreen>
           branch: branch,
         );
       }
+    }
+
+    // Check if permissions are granted. If not, route to onboarding screen first.
+    final hasPermissions = await LocationPermissionService.hasAllRequiredPermissions();
+    if (!hasPermissions) {
+      targetScreen = PermissionsOnboardingPage(nextScreen: targetScreen);
     }
 
     if (!mounted) return;
@@ -213,7 +221,7 @@ class _SplashScreenState extends State<SplashScreen>
                           ),
                           const SizedBox(height: 26),
                           Text(
-                            'أولديزز ووركرز',
+                            'recap attendee',
                             textAlign: TextAlign.center,
                             style: GoogleFonts.tajawal(
                               color: Colors.white,

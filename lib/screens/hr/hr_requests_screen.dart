@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:intl/intl.dart';
+import '../../services/supabase_requests_service.dart';
 import '../../theme/app_colors.dart';
 
 class HRRequestsScreen extends StatefulWidget {
@@ -16,7 +16,6 @@ class _HRRequestsScreenState extends State<HRRequestsScreen>
     with SingleTickerProviderStateMixin {
   bool _loading = true;
   String? _error;
-  String _filter = 'pending';
   late TabController _tabController;
 
   List<Map<String, dynamic>> _leaveRequests = [];
@@ -39,60 +38,51 @@ class _HRRequestsScreenState extends State<HRRequestsScreen>
     super.dispose();
   }
 
-Future<void> _load() async {
+  Future<List<dynamic>> _safeFetchList(Future<dynamic> future, String label) async {
+    try {
+      final response = await future;
+      return (response as List).toList();
+    } catch (e) {
+      debugPrint('[HR] $label error: $e');
+      return <dynamic>[];
+    }
+  }
+
+  Future<void> _load() async {
     setState(() {
       _loading = true;
       _error = null;
     });
 
     try {
-      print('[HR] Starting load...');
-      
-      // Try loading leave_requests first
-      List<dynamic> leaveResp = [];
-      try {
-        final q = _supabase.from('leave_requests').select();
-        leaveResp = await q.eq('status', 'pending').limit(50);
-        print('[HR] Leave loaded: ${leaveResp.length}');
-      } catch (e) {
-        print('[HR] Leave error: $e');
-      }
-        
-      // Salary advances
-      List<dynamic> advanceResp = [];
-      try {
-        advanceResp = await _supabase.from('salary_advances').select().eq('status', 'pending').limit(50);
-        print('[HR] Advances loaded: ${advanceResp.length}');
-      } catch (e) {
-        print('[HR] Advances error: $e');
-      }
-       
-      // Attendance requests
-      List<dynamic> attendanceResp = [];
-      try {
-        attendanceResp = await _supabase.from('attendance_requests').select().eq('status', 'pending').limit(50);
-        print('[HR] Attendance loaded: ${attendanceResp.length}');
-      } catch (e) {
-        print('[HR] Attendance error: $e');
-      }
-       
-      // Breaks
-      List<dynamic> breakResp = [];
-      try {
-        breakResp = await _supabase.from('breaks').select().eq('status', 'PENDING').limit(50);
-        print('[HR] Breaks loaded: ${breakResp.length}');
-      } catch (e) {
-        print('[HR] Breaks error: $e');
-      } 
+      final results = await Future.wait([
+        _safeFetchList(
+          _supabase.from('leave_requests').select().eq('status', 'pending').limit(50),
+          'Leave',
+        ),
+        _safeFetchList(
+          _supabase.from('salary_advances').select().eq('status', 'pending').limit(50),
+          'Advance',
+        ),
+        _safeFetchList(
+          _supabase.from('attendance_requests').select().eq('status', 'pending').limit(50),
+          'Attendance',
+        ),
+        _safeFetchList(
+          _supabase.from('breaks').select().eq('status', 'pending').limit(50),
+          'Break',
+        ),
+        _safeFetchList(
+          _supabase.from('employees').select('id, full_name, role, branch').neq('role', 'owner'),
+          'Employees',
+        ),
+      ]);
 
-      // Load employees
-      List<dynamic> employeesResp = [];
-      try {
-        employeesResp = await _supabase.from('employees').select().neq('role', 'owner');
-        print('[HR] Employees loaded: ${employeesResp.length}');
-      } catch (e) {
-        print('[HR] Employees error: $e');
-      }
+      final leaveResp = results[0];
+      final advanceResp = results[1];
+      final attendanceResp = results[2];
+      final breakResp = results[3];
+      final employeesResp = results[4];
 
       final employeeMap = <String, Map<String, dynamic>>{};
       for (final emp in employeesResp) {
@@ -118,10 +108,8 @@ Future<void> _load() async {
         _breakRequests = enrich(breakResp);
         _loading = false;
       });
-       
-      print('[HR] All loaded!');
     } catch (e) {
-      print('[HR] Main error: $e');
+      debugPrint('[HR] Main error: $e');
       setState(() {
         _leaveRequests = [];
         _advanceRequests = [];
@@ -132,73 +120,60 @@ Future<void> _load() async {
     }
   }
 
-  // Old enrichment function - keep for backup
-  Future<List<Map<String, dynamic>>> _enrichWithEmployeeData(List<dynamic> requests) async {
-    if (requests.isEmpty) return [];
-
-    print('[HR Requests] Fetching employee data for ${requests.length} requests...');
-
-    // Get all employees - simpler approach
-    final employeesResp = await _supabase
-        .from('employees')
-        .select('id, full_name, role, branch');
-
-    print('[HR Requests] Total employees found: ${employeesResp.length}');
-
-    final employeeMap = <String, Map<String, dynamic>>{};
-    for (final emp in employeesResp) {
-      final id = emp['id']?.toString();
-      if (id != null) {
-        employeeMap[id] = Map<String, dynamic>.from(emp);
-      }
-    }
-
-    final enriched = requests.map((r) {
-      final empId = r['employee_id']?.toString();
-      final enrichedItem = Map<String, dynamic>.from(r);
-      if (empId != null && employeeMap.containsKey(empId)) {
-        enrichedItem['employees'] = employeeMap[empId];
-      }
-      return enrichedItem;
-    }).toList();
-
-    print('[HR Requests] Enriched ${enriched.length} requests with employee data');
-    return enriched;
-  }
-
   Future<void> _actOnRequest(String type, String id, String action, {String? reason}) async {
     try {
-      String table;
+      final approved = action == 'approve';
+      final status = approved ? 'approved' : 'rejected';
+      bool success = false;
+
       switch (type) {
         case 'leave':
-          table = 'leave_requests';
+          success = await SupabaseRequestsService.reviewLeaveRequest(
+            requestId: id,
+            reviewedBy: widget.hrId,
+            status: status,
+            reviewNotes: reason,
+          );
           break;
         case 'advance':
-          table = 'salary_advances';
+          success = await SupabaseRequestsService.reviewSalaryAdvanceRequest(
+            requestId: id,
+            approvedBy: widget.hrId,
+            status: status,
+            notes: reason,
+          );
           break;
         case 'attendance':
-          table = 'attendance_requests';
+          success = await SupabaseRequestsService.reviewAttendanceRequest(
+            requestId: id,
+            reviewedBy: widget.hrId,
+            status: status,
+            reviewNotes: reason,
+          );
           break;
         case 'break':
-          table = 'breaks';
+          success = await SupabaseRequestsService.reviewBreakRequest(
+            requestId: id,
+            reviewedBy: widget.hrId,
+            status: status,
+          );
           break;
         default:
           return;
       }
 
-      await _supabase.from(table).update({
-        'status': action == 'approve' ? 'approved' : 'rejected',
-        if (reason != null) 'manager_response': reason,
-      }).eq('id', id);
+      if (!success) {
+        throw Exception('فشل تنفيذ الإجراء');
+      }
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(action == 'approve' ? '✓ تم الموافقة' : '✓ تم الرفض'),
-          backgroundColor: action == 'approve' ? AppColors.success : AppColors.error,
+          backgroundColor: approved ? AppColors.success : AppColors.error,
         ),
       );
 
-      _load();
+      await _load();
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -317,8 +292,6 @@ Future<void> _load() async {
     final employee = request['employees'] as Map<String, dynamic>?;
     final employeeName = employee?['full_name']?.toString() ?? 'غير معروف';
     final employeeBranch = employee?['branch']?.toString() ?? '';
-    final createdAt = request['created_at']?.toString() ?? '';
-    final requestId = request['id']?.toString() ?? '';
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -461,9 +434,28 @@ Future<void> _load() async {
           ],
         );
       case 'break':
-        return Text(
-          'مدة الاستراحة: ${request['requested_duration_minutes'] ?? 0} دقيقة',
-          style: const TextStyle(fontSize: 14),
+        final duration = request['requested_duration_minutes'] ??
+            request['duration_minutes'] ??
+            request['break_duration_minutes'] ??
+            request['requestedDurationMinutes'] ??
+            0;
+        final reason = request['reason']?.toString();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'مدة الاستراحة: $duration دقيقة',
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+            ),
+            if (reason != null && reason.trim().isNotEmpty)
+              Text(
+                'السبب: $reason',
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey,
+                ),
+              ),
+          ],
         );
       default:
         return const SizedBox();

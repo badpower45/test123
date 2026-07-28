@@ -175,7 +175,7 @@ export function shouldSendNotification(
   // Check quiet hours if configured
   if (preferences.quiet_hours) {
     const now = new Date();
-    const currentTime = `${now.getHours().toString().padLeft(2, '0')}:${now.getMinutes().toString().padLeft(2, '0')}`;
+    const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
 
     if (currentTime >= preferences.quiet_hours.start &&
         currentTime <= preferences.quiet_hours.end) {

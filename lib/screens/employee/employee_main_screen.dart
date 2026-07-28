@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../theme/app_colors.dart';
 import '../../services/auth_service.dart';
 import '../../services/attendance_api_service.dart';
+import '../../services/supabase_attendance_service.dart';
 import '../login_screen.dart';
 import '../manager/manager_add_employee_page.dart';
 import '../manager/manager_dashboard_simple.dart';
@@ -12,7 +13,8 @@ import 'requests_page.dart';
 import 'reports_page.dart';
 import 'profile_page.dart';
 import 'refreshable_tab.dart';
-// import '../../models/employee.dart';
+import '../../services/location_permission_service.dart';
+import '../permissions_onboarding_page.dart';
 
 class EmployeeMainScreen extends StatefulWidget {
   const EmployeeMainScreen({
@@ -32,15 +34,19 @@ class EmployeeMainScreen extends StatefulWidget {
   State<EmployeeMainScreen> createState() => _EmployeeMainScreenState();
 }
 
-class _EmployeeMainScreenState extends State<EmployeeMainScreen> {
+class _EmployeeMainScreenState extends State<EmployeeMainScreen> with WidgetsBindingObserver {
   int _currentIndex = 0;
   late List<Widget> _pages;
   late List<GlobalKey<RefreshableTabState>> _tabKeys;
+  late String _resolvedBranch;
   bool get isManager => widget.role.toLowerCase() == 'manager';
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _checkPermissions();
+    _resolvedBranch = widget.branch;
     _tabKeys = List.generate(4, (_) => GlobalKey<RefreshableTabState>());
     _pages = [
       RefreshableTab(
@@ -61,6 +67,149 @@ class _EmployeeMainScreenState extends State<EmployeeMainScreen> {
         builder: (context) => ProfilePage(employeeId: widget.employeeId),
       ),
     ];
+
+    if (isManager) {
+      _resolveManagerBranch();
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkPermissions();
+    }
+  }
+
+  Future<void> _checkPermissions() async {
+    final hasPermissions = await LocationPermissionService.hasAllRequiredPermissions();
+    if (!hasPermissions && mounted) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => PermissionsOnboardingPage(
+            nextScreen: EmployeeMainScreen(
+              employeeId: widget.employeeId,
+              role: widget.role,
+              branch: widget.branch,
+            ),
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _resolveManagerBranch() async {
+    try {
+      print('🔍 [_resolveManagerBranch] Starting branch resolution for manager: ${widget.employeeId}');
+      print('🔍 [_resolveManagerBranch] widget.branch: "${widget.branch}"');
+      print('🔍 [_resolveManagerBranch] Current _resolvedBranch: "$_resolvedBranch"');
+
+      if (!isManager) {
+        // Non-managers can keep the branch that comes from the login flow.
+        if (widget.branch.isNotEmpty && widget.branch != _resolvedBranch) {
+          print('🔍 [_resolveManagerBranch] Using widget.branch: ${widget.branch}');
+          await AuthService.updateSavedBranch(widget.branch);
+          setState(() {
+            _resolvedBranch = widget.branch;
+          });
+          return;
+        }
+      }
+
+      // Managers must resolve branch from the branches table first.
+      print('🔍 [_resolveManagerBranch] Querying branches where manager_id = ${widget.employeeId}...');
+      final supabase = SupabaseAttendanceService.client;
+      final branchData = await supabase
+          .from('branches')
+          .select('name')
+          .eq('manager_id', widget.employeeId)
+          .maybeSingle();
+
+      if (branchData != null) {
+        final branchName = branchData['name']?.toString().trim() ?? '';
+        if (branchName.isNotEmpty) {
+          print('🔍 [_resolveManagerBranch] Found branch via manager_id: $branchName');
+          await AuthService.updateSavedBranch(branchName);
+          setState(() {
+            _resolvedBranch = branchName;
+          });
+          return;
+        }
+      }
+
+      // Fallback: Fetch employee data from API, then finally widget.branch if present.
+      print('🔍 [_resolveManagerBranch] No branch found via manager_id, fetching employee data...');
+      final status = await SupabaseAttendanceService.getEmployeeStatus(
+        widget.employeeId,
+      );
+      final employee = status['employee'] is Map
+          ? Map<String, dynamic>.from(status['employee'] as Map)
+          : <String, dynamic>{};
+
+      print('🔍 [_resolveManagerBranch] Employee data from API: $employee');
+
+      final branch = _extractBranchName(employee);
+      print('🔍 [_resolveManagerBranch] Extracted branch name: "$branch"');
+
+      final fallbackBranch = branch.isNotEmpty ? branch : widget.branch.trim();
+      if (fallbackBranch != branch) {
+        print('🔍 [_resolveManagerBranch] Falling back to widget.branch: "$fallbackBranch"');
+      }
+
+      if (!mounted || fallbackBranch.isEmpty) {
+        print('🔍 [_resolveManagerBranch] Branch is empty, keeping current: $_resolvedBranch');
+        return;
+      }
+
+      if (fallbackBranch == _resolvedBranch) {
+        print('🔍 [_resolveManagerBranch] Branch unchanged: $fallbackBranch');
+        return;
+      }
+
+      await AuthService.updateSavedBranch(fallbackBranch);
+      setState(() {
+        _resolvedBranch = fallbackBranch;
+      });
+      print('🔍 [_resolveManagerBranch] Updated _resolvedBranch to: $fallbackBranch');
+    } catch (e) {
+      print('❌ [_resolveManagerBranch] Error: $e');
+      // Keep the branch we already have if refresh fails.
+    }
+  }
+
+  String _extractBranchName(Map<String, dynamic> employee) {
+    print('🔍 [_extractBranchName] Extracting branch from employee: ${employee['id']}');
+    final branches = employee['branches'];
+    print('🔍 [_extractBranchName] branches field: $branches (type: ${branches.runtimeType})');
+
+    if (branches is Map<String, dynamic>) {
+      final name = branches['name']?.toString().trim();
+      print('🔍 [_extractBranchName] branches is Map, name: $name');
+      if (name != null && name.isNotEmpty) {
+        return name;
+      }
+    }
+
+    if (branches is List && branches.isNotEmpty) {
+      print('🔍 [_extractBranchName] branches is List with ${branches.length} items');
+      final first = branches.first;
+      if (first is Map) {
+        final name = first['name']?.toString().trim();
+        print('🔍 [_extractBranchName] First item name: $name');
+        if (name != null && name.isNotEmpty) {
+          return name;
+        }
+      }
+    }
+
+    final branch = employee['branch']?.toString().trim() ?? '';
+    print('🔍 [_extractBranchName] Fallback to branch string field: $branch');
+    return branch;
   }
 
   @override
@@ -82,7 +231,7 @@ class _EmployeeMainScreenState extends State<EmployeeMainScreen> {
                   MaterialPageRoute(
                     builder: (_) => ManagerAddEmployeePage(
                       managerId: widget.employeeId,
-                      managerBranch: widget.branch,
+                      managerBranch: _resolvedBranch,
                     ),
                   ),
                 );
@@ -97,7 +246,7 @@ class _EmployeeMainScreenState extends State<EmployeeMainScreen> {
                   MaterialPageRoute(
                     builder: (_) => ManagerDashboardSimple(
                       managerId: widget.employeeId,
-                      branchName: widget.branch,
+                      branchName: _resolvedBranch,
                       initialTabIndex: 3,
                     ),
                   ),

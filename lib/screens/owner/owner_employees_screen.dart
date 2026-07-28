@@ -970,6 +970,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
   String? _selectedBranch;
   String _selectedRole = 'staff';
   bool _isActive = true;
+  bool _isSuperEmployee = false;
   bool _submitting = false;
 
   @override
@@ -1007,6 +1008,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
     _selectedBranch = emp?.branch;
     _selectedRole = emp?.role.toString().split('.').last ?? 'staff';
     _isActive = emp?.isActive ?? true;
+    _isSuperEmployee = emp?.isSuperEmployee ?? false;
   }
 
   @override
@@ -1050,6 +1052,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
             ? '${_shiftEndTime!.hour.toString().padLeft(2, '0')}:${_shiftEndTime!.minute.toString().padLeft(2, '0')}'
             : null,
         'is_active': _isActive,
+        'is_super_employee': _isSuperEmployee,
       };
 
       if (widget.employee == null) {
@@ -1328,6 +1331,17 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                     setState(() => _isActive = value);
                   },
                   activeColor: AppColors.success,
+                ),
+                const SizedBox(height: 16),
+
+                // Super Employee Status
+                SwitchListTile(
+                  title: const Text('سوبر موظف'),
+                  value: _isSuperEmployee,
+                  onChanged: (value) {
+                    setState(() => _isSuperEmployee = value);
+                  },
+                  activeColor: AppColors.primaryOrange,
                 ),
                 const SizedBox(height: 24),
 

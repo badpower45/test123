@@ -1,10 +1,11 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:universal_io/io.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:hive_flutter/hive_flutter.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'services/location_permission_service.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 
 import 'core/config/build_config.dart';
@@ -31,6 +32,7 @@ import 'services/auth_service.dart';
 import 'services/supabase_attendance_service.dart';
 import 'services/aggressive_keep_alive_service.dart';
 import 'services/alarm_manager_pulse_service.dart';
+import 'services/attendance_timer_service.dart';
 import 'theme/app_colors.dart';
 import 'config/supabase_config.dart';
 
@@ -81,6 +83,10 @@ Future<void> main() async {
     await BackgroundPulseListener.initialize(
       onPulseRecorded: () {
         print('💓 Native pulse recorded - UI will auto-update');
+        if (PulseTrackingService().isTracking) {
+          PulseTrackingService().refreshPulseCounts();
+          AttendanceTimerService.instance.forceTickUpdate();
+        }
       },
     );
   }
@@ -94,12 +100,7 @@ Future<void> main() async {
     print('🚀 System Info: $manufacturer on Android $sdkInt');
 
     // Request Critical Permissions immediately
-    await [
-      Permission.notification,
-      Permission.locationAlways,
-      Permission.ignoreBatteryOptimizations,
-      Permission.scheduleExactAlarm,
-    ].request();
+    await LocationPermissionService.ensureAllPermissions();
 
     // Initialize Persistent Services
     await ForegroundAttendanceService.initialize();
@@ -116,7 +117,10 @@ Future<void> main() async {
   }
 
   if (!kIsWeb && Platform.isIOS) {
-    await [Permission.notification, Permission.locationAlways].request();
+    await LocationPermissionService.ensureAllPermissions(
+      requestBatteryOptimizations: false,
+      requestExactAlarms: false,
+    );
 
     await WorkManagerPulseService.initialize();
   }
@@ -149,9 +153,17 @@ Future<void> main() async {
 
         if (activeAttendance != null) {
           final attendanceId = activeAttendance['id'] as String?;
+          DateTime? checkInTime;
+          final checkInStr = activeAttendance['check_in_time']?.toString();
+          if (checkInStr != null && checkInStr.isNotEmpty) {
+            try {
+              checkInTime = DateTime.parse(checkInStr).toLocal();
+            } catch (_) {}
+          }
           await PulseTrackingService().startTracking(
             employeeId,
             attendanceId: attendanceId,
+            checkInTime: checkInTime,
           );
 
           if (!kIsWeb && Platform.isIOS) {
@@ -174,6 +186,9 @@ Future<void> main() async {
           }
 
           if (!kIsWeb && Platform.isAndroid) {
+            // Restore AlarmManager periodic pulse tracking
+            await AlarmManagerPulseService().startPeriodicAlarms(employeeId);
+            
             await ForegroundAttendanceService.instance.startTracking(
               employeeId: employeeId,
               employeeName: login['fullName'] ?? 'الموظف',
@@ -217,7 +232,7 @@ class OldiesApp extends StatelessWidget {
     );
 
     return MaterialApp(
-      title: 'أولديزز وركرز',
+      title: 'recap attendee',
       debugShowCheckedModeBanner: false,
       theme: theme,
       locale: const Locale('ar', 'EG'),
@@ -257,3 +272,19 @@ class OldiesApp extends StatelessWidget {
     );
   }
 }
+
+/// Headless entry point for iOS Hardware Geofence execution (survives Force-Quit / Swipe-Up)
+@pragma('vm:entry-point')
+void backgroundGeofenceEntryPoint() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  print('⚡ [Headless Flutter Engine] Initialized in background via iOS Hardware Geofence!');
+  
+  // Register background geofence channel listener
+  try {
+    const channel = MethodChannel('geofence_background_channel');
+    await channel.invokeMethod('backgroundChannelReady');
+  } catch (e) {
+    print('⚠️ Headless channel signal skipped: $e');
+  }
+}
+

@@ -1,15 +1,16 @@
 // @ts-nocheck
-import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 
 const DAY_PENALTY = 100;
-const CAIRO_UTC_OFFSET_HOURS = 2;
+const CAIRO_TIME_ZONE = "Africa/Cairo";
 
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Content-Type': 'application/json',
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
+  "Content-Type": "application/json",
 };
 
 class HttpError extends Error {
@@ -29,10 +30,10 @@ function jsonResponse(status: number, payload: Record<string, unknown>) {
 }
 
 function toNumber(value: unknown): number {
-  if (typeof value === 'number' && Number.isFinite(value)) {
+  if (typeof value === "number" && Number.isFinite(value)) {
     return value;
   }
-  if (typeof value === 'string') {
+  if (typeof value === "string") {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : 0;
   }
@@ -40,26 +41,29 @@ function toNumber(value: unknown): number {
 }
 
 function pad(value: number): string {
-  return value.toString().padStart(2, '0');
+  return value.toString().padStart(2, "0");
 }
 
 function dateOnly(value: string): string {
-  return value.split('T')[0];
+  return value.split("T")[0];
 }
 
 function parseMonthRange(monthRaw?: string) {
-  const month = (monthRaw ?? '').trim();
+  const month = (monthRaw ?? "").trim();
   const monthRegex = /^\d{4}-\d{2}$/;
   const normalized = monthRegex.test(month)
     ? month
     : `${new Date().getUTCFullYear()}-${pad(new Date().getUTCMonth() + 1)}`;
 
-  const [yearText, monthText] = normalized.split('-');
+  const [yearText, monthText] = normalized.split("-");
   const year = Number(yearText);
   const monthIndex = Number(monthText);
 
-  if (!Number.isInteger(year) || !Number.isInteger(monthIndex) || monthIndex < 1 || monthIndex > 12) {
-    throw new HttpError(400, 'صيغة الشهر غير صحيحة. استخدم YYYY-MM');
+  if (
+    !Number.isInteger(year) || !Number.isInteger(monthIndex) ||
+    monthIndex < 1 || monthIndex > 12
+  ) {
+    throw new HttpError(400, "صيغة الشهر غير صحيحة. استخدم YYYY-MM");
   }
 
   const start = `${year}-${pad(monthIndex)}-01`;
@@ -74,27 +78,30 @@ function parseMonthRange(monthRaw?: string) {
 }
 
 function parseDateInput(value: unknown): string {
-  const text = (value ?? '').toString().trim();
+  const text = (value ?? "").toString().trim();
   const regex = /^\d{4}-\d{2}-\d{2}$/;
   if (!regex.test(text)) {
-    throw new HttpError(400, 'صيغة التاريخ غير صحيحة. استخدم YYYY-MM-DD');
+    throw new HttpError(400, "صيغة التاريخ غير صحيحة. استخدم YYYY-MM-DD");
   }
   return text;
 }
 
 function parseTimeInput(value: unknown): string {
-  const text = (value ?? '').toString().trim();
+  const text = (value ?? "").toString().trim();
   const match = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(text);
 
   if (!match) {
-    throw new HttpError(400, 'صيغة الوقت غير صحيحة. استخدم HH:mm');
+    throw new HttpError(400, "صيغة الوقت غير صحيحة. استخدم HH:mm");
   }
 
   const hour = Number(match[1]);
   const minute = Number(match[2]);
 
-  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
-    throw new HttpError(400, 'قيمة الوقت غير صحيحة');
+  if (
+    !Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 ||
+    hour > 23 || minute < 0 || minute > 59
+  ) {
+    throw new HttpError(400, "قيمة الوقت غير صحيحة");
   }
 
   return `${pad(hour)}:${pad(minute)}`;
@@ -116,8 +123,7 @@ function normalizeSummaryTime(value: unknown): string | null {
     return null;
   }
 
-  const cairo = new Date(parsed.getTime() + CAIRO_UTC_OFFSET_HOURS * 60 * 60 * 1000);
-  return `${pad(cairo.getUTCHours())}:${pad(cairo.getUTCMinutes())}`;
+  return formatTimeInCairo(parsed);
 }
 
 function formatIsoTimeToCairo(value: unknown): string | null {
@@ -127,8 +133,37 @@ function formatIsoTimeToCairo(value: unknown): string | null {
     return null;
   }
 
-  const cairo = new Date(parsed.getTime() + CAIRO_UTC_OFFSET_HOURS * 60 * 60 * 1000);
-  return `${pad(cairo.getUTCHours())}:${pad(cairo.getUTCMinutes())}`;
+  return formatTimeInCairo(parsed);
+}
+
+function formatTimeInCairo(date: Date): string {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: CAIRO_TIME_ZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+
+  const hour = parts.find((part) => part.type === "hour")?.value ?? "00";
+  const minute = parts.find((part) => part.type === "minute")?.value ?? "00";
+  return `${hour}:${minute}`;
+}
+
+function cairoOffsetMinutesAt(utcDate: Date): number {
+  const tzPart = new Intl.DateTimeFormat("en-US", {
+    timeZone: CAIRO_TIME_ZONE,
+    timeZoneName: "shortOffset",
+  }).formatToParts(utcDate).find((part) => part.type === "timeZoneName")?.value ?? "GMT+2";
+
+  const match = tzPart.match(/^GMT([+-])(\d{1,2})(?::?(\d{2}))?$/);
+  if (!match) {
+    return 120;
+  }
+
+  const sign = match[1] === "-" ? -1 : 1;
+  const hours = Number(match[2]) || 0;
+  const minutes = Number(match[3] ?? "0") || 0;
+  return sign * (hours * 60 + minutes);
 }
 
 function dateFromIso(value: unknown): string | null {
@@ -141,11 +176,30 @@ function dateFromIso(value: unknown): string | null {
 }
 
 function cairoDateTimeToUtcIso(date: string, timeHHmm: string): string {
-  const local = new Date(`${date}T${timeHHmm}:00+02:00`);
-  if (Number.isNaN(local.getTime())) {
-    throw new HttpError(400, 'تعذر تحويل التاريخ والوقت');
+  const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  const timeMatch = /^(\d{2}):(\d{2})$/.exec(timeHHmm);
+
+  if (!dateMatch || !timeMatch) {
+    throw new HttpError(400, "تعذر تحويل التاريخ والوقت");
   }
-  return local.toISOString();
+
+  const year = Number(dateMatch[1]);
+  const month = Number(dateMatch[2]);
+  const day = Number(dateMatch[3]);
+  const hour = Number(timeMatch[1]);
+  const minute = Number(timeMatch[2]);
+
+  const localAsUtcMs = Date.UTC(year, month - 1, day, hour, minute, 0);
+  let offsetMinutes = cairoOffsetMinutesAt(new Date(localAsUtcMs));
+  let utcMs = localAsUtcMs - offsetMinutes * 60 * 1000;
+
+  const refinedOffset = cairoOffsetMinutesAt(new Date(utcMs));
+  if (refinedOffset !== offsetMinutes) {
+    offsetMinutes = refinedOffset;
+    utcMs = localAsUtcMs - offsetMinutes * 60 * 1000;
+  }
+
+  return new Date(utcMs).toISOString();
 }
 
 function hoursBetween(checkInIso: string, checkOutIso: string): number {
@@ -153,12 +207,12 @@ function hoursBetween(checkInIso: string, checkOutIso: string): number {
   const checkOut = new Date(checkOutIso);
 
   if (Number.isNaN(checkIn.getTime()) || Number.isNaN(checkOut.getTime())) {
-    throw new HttpError(400, 'تعذر حساب عدد الساعات');
+    throw new HttpError(400, "تعذر حساب عدد الساعات");
   }
 
   const hours = (checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60);
   if (hours <= 0) {
-    throw new HttpError(400, 'وقت الانصراف يجب أن يكون بعد وقت الحضور');
+    throw new HttpError(400, "وقت الانصراف يجب أن يكون بعد وقت الحضور");
   }
 
   return Number(hours.toFixed(2));
@@ -166,25 +220,29 @@ function hoursBetween(checkInIso: string, checkOutIso: string): number {
 
 function startAndEndIsoForDate(date: string) {
   return {
-    startIso: new Date(`${date}T00:00:00+02:00`).toISOString(),
-    endIso: new Date(`${date}T23:59:59+02:00`).toISOString(),
+    startIso: cairoDateTimeToUtcIso(date, "00:00"),
+    endIso: cairoDateTimeToUtcIso(date, "23:59"),
   };
 }
 
 function isTruthy(value: unknown): boolean {
-  if (typeof value === 'boolean') return value;
-  if (typeof value === 'number') return value !== 0;
-  if (typeof value === 'string') {
-    return ['true', 't', '1', 'yes'].includes(value.toLowerCase());
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    return ["true", "t", "1", "yes"].includes(value.toLowerCase());
   }
   return false;
 }
 
+function normalizeText(value: unknown): string {
+  return (value ?? "").toString().trim().toLowerCase();
+}
+
 async function getActor(supabase: any, managerId: string) {
   const { data, error } = await supabase
-    .from('employees')
-    .select('id, full_name, role, branch, branch_id')
-    .eq('id', managerId)
+    .from("employees")
+    .select("id, full_name, role, branch, branch_id")
+    .eq("id", managerId)
     .maybeSingle();
 
   if (error) {
@@ -192,29 +250,95 @@ async function getActor(supabase: any, managerId: string) {
   }
 
   if (!data) {
-    throw new HttpError(404, 'لم يتم العثور على حساب المدير');
+    throw new HttpError(404, "لم يتم العثور على حساب المدير");
   }
 
-  const allowedRoles = ['manager', 'admin', 'owner', 'hr'];
-  if (!allowedRoles.includes((data.role ?? '').toString())) {
-    throw new HttpError(403, 'ليس لديك صلاحية إدارة الحضور والجزاءات');
+  const allowedRoles = ["manager", "admin", "owner", "hr"];
+  if (!allowedRoles.includes((data.role ?? "").toString())) {
+    throw new HttpError(403, "ليس لديك صلاحية إدارة الحضور والجزاءات");
   }
 
   return data;
 }
 
-function ensureBranchScope(actor: any, branchName: string) {
-  const role = (actor.role ?? '').toString();
-  if (role === 'manager' && (actor.branch ?? '').toString() !== branchName) {
-    throw new HttpError(403, 'مدير الفرع يمكنه إدارة بيانات فرعه فقط');
+async function resolveActorBranchScope(
+  supabase: any,
+  actor: any,
+  requestedBranchName: string,
+) {
+  let canonicalBranchName = "";
+
+  if (actor.branch_id) {
+    const { data: branch } = await supabase
+      .from("branches")
+      .select("id, name")
+      .eq("id", actor.branch_id)
+      .maybeSingle();
+
+    canonicalBranchName = branch?.name?.toString().trim() ?? "";
+  }
+
+  return {
+    branchId: actor.branch_id?.toString().trim() ?? "",
+    actorBranchName: actor.branch?.toString().trim() ?? "",
+    canonicalBranchName,
+    requestedBranchName: requestedBranchName.trim(),
+  };
+}
+
+function ensureBranchScope(actor: any, scope: any) {
+  const role = (actor.role ?? "").toString();
+  if (role !== "manager") return;
+
+  const requested = normalizeText(scope.requestedBranchName);
+  const actorBranch = normalizeText(scope.actorBranchName);
+  const canonicalBranch = normalizeText(scope.canonicalBranchName);
+
+  if (
+    !requested || (requested !== actorBranch && requested !== canonicalBranch)
+  ) {
+    throw new HttpError(403, "مدير الفرع يمكنه إدارة بيانات فرعه فقط");
   }
 }
 
-async function ensureEmployeeInBranch(supabase: any, employeeId: string, branchName: string) {
+function employeeMatchesScope(employee: any, scope: any): boolean {
+  const employeeBranchId = employee?.branch_id?.toString().trim() ?? "";
+  const employeeBranchName = employee?.branch?.toString().trim() ?? "";
+
+  if (scope.branchId) {
+    if (employeeBranchId) {
+      return employeeBranchId === scope.branchId;
+    }
+
+    const allowedNames = [
+      scope.actorBranchName,
+      scope.canonicalBranchName,
+      scope.requestedBranchName,
+    ].map(normalizeText).filter(Boolean);
+
+    return allowedNames.includes(normalizeText(employeeBranchName));
+  }
+
+  return [
+    scope.actorBranchName,
+    scope.canonicalBranchName,
+    scope.requestedBranchName,
+  ].map(normalizeText).filter(Boolean).includes(
+    normalizeText(employeeBranchName),
+  );
+}
+
+async function ensureEmployeeInBranch(
+  supabase: any,
+  employeeId: string,
+  scope: any,
+) {
   const { data, error } = await supabase
-    .from('employees')
-    .select('id, full_name, branch, branch_id, hourly_rate, shift_start_time, shift_end_time, role')
-    .eq('id', employeeId)
+    .from("employees")
+    .select(
+      "id, full_name, branch, branch_id, hourly_rate, shift_start_time, shift_end_time, role",
+    )
+    .eq("id", employeeId)
     .maybeSingle();
 
   if (error) {
@@ -222,15 +346,15 @@ async function ensureEmployeeInBranch(supabase: any, employeeId: string, branchN
   }
 
   if (!data) {
-    throw new HttpError(404, 'لم يتم العثور على الموظف');
+    throw new HttpError(404, "لم يتم العثور على الموظف");
   }
 
-  if ((data.branch ?? '').toString() !== branchName) {
-    throw new HttpError(403, 'الموظف ليس ضمن هذا الفرع');
+  if (!employeeMatchesScope(data, scope)) {
+    throw new HttpError(403, "الموظف ليس ضمن هذا الفرع");
   }
 
-  if ((data.role ?? '').toString() === 'owner') {
-    throw new HttpError(403, 'لا يمكن تطبيق هذا الإجراء على حساب المالك');
+  if ((data.role ?? "").toString() === "owner") {
+    throw new HttpError(403, "لا يمكن تطبيق هذا الإجراء على حساب المالك");
   }
 
   return data;
@@ -243,40 +367,47 @@ async function fetchAttendanceRowsForRange(
   endDate: string,
 ) {
   const byDate = await supabase
-    .from('attendance')
-    .select('*')
-    .eq('employee_id', employeeId)
-    .gte('date', startDate)
-    .lte('date', endDate)
-    .order('date', { ascending: true })
-    .order('check_in_time', { ascending: true });
+    .from("attendance")
+    .select("*")
+    .eq("employee_id", employeeId)
+    .gte("date", startDate)
+    .lte("date", endDate)
+    .order("date", { ascending: true })
+    .order("check_in_time", { ascending: true });
 
   if (!byDate.error) {
     return byDate.data ?? [];
   }
 
   const fallback = await supabase
-    .from('attendance')
-    .select('*')
-    .eq('employee_id', employeeId)
-    .gte('check_in_time', `${startDate}T00:00:00`)
-    .lte('check_in_time', `${endDate}T23:59:59`)
-    .order('check_in_time', { ascending: true });
+    .from("attendance")
+    .select("*")
+    .eq("employee_id", employeeId)
+    .gte("check_in_time", `${startDate}T00:00:00`)
+    .lte("check_in_time", `${endDate}T23:59:59`)
+    .order("check_in_time", { ascending: true });
 
   if (fallback.error) {
-    throw new HttpError(500, `فشل تحميل سجلات الحضور: ${fallback.error.message}`);
+    throw new HttpError(
+      500,
+      `فشل تحميل سجلات الحضور: ${fallback.error.message}`,
+    );
   }
 
   return fallback.data ?? [];
 }
 
-async function fetchAttendanceRowsForDate(supabase: any, employeeId: string, date: string) {
+async function fetchAttendanceRowsForDate(
+  supabase: any,
+  employeeId: string,
+  date: string,
+) {
   const byDate = await supabase
-    .from('attendance')
-    .select('*')
-    .eq('employee_id', employeeId)
-    .eq('date', date)
-    .order('check_in_time', { ascending: true });
+    .from("attendance")
+    .select("*")
+    .eq("employee_id", employeeId)
+    .eq("date", date)
+    .order("check_in_time", { ascending: true });
 
   if (!byDate.error) {
     return byDate.data ?? [];
@@ -284,12 +415,12 @@ async function fetchAttendanceRowsForDate(supabase: any, employeeId: string, dat
 
   const range = startAndEndIsoForDate(date);
   const fallback = await supabase
-    .from('attendance')
-    .select('*')
-    .eq('employee_id', employeeId)
-    .gte('check_in_time', range.startIso)
-    .lte('check_in_time', range.endIso)
-    .order('check_in_time', { ascending: true });
+    .from("attendance")
+    .select("*")
+    .eq("employee_id", employeeId)
+    .gte("check_in_time", range.startIso)
+    .lte("check_in_time", range.endIso)
+    .order("check_in_time", { ascending: true });
 
   if (fallback.error) {
     throw new HttpError(500, `فشل تحميل يوم الحضور: ${fallback.error.message}`);
@@ -300,63 +431,73 @@ async function fetchAttendanceRowsForDate(supabase: any, employeeId: string, dat
 
 function penaltyLabel(type: string) {
   switch (type) {
-    case 'half_day':
-      return 'نصف يوم';
-    case 'day':
-      return 'يوم';
-    case 'two_days':
-      return 'يومين';
-    case 'custom':
-      return 'مبلغ مخصص';
+    case "half_day":
+      return "نصف يوم";
+    case "day":
+      return "يوم";
+    case "two_days":
+      return "يومين";
+    case "custom":
+      return "مبلغ مخصص";
     default:
-      return 'جزاء';
+      return "جزاء";
   }
 }
 
 function penaltyAmount(type: string, customAmount: number) {
   switch (type) {
-    case 'half_day':
+    case "half_day":
       return DAY_PENALTY / 2;
-    case 'day':
+    case "day":
       return DAY_PENALTY;
-    case 'two_days':
+    case "two_days":
       return DAY_PENALTY * 2;
-    case 'custom':
+    case "custom":
       if (customAmount <= 0) {
-        throw new HttpError(400, 'قيمة الجزاء المخصص يجب أن تكون أكبر من صفر');
+        throw new HttpError(400, "قيمة الجزاء المخصص يجب أن تكون أكبر من صفر");
       }
       return Number(customAmount.toFixed(2));
     default:
-      throw new HttpError(400, 'نوع الجزاء غير مدعوم');
+      throw new HttpError(400, "نوع الجزاء غير مدعوم");
   }
 }
 
 async function actionGetBranchEmployees(supabase: any, body: any) {
-  const managerId = (body.managerId ?? '').toString();
-  const branchName = (body.branchName ?? '').toString().trim();
+  const managerId = (body.managerId ?? "").toString();
+  const branchName = (body.branchName ?? "").toString().trim();
 
   if (!managerId || !branchName) {
-    throw new HttpError(400, 'managerId و branchName مطلوبان');
+    throw new HttpError(400, "managerId و branchName مطلوبان");
   }
 
   const actor = await getActor(supabase, managerId);
-  ensureBranchScope(actor, branchName);
+  const scope = await resolveActorBranchScope(supabase, actor, branchName);
+  ensureBranchScope(actor, scope);
 
   const { data, error } = await supabase
-    .from('employees')
-    .select('id, full_name, branch, branch_id, role, hourly_rate, shift_start_time, shift_end_time')
-    .eq('branch', branchName)
-    .eq('is_active', true)
-    .neq('role', 'owner')
-    .order('full_name', { ascending: true });
+    .from("employees")
+    .select(
+      "id, full_name, branch, branch_id, role, hourly_rate, shift_start_time, shift_end_time, is_active",
+    )
+    .eq("is_active", true)
+    .neq("role", "owner")
+    .order("full_name", { ascending: true });
 
   if (error) {
     throw new HttpError(500, `فشل تحميل موظفي الفرع: ${error.message}`);
   }
 
+  const branchEmployees = (data ?? []).filter((employee: any) =>
+    employeeMatchesScope(employee, scope)
+  );
+
   return {
-    actor,
-    employees: (data ?? []).map((employee: any) => ({
+    actor: {
+      ...actor,
+      branch: scope.canonicalBranchName || scope.requestedBranchName ||
+        scope.actorBranchName,
+    },
+    employees: branchEmployees.map((employee: any) => ({
       id: employee.id,
       full_name: employee.full_name,
       role: employee.role,
@@ -370,18 +511,19 @@ async function actionGetBranchEmployees(supabase: any, body: any) {
 }
 
 async function actionGetMonthlyAttendance(supabase: any, body: any) {
-  const managerId = (body.managerId ?? '').toString();
-  const branchName = (body.branchName ?? '').toString().trim();
-  const employeeId = (body.employeeId ?? '').toString();
+  const managerId = (body.managerId ?? "").toString();
+  const branchName = (body.branchName ?? "").toString().trim();
+  const employeeId = (body.employeeId ?? "").toString();
 
   if (!managerId || !branchName || !employeeId) {
-    throw new HttpError(400, 'managerId و branchName و employeeId مطلوبون');
+    throw new HttpError(400, "managerId و branchName و employeeId مطلوبون");
   }
 
   const actor = await getActor(supabase, managerId);
-  ensureBranchScope(actor, branchName);
+  const scope = await resolveActorBranchScope(supabase, actor, branchName);
+  ensureBranchScope(actor, scope);
 
-  const employee = await ensureEmployeeInBranch(supabase, employeeId, branchName);
+  const employee = await ensureEmployeeInBranch(supabase, employeeId, scope);
   const monthRange = parseMonthRange(body.month);
 
   const attendanceRows = await fetchAttendanceRowsForRange(
@@ -392,23 +534,26 @@ async function actionGetMonthlyAttendance(supabase: any, body: any) {
   );
 
   const { data: summaryRows, error: summaryError } = await supabase
-    .from('daily_attendance_summary')
-    .select('*')
-    .eq('employee_id', employeeId)
-    .gte('attendance_date', monthRange.startDate)
-    .lte('attendance_date', monthRange.endDate);
+    .from("daily_attendance_summary")
+    .select("*")
+    .eq("employee_id", employeeId)
+    .gte("attendance_date", monthRange.startDate)
+    .lte("attendance_date", monthRange.endDate);
 
   if (summaryError) {
-    throw new HttpError(500, `فشل تحميل الملخص اليومي: ${summaryError.message}`);
+    throw new HttpError(
+      500,
+      `فشل تحميل الملخص اليومي: ${summaryError.message}`,
+    );
   }
 
   const { data: deductionRows, error: deductionError } = await supabase
-    .from('deductions')
-    .select('id, employee_id, amount, reason, deduction_date, created_at')
-    .eq('employee_id', employeeId)
-    .gte('deduction_date', monthRange.startDate)
-    .lte('deduction_date', monthRange.endDate)
-    .order('created_at', { ascending: false });
+    .from("deductions")
+    .select("id, employee_id, amount, reason, deduction_date, created_at")
+    .eq("employee_id", employeeId)
+    .gte("deduction_date", monthRange.startDate)
+    .lte("deduction_date", monthRange.endDate)
+    .order("created_at", { ascending: false });
 
   if (deductionError) {
     throw new HttpError(500, `فشل تحميل الجزاءات: ${deductionError.message}`);
@@ -417,8 +562,7 @@ async function actionGetMonthlyAttendance(supabase: any, body: any) {
   const attendanceByDate = new Map<string, any>();
 
   for (const row of attendanceRows) {
-    const dateKey =
-      (row.date ? row.date.toString() : null) ??
+    const dateKey = (row.date ? row.date.toString() : null) ??
       dateFromIso(row.check_in_time) ??
       dateFromIso(row.check_out_time);
 
@@ -433,11 +577,15 @@ async function actionGetMonthlyAttendance(supabase: any, body: any) {
     const checkInIso = row.check_in_time?.toString() ?? null;
     const checkOutIso = row.check_out_time?.toString() ?? null;
 
-    if (checkInIso && (!current.checkInIso || checkInIso < current.checkInIso)) {
+    if (
+      checkInIso && (!current.checkInIso || checkInIso < current.checkInIso)
+    ) {
       current.checkInIso = checkInIso;
     }
 
-    if (checkOutIso && (!current.checkOutIso || checkOutIso > current.checkOutIso)) {
+    if (
+      checkOutIso && (!current.checkOutIso || checkOutIso > current.checkOutIso)
+    ) {
       current.checkOutIso = checkOutIso;
     }
 
@@ -461,9 +609,12 @@ async function actionGetMonthlyAttendance(supabase: any, body: any) {
     summaryByDate.set(summary.attendance_date.toString(), summary);
   }
 
-  const deductionsByDate = new Map<string, { amount: number; reasons: string[] }>();
+  const deductionsByDate = new Map<
+    string,
+    { amount: number; reasons: string[] }
+  >();
   for (const deduction of deductionRows ?? []) {
-    const dateKey = deduction.deduction_date?.toString()?.split('T')[0];
+    const dateKey = deduction.deduction_date?.toString()?.split("T")[0];
     if (!dateKey) continue;
 
     const current = deductionsByDate.get(dateKey) ?? { amount: 0, reasons: [] };
@@ -486,10 +637,10 @@ async function actionGetMonthlyAttendance(supabase: any, body: any) {
     const summary = summaryByDate.get(dateKey);
     const deductionInfo = deductionsByDate.get(dateKey);
 
-    const checkInTime =
-      formatIsoTimeToCairo(attendance?.checkInIso) ?? normalizeSummaryTime(summary?.check_in_time);
-    const checkOutTime =
-      formatIsoTimeToCairo(attendance?.checkOutIso) ?? normalizeSummaryTime(summary?.check_out_time);
+    const checkInTime = formatIsoTimeToCairo(attendance?.checkInIso) ??
+      normalizeSummaryTime(summary?.check_in_time);
+    const checkOutTime = formatIsoTimeToCairo(attendance?.checkOutIso) ??
+      normalizeSummaryTime(summary?.check_out_time);
 
     let totalHours = toNumber(summary?.total_hours);
     if (totalHours <= 0) {
@@ -498,20 +649,22 @@ async function actionGetMonthlyAttendance(supabase: any, body: any) {
 
     const summaryDeduction = Math.abs(toNumber(summary?.deduction_amount));
     const recordDeduction = Math.abs(toNumber(deductionInfo?.amount));
-    const deductionAmount = summaryDeduction > 0 ? summaryDeduction : recordDeduction;
+    const deductionAmount = summaryDeduction > 0
+      ? summaryDeduction
+      : recordDeduction;
 
     const isOnLeave = isTruthy(summary?.is_on_leave);
     const isAbsent = isTruthy(summary?.is_absent);
 
-    let status = 'none';
+    let status = "none";
     if (isOnLeave) {
-      status = 'on_leave';
+      status = "on_leave";
     } else if (isAbsent) {
-      status = 'absent';
+      status = "absent";
     } else if (checkInTime && !checkOutTime) {
-      status = 'active';
+      status = "active";
     } else if (checkInTime) {
-      status = 'present';
+      status = "present";
     }
 
     days.push({
@@ -522,7 +675,7 @@ async function actionGetMonthlyAttendance(supabase: any, body: any) {
       daily_salary: Number(toNumber(summary?.daily_salary).toFixed(2)),
       deduction_amount: Number(deductionAmount.toFixed(2)),
       status,
-      penalty_reasons: deductionInfo?.reasons?.join('، ') ?? '',
+      penalty_reasons: deductionInfo?.reasons?.join("، ") ?? "",
       is_absent: isAbsent,
       is_on_leave: isOnLeave,
     });
@@ -548,22 +701,23 @@ async function actionGetMonthlyAttendance(supabase: any, body: any) {
 }
 
 async function actionUpdateDayTimes(supabase: any, body: any) {
-  const managerId = (body.managerId ?? '').toString();
-  const branchName = (body.branchName ?? '').toString().trim();
-  const employeeId = (body.employeeId ?? '').toString();
+  const managerId = (body.managerId ?? "").toString();
+  const branchName = (body.branchName ?? "").toString().trim();
+  const employeeId = (body.employeeId ?? "").toString();
   const date = parseDateInput(body.date);
 
   if (!managerId || !branchName || !employeeId) {
-    throw new HttpError(400, 'managerId و branchName و employeeId مطلوبون');
+    throw new HttpError(400, "managerId و branchName و employeeId مطلوبون");
   }
 
   const checkInTime = parseTimeInput(body.checkInTime);
   const checkOutTime = parseTimeInput(body.checkOutTime);
 
   const actor = await getActor(supabase, managerId);
-  ensureBranchScope(actor, branchName);
+  const scope = await resolveActorBranchScope(supabase, actor, branchName);
+  ensureBranchScope(actor, scope);
 
-  const employee = await ensureEmployeeInBranch(supabase, employeeId, branchName);
+  const employee = await ensureEmployeeInBranch(supabase, employeeId, scope);
 
   const checkInIso = cairoDateTimeToUtcIso(date, checkInTime);
   const checkOutIso = cairoDateTimeToUtcIso(date, checkOutTime);
@@ -577,7 +731,7 @@ async function actionUpdateDayTimes(supabase: any, body: any) {
     date,
     check_in_time: checkInIso,
     check_out_time: checkOutIso,
-    status: 'completed',
+    status: "completed",
     updated_at: new Date().toISOString(),
     work_hours: totalHours,
     total_hours: totalHours,
@@ -586,16 +740,16 @@ async function actionUpdateDayTimes(supabase: any, body: any) {
   if (dayRows.length > 0) {
     const targetId = dayRows[0].id;
     const { error: updateError } = await supabase
-      .from('attendance')
+      .from("attendance")
       .update(attendancePayload)
-      .eq('id', targetId);
+      .eq("id", targetId);
 
     if (updateError) {
       throw new HttpError(500, `فشل تعديل سجل الحضور: ${updateError.message}`);
     }
   } else {
     const { error: insertError } = await supabase
-      .from('attendance')
+      .from("attendance")
       .insert({
         employee_id: employeeId,
         branch_id: employee.branch_id ?? null,
@@ -603,7 +757,10 @@ async function actionUpdateDayTimes(supabase: any, body: any) {
       });
 
     if (insertError) {
-      throw new HttpError(500, `فشل إنشاء سجل حضور جديد: ${insertError.message}`);
+      throw new HttpError(
+        500,
+        `فشل إنشاء سجل حضور جديد: ${insertError.message}`,
+      );
     }
   }
 
@@ -621,11 +778,14 @@ async function actionUpdateDayTimes(supabase: any, body: any) {
   };
 
   const { error: summaryError } = await supabase
-    .from('daily_attendance_summary')
-    .upsert(summaryPayload, { onConflict: 'employee_id,attendance_date' });
+    .from("daily_attendance_summary")
+    .upsert(summaryPayload, { onConflict: "employee_id,attendance_date" });
 
   if (summaryError) {
-    throw new HttpError(500, `فشل تحديث الملخص اليومي: ${summaryError.message}`);
+    throw new HttpError(
+      500,
+      `فشل تحديث الملخص اليومي: ${summaryError.message}`,
+    );
   }
 
   return {
@@ -640,70 +800,80 @@ async function actionUpdateDayTimes(supabase: any, body: any) {
 }
 
 async function actionDeleteDay(supabase: any, body: any) {
-  const managerId = (body.managerId ?? '').toString();
-  const branchName = (body.branchName ?? '').toString().trim();
-  const employeeId = (body.employeeId ?? '').toString();
+  const managerId = (body.managerId ?? "").toString();
+  const branchName = (body.branchName ?? "").toString().trim();
+  const employeeId = (body.employeeId ?? "").toString();
   const date = parseDateInput(body.date);
 
   if (!managerId || !branchName || !employeeId) {
-    throw new HttpError(400, 'managerId و branchName و employeeId مطلوبون');
+    throw new HttpError(400, "managerId و branchName و employeeId مطلوبون");
   }
 
   const actor = await getActor(supabase, managerId);
-  ensureBranchScope(actor, branchName);
-  await ensureEmployeeInBranch(supabase, employeeId, branchName);
+  const scope = await resolveActorBranchScope(supabase, actor, branchName);
+  ensureBranchScope(actor, scope);
+  await ensureEmployeeInBranch(supabase, employeeId, scope);
 
   let attendanceDeleted = 0;
   const attendanceDeleteByDate = await supabase
-    .from('attendance')
-    .delete({ count: 'exact' })
-    .eq('employee_id', employeeId)
-    .eq('date', date);
+    .from("attendance")
+    .delete({ count: "exact" })
+    .eq("employee_id", employeeId)
+    .eq("date", date);
 
   if (!attendanceDeleteByDate.error) {
     attendanceDeleted = attendanceDeleteByDate.count ?? 0;
   } else {
     const range = startAndEndIsoForDate(date);
     const fallbackDelete = await supabase
-      .from('attendance')
-      .delete({ count: 'exact' })
-      .eq('employee_id', employeeId)
-      .gte('check_in_time', range.startIso)
-      .lte('check_in_time', range.endIso);
+      .from("attendance")
+      .delete({ count: "exact" })
+      .eq("employee_id", employeeId)
+      .gte("check_in_time", range.startIso)
+      .lte("check_in_time", range.endIso);
 
     if (fallbackDelete.error) {
-      throw new HttpError(500, `فشل حذف سجل الحضور: ${fallbackDelete.error.message}`);
+      throw new HttpError(
+        500,
+        `فشل حذف سجل الحضور: ${fallbackDelete.error.message}`,
+      );
     }
 
     attendanceDeleted = fallbackDelete.count ?? 0;
   }
 
   const summaryDelete = await supabase
-    .from('daily_attendance_summary')
-    .delete({ count: 'exact' })
-    .eq('employee_id', employeeId)
-    .eq('attendance_date', date);
+    .from("daily_attendance_summary")
+    .delete({ count: "exact" })
+    .eq("employee_id", employeeId)
+    .eq("attendance_date", date);
 
   if (summaryDelete.error) {
-    throw new HttpError(500, `فشل حذف الملخص اليومي: ${summaryDelete.error.message}`);
+    throw new HttpError(
+      500,
+      `فشل حذف الملخص اليومي: ${summaryDelete.error.message}`,
+    );
   }
 
   const deductionDelete = await supabase
-    .from('deductions')
-    .delete({ count: 'exact' })
-    .eq('employee_id', employeeId)
-    .eq('deduction_date', date);
+    .from("deductions")
+    .delete({ count: "exact" })
+    .eq("employee_id", employeeId)
+    .eq("deduction_date", date);
 
   if (deductionDelete.error) {
-    throw new HttpError(500, `فشل حذف جزاءات اليوم: ${deductionDelete.error.message}`);
+    throw new HttpError(
+      500,
+      `فشل حذف جزاءات اليوم: ${deductionDelete.error.message}`,
+    );
   }
 
   // Optional cleanup for absences on the same date.
   await supabase
-    .from('absences')
+    .from("absences")
     .delete()
-    .eq('employee_id', employeeId)
-    .eq('absence_date', date);
+    .eq("employee_id", employeeId)
+    .eq("absence_date", date);
 
   return {
     actor,
@@ -718,24 +888,28 @@ async function actionDeleteDay(supabase: any, body: any) {
 }
 
 async function actionApplyPenalty(supabase: any, body: any) {
-  const managerId = (body.managerId ?? '').toString();
-  const branchName = (body.branchName ?? '').toString().trim();
-  const employeeId = (body.employeeId ?? '').toString();
+  const managerId = (body.managerId ?? "").toString();
+  const branchName = (body.branchName ?? "").toString().trim();
+  const employeeId = (body.employeeId ?? "").toString();
   const date = parseDateInput(body.date);
-  const type = (body.penaltyType ?? '').toString().trim();
+  const type = (body.penaltyType ?? "").toString().trim();
 
   if (!managerId || !branchName || !employeeId || !type) {
-    throw new HttpError(400, 'managerId و branchName و employeeId و penaltyType مطلوبون');
+    throw new HttpError(
+      400,
+      "managerId و branchName و employeeId و penaltyType مطلوبون",
+    );
   }
 
   const actor = await getActor(supabase, managerId);
-  ensureBranchScope(actor, branchName);
-  const employee = await ensureEmployeeInBranch(supabase, employeeId, branchName);
+  const scope = await resolveActorBranchScope(supabase, actor, branchName);
+  ensureBranchScope(actor, scope);
+  const employee = await ensureEmployeeInBranch(supabase, employeeId, scope);
 
   const customAmount = toNumber(body.customAmount);
   const amount = penaltyAmount(type, customAmount);
   const defaultReason = `جزاء ${penaltyLabel(type)} يوم ${date}`;
-  const reason = (body.reason ?? '').toString().trim() || defaultReason;
+  const reason = (body.reason ?? "").toString().trim() || defaultReason;
 
   const baseDeductionPayload = {
     employee_id: employeeId,
@@ -749,10 +923,10 @@ async function actionApplyPenalty(supabase: any, body: any) {
   let deductionError: any = null;
 
   const insertWithMeta = await supabase
-    .from('deductions')
+    .from("deductions")
     .insert({
       ...baseDeductionPayload,
-      deduction_type: 'manual_penalty',
+      deduction_type: "manual_penalty",
       applied_by: managerId,
     })
     .select()
@@ -762,7 +936,7 @@ async function actionApplyPenalty(supabase: any, body: any) {
     deductionRecord = insertWithMeta.data;
   } else {
     const fallbackInsert = await supabase
-      .from('deductions')
+      .from("deductions")
       .insert(baseDeductionPayload)
       .select()
       .maybeSingle();
@@ -776,33 +950,41 @@ async function actionApplyPenalty(supabase: any, body: any) {
   }
 
   const { data: summaryRow, error: summaryFetchError } = await supabase
-    .from('daily_attendance_summary')
-    .select('*')
-    .eq('employee_id', employeeId)
-    .eq('attendance_date', date)
+    .from("daily_attendance_summary")
+    .select("*")
+    .eq("employee_id", employeeId)
+    .eq("attendance_date", date)
     .maybeSingle();
 
   if (summaryFetchError) {
-    throw new HttpError(500, `فشل تحديث ملخص اليوم: ${summaryFetchError.message}`);
+    throw new HttpError(
+      500,
+      `فشل تحديث ملخص اليوم: ${summaryFetchError.message}`,
+    );
   }
 
   if (summaryRow) {
-    const updatedDeduction = Number((toNumber(summaryRow.deduction_amount) + amount).toFixed(2));
+    const updatedDeduction = Number(
+      (toNumber(summaryRow.deduction_amount) + amount).toFixed(2),
+    );
     const { error: updateSummaryError } = await supabase
-      .from('daily_attendance_summary')
+      .from("daily_attendance_summary")
       .update({
         deduction_amount: updatedDeduction,
         updated_at: new Date().toISOString(),
       })
-      .eq('employee_id', employeeId)
-      .eq('attendance_date', date);
+      .eq("employee_id", employeeId)
+      .eq("attendance_date", date);
 
     if (updateSummaryError) {
-      throw new HttpError(500, `فشل تعديل قيمة الجزاء اليومية: ${updateSummaryError.message}`);
+      throw new HttpError(
+        500,
+        `فشل تعديل قيمة الجزاء اليومية: ${updateSummaryError.message}`,
+      );
     }
   } else {
     const { error: insertSummaryError } = await supabase
-      .from('daily_attendance_summary')
+      .from("daily_attendance_summary")
       .insert({
         employee_id: employeeId,
         attendance_date: date,
@@ -821,7 +1003,10 @@ async function actionApplyPenalty(supabase: any, body: any) {
       });
 
     if (insertSummaryError) {
-      throw new HttpError(500, `فشل إنشاء ملخص اليوم بعد تسجيل الجزاء: ${insertSummaryError.message}`);
+      throw new HttpError(
+        500,
+        `فشل إنشاء ملخص اليوم بعد تسجيل الجزاء: ${insertSummaryError.message}`,
+      );
     }
   }
 
@@ -838,40 +1023,50 @@ async function actionApplyPenalty(supabase: any, body: any) {
 }
 
 async function actionListPenalties(supabase: any, body: any) {
-  const managerId = (body.managerId ?? '').toString();
-  const branchName = (body.branchName ?? '').toString().trim();
-  const requestedEmployeeId = (body.employeeId ?? '').toString().trim();
+  const managerId = (body.managerId ?? "").toString();
+  const branchName = (body.branchName ?? "").toString().trim();
+  const requestedEmployeeId = (body.employeeId ?? "").toString().trim();
 
   if (!managerId || !branchName) {
-    throw new HttpError(400, 'managerId و branchName مطلوبان');
+    throw new HttpError(400, "managerId و branchName مطلوبان");
   }
 
   const actor = await getActor(supabase, managerId);
-  ensureBranchScope(actor, branchName);
+  const scope = await resolveActorBranchScope(supabase, actor, branchName);
+  ensureBranchScope(actor, scope);
 
   const monthRange = parseMonthRange(body.month);
 
   const { data: branchEmployees, error: branchEmployeesError } = await supabase
-    .from('employees')
-    .select('id, full_name, branch, role')
-    .eq('branch', branchName)
-    .eq('is_active', true)
-    .neq('role', 'owner');
+    .from("employees")
+    .select("id, full_name, branch, branch_id, role")
+    .eq("is_active", true)
+    .neq("role", "owner");
 
   if (branchEmployeesError) {
-    throw new HttpError(500, `فشل تحميل موظفي الفرع: ${branchEmployeesError.message}`);
+    throw new HttpError(
+      500,
+      `فشل تحميل موظفي الفرع: ${branchEmployeesError.message}`,
+    );
   }
 
   const employeeMap = new Map<string, string>();
-  for (const employee of branchEmployees ?? []) {
-    employeeMap.set(employee.id.toString(), (employee.full_name ?? '').toString());
+  for (
+    const employee of (branchEmployees ?? []).filter((item: any) =>
+      employeeMatchesScope(item, scope)
+    )
+  ) {
+    employeeMap.set(
+      employee.id.toString(),
+      (employee.full_name ?? "").toString(),
+    );
   }
 
   let employeeIds = Array.from(employeeMap.keys());
 
   if (requestedEmployeeId) {
     if (!employeeMap.has(requestedEmployeeId)) {
-      throw new HttpError(403, 'الموظف المحدد ليس ضمن هذا الفرع');
+      throw new HttpError(403, "الموظف المحدد ليس ضمن هذا الفرع");
     }
     employeeIds = [requestedEmployeeId];
   }
@@ -887,24 +1082,28 @@ async function actionListPenalties(supabase: any, body: any) {
   }
 
   const { data: deductions, error: deductionsError } = await supabase
-    .from('deductions')
-    .select('id, employee_id, amount, reason, deduction_date, created_at')
-    .in('employee_id', employeeIds)
-    .gte('deduction_date', monthRange.startDate)
-    .lte('deduction_date', monthRange.endDate)
-    .order('deduction_date', { ascending: false })
-    .order('created_at', { ascending: false });
+    .from("deductions")
+    .select("id, employee_id, amount, reason, deduction_date, created_at")
+    .in("employee_id", employeeIds)
+    .gte("deduction_date", monthRange.startDate)
+    .lte("deduction_date", monthRange.endDate)
+    .order("deduction_date", { ascending: false })
+    .order("created_at", { ascending: false });
 
   if (deductionsError) {
-    throw new HttpError(500, `فشل تحميل سجل الجزاءات: ${deductionsError.message}`);
+    throw new HttpError(
+      500,
+      `فشل تحميل سجل الجزاءات: ${deductionsError.message}`,
+    );
   }
 
   const penalties = (deductions ?? []).map((deduction: any) => ({
     id: deduction.id,
     employee_id: deduction.employee_id,
-    employee_name: employeeMap.get((deduction.employee_id ?? '').toString()) ?? 'غير معروف',
+    employee_name: employeeMap.get((deduction.employee_id ?? "").toString()) ??
+      "غير معروف",
     amount: Math.abs(Number(toNumber(deduction.amount).toFixed(2))),
-    reason: deduction.reason ?? '',
+    reason: deduction.reason ?? "",
     deduction_date: deduction.deduction_date,
     created_at: deduction.created_at,
   }));
@@ -919,30 +1118,32 @@ async function actionListPenalties(supabase: any, body: any) {
 }
 
 serve(async (req: Request) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { status: 200, headers: corsHeaders });
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { status: 200, headers: corsHeaders });
   }
 
-  if (req.method !== 'POST') {
+  if (req.method !== "POST") {
     return jsonResponse(405, {
       success: false,
-      error: 'Method not allowed',
+      error: "Method not allowed",
     });
   }
 
   try {
     const body = await req.json();
-    const action = (body.action ?? '').toString().trim();
+    const action = (body.action ?? "").toString().trim();
 
     if (!action) {
-      throw new HttpError(400, 'action مطلوب');
+      throw new HttpError(400, "action مطلوب");
     }
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL') || 'https://bbxuyuaemigrqsvsnxkj.supabase.co';
-    const serviceRoleKey = Deno.env.get('SERVICE_ROLE_KEY') ?? Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") ||
+      "https://bbxuyuaemigrqsvsnxkj.supabase.co";
+    const serviceRoleKey = Deno.env.get("SERVICE_ROLE_KEY") ??
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
     if (!supabaseUrl || !serviceRoleKey) {
-      throw new HttpError(500, 'بيانات اتصال Supabase غير مكتملة على الخادم');
+      throw new HttpError(500, "بيانات اتصال Supabase غير مكتملة على الخادم");
     }
 
     const supabase = createClient(supabaseUrl, serviceRoleKey, {
@@ -954,26 +1155,26 @@ serve(async (req: Request) => {
     let data: Record<string, unknown>;
 
     switch (action) {
-      case 'get_branch_employees':
+      case "get_branch_employees":
         data = await actionGetBranchEmployees(supabase, body);
         break;
-      case 'get_monthly_attendance':
+      case "get_monthly_attendance":
         data = await actionGetMonthlyAttendance(supabase, body);
         break;
-      case 'update_day_times':
+      case "update_day_times":
         data = await actionUpdateDayTimes(supabase, body);
         break;
-      case 'delete_day':
+      case "delete_day":
         data = await actionDeleteDay(supabase, body);
         break;
-      case 'apply_penalty':
+      case "apply_penalty":
         data = await actionApplyPenalty(supabase, body);
         break;
-      case 'list_penalties':
+      case "list_penalties":
         data = await actionListPenalties(supabase, body);
         break;
       default:
-        throw new HttpError(400, 'action غير مدعوم');
+        throw new HttpError(400, "action غير مدعوم");
     }
 
     return jsonResponse(200, {
@@ -982,9 +1183,11 @@ serve(async (req: Request) => {
     });
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;
-    const message = error instanceof Error ? error.message : 'حدث خطأ غير متوقع';
+    const message = error instanceof Error
+      ? error.message
+      : "حدث خطأ غير متوقع";
 
-    console.error('[manager-attendance-admin] error:', error);
+    console.error("[manager-attendance-admin] error:", error);
 
     return jsonResponse(status, {
       success: false,
