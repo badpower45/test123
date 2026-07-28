@@ -184,6 +184,9 @@ class SyncService {
             }
           }
 
+          // Purge any stale orphaned checkouts without valid attendance_id
+          await db.purgeOrphanedPendingCheckouts();
+
           // Sync check-outs
           final pendingCheckouts = await db.getPendingCheckouts();
           print('📤 Pending check-outs: ${pendingCheckouts.length}');
@@ -362,16 +365,25 @@ class SyncService {
   }
 
   Future<void> _syncCheckout(Map<String, dynamic> checkout) async {
-    print(
-      '📤 Syncing check-out: employee=${checkout['employee_id']}, attendance_id=${checkout['attendance_id']}',
-    );
-    final note = checkout['notes'] as String?;
-    final isForced = note?.toLowerCase().contains('auto') ?? false;
     final rawAttendanceId = checkout['attendance_id']?.toString();
     final attendanceId =
         rawAttendanceId != null && _isUuid(rawAttendanceId)
             ? rawAttendanceId
             : null;
+
+    if (attendanceId == null) {
+      print(
+        '⚠️ [SyncService] Skipping & purging orphaned pending checkout (id=${checkout['id']}) for employee=${checkout['employee_id']}: missing valid attendance_id',
+      );
+      // Return cleanly so caller marks this row as synced/purged, preventing untargeted server calls
+      return;
+    }
+
+    print(
+      '📤 Syncing check-out: employee=${checkout['employee_id']}, attendance_id=$attendanceId',
+    );
+    final note = checkout['notes'] as String?;
+    final isForced = note?.toLowerCase().contains('auto') ?? false;
 
     final double? workHours = checkout['work_hours'] != null
         ? double.tryParse(checkout['work_hours'].toString())
@@ -379,7 +391,7 @@ class SyncService {
 
     final payload = {
       'employee_id': checkout['employee_id'],
-      if (attendanceId != null) 'attendance_id': attendanceId,
+      'attendance_id': attendanceId,
       'latitude': checkout['latitude'],
       'longitude': checkout['longitude'],
       if (checkout['wifi_bssid'] != null) 'wifi_bssid': checkout['wifi_bssid'],
@@ -392,18 +404,10 @@ class SyncService {
     final response = await SupabaseFunctionClient.post('attendance-check-out', payload);
     print('✅ Check-out synced successfully: $response');
 
-    String? resolvedId = attendanceId;
-    if (resolvedId == null && response != null) {
-      final returnedAtt = response['attendance'] as Map?;
-      if (returnedAtt != null) {
-        resolvedId = returnedAtt['id']?.toString();
-      }
-    }
-
-    if (resolvedId != null && workHours != null && _isUuid(resolvedId)) {
+    if (workHours != null) {
       final employeeId = checkout['employee_id'].toString();
       await SupabaseAttendanceService.syncCheckOutWorkHours(
-        attendanceId: resolvedId,
+        attendanceId: attendanceId,
         employeeId: employeeId,
         workHours: workHours,
       );

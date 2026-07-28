@@ -97,6 +97,17 @@ class OfflineDatabase {
       },
       onOpen: (db) async {
         print('✅ Database opened successfully');
+        try {
+          final purgedCount = await db.delete(
+            'pending_checkouts',
+            where: 'attendance_id IS NULL OR attendance_id = "" OR length(attendance_id) < 30',
+          );
+          if (purgedCount > 0) {
+            print('🧹 Purged $purgedCount orphaned pending checkout records without valid attendance_id');
+          }
+        } catch (e) {
+          print('⚠️ Error purging orphaned pending checkouts on open: $e');
+        }
       },
     );
   }
@@ -516,6 +527,24 @@ class OfflineDatabase {
   Future<void> deleteSyncedCheckouts() async {
     final db = await instance.database;
     await db.delete('pending_checkouts', where: 'synced = ?', whereArgs: [1]);
+  }
+
+  /// Purging orphaned pending checkouts that have no valid attendance_id UUID
+  Future<int> purgeOrphanedPendingCheckouts() async {
+    try {
+      final db = await instance.database;
+      final purged = await db.delete(
+        'pending_checkouts',
+        where: 'attendance_id IS NULL OR attendance_id = "" OR length(attendance_id) < 30',
+      );
+      if (purged > 0) {
+        print('🧹 Purged $purged orphaned pending checkouts from local SQLite');
+      }
+      return purged;
+    } catch (e) {
+      print('⚠️ Error in purgeOrphanedPendingCheckouts: $e');
+      return 0;
+    }
   }
 
   // ============ Pending Pulses ============

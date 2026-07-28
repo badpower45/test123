@@ -3640,11 +3640,36 @@ class _EmployeeHomePageState extends State<EmployeeHomePage> with WidgetsBinding
         // Check if we have cached branch data
         final hasCachedData = await db.hasCachedBranchData(widget.employeeId);
 
-        // For checkout we need attendance_id, but in offline mode we might not have it
-        // So we'll save with a placeholder and let the sync service handle it
+        // Resolve attendance_id from memory or device cache before saving offline checkout
+        String? targetAttendanceId = _currentAttendanceId;
+        if (targetAttendanceId == null || targetAttendanceId.isEmpty) {
+          final snapshot =
+              await SupabaseAttendanceService.getCachedActiveAttendanceOnDevice(
+                employeeId: widget.employeeId,
+              );
+          targetAttendanceId = snapshot?['attendance_id']?.toString();
+        }
+
+        // Refuse to save an un-targeted offline checkout without a valid attendance_id
+        if (targetAttendanceId == null || targetAttendanceId.isEmpty) {
+          print('❌ Cannot queue offline checkout without a resolved attendance_id');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'لم نتمكن من تحديد جلسة الحضور الخاصة بك، يرجى المحاولة عند توفر الإنترنت.',
+                ),
+                backgroundColor: Colors.red,
+                duration: Duration(seconds: 4),
+              ),
+            );
+          }
+          return;
+        }
+
         await db.insertPendingCheckout(
           employeeId: widget.employeeId,
-          attendanceId: _currentAttendanceId, // Use current if available
+          attendanceId: targetAttendanceId,
           timestamp: DateTime.now(),
           latitude: latitude,
           longitude: longitude,

@@ -2602,9 +2602,36 @@ class _ManagerHomePageState extends State<ManagerHomePage> with WidgetsBindingOb
         final db = OfflineDatabase.instance;
         final hasCachedData = await db.hasCachedBranchData(widget.managerId);
 
+        // Resolve attendance_id from memory or device cache before saving offline checkout
+        String? targetAttendanceId = attendanceId;
+        if (targetAttendanceId == null || targetAttendanceId.isEmpty) {
+          final snapshot =
+              await SupabaseAttendanceService.getCachedActiveAttendanceOnDevice(
+                employeeId: widget.managerId,
+              );
+          targetAttendanceId = snapshot?['attendance_id']?.toString();
+        }
+
+        // Refuse to save an un-targeted offline checkout without a valid attendance_id
+        if (targetAttendanceId == null || targetAttendanceId.isEmpty) {
+          print('❌ Cannot queue offline checkout without a resolved attendance_id');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'لم نتمكن من تحديد جلسة الحضور الخاصة بك، يرجى المحاولة عند توفر الإنترنت.',
+                ),
+                backgroundColor: Colors.red,
+                duration: Duration(seconds: 4),
+              ),
+            );
+          }
+          return;
+        }
+
         await db.insertPendingCheckout(
           employeeId: widget.managerId,
-          attendanceId: attendanceId,
+          attendanceId: targetAttendanceId,
           timestamp: DateTime.now(),
           latitude: latitude,
           longitude: longitude,

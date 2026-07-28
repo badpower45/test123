@@ -364,72 +364,54 @@ serve(async (req: Request) => {
 
     const eventTimestamp = parseTimestamp(body.timestamp) ?? getCairoNow();
 
-    // ✅ If attendance_id is provided, use it directly; otherwise find active attendance
-    let activeAttendance: any = null;
-    
-    if (body.attendance_id) {
-      const providedAttendanceId = body.attendance_id.trim();
-
-      if (!isUuid(providedAttendanceId)) {
-        console.warn(
-          `[attendance-check-out] Non-UUID attendance_id provided (${providedAttendanceId}), falling back to active lookup`,
-        );
-      } else {
-        console.log(`[attendance-check-out] Using provided attendance_id: ${providedAttendanceId}`);
-        const { data: attendanceRecord, error: attendanceError } = await supabase
-          .from('attendance')
-          .select('id, check_in_time, check_out_time, status, work_hours, employee_id')
-          .eq('id', providedAttendanceId)
-          .maybeSingle();
-
-        if (attendanceError) {
-          console.error('[attendance-check-out] Failed to fetch attendance by ID, falling back to active lookup', attendanceError);
-        } else if (!attendanceRecord) {
-          console.warn('[attendance-check-out] Provided attendance record not found, falling back to active lookup');
-        } else {
-          // Verify the attendance belongs to this employee
-          if (attendanceRecord.employee_id !== employeeId) {
-            return response(403, { success: false, error: 'سجل الحضور لا ينتمي لهذا الموظف' });
-          }
-
-          // Check if already completed
-          if (attendanceRecord.status === 'completed') {
-            const completedCheckOut = parseTimestamp(attendanceRecord.check_out_time) ?? eventTimestamp;
-            return response(200, {
-              success: true,
-              alreadyCheckedOut: true,
-              message: 'لقد سجلت انصرافك بالفعل',
-              attendance: attendanceRecord,
-              time_context: {
-                stored_timezone: 'UTC',
-                display_timezone: 'Africa/Cairo',
-                check_out_time_cairo: cairoDateTimeString(completedCheckOut),
-              },
-            });
-          }
-
-          activeAttendance = attendanceRecord;
-        }
-      }
+    // ✅ Require attendance_id to be provided and be a valid UUID. Never guess or fall back to closing latest active record.
+    if (!body.attendance_id || typeof body.attendance_id !== 'string') {
+      return response(400, { success: false, error: 'attendance_id is required' });
     }
 
-    if (!activeAttendance) {
-      console.log(`[attendance-check-out] Finding active attendance for employee: ${employeeId}`);
-      const { data: activeRecords, error: activeError } = await supabase
-        .from('attendance')
-        .select('id, check_in_time, status, work_hours')
-        .eq('employee_id', employeeId)
-        .eq('status', 'active')
-        .order('check_in_time', { ascending: false })
-        .limit(1);
-
-      if (activeError) {
-        console.error('[attendance-check-out] Failed to fetch active attendance', activeError);
-        return response(500, { success: false, error: 'فشل التحقق من سجلات الحضور' });
-      }
-
-      activeAttendance = activeRecords?.[0] ?? null;
+    const providedAttendanceId = body.attendance_id.trim();
+    if (!isUuid(providedAttendanceId)) {
+      return response(400, { success: false, error: 'attendance_id must be a valid UUID' });
     }
+
+    console.log(`[attendance-check-out] Targeting specific attendance_id: ${providedAttendanceId}`);
+    const { data: attendanceRecord, error: attendanceError } = await supabase
+      .from('attendance')
+      .select('id, check_in_time, check_out_time, status, work_hours, employee_id')
+      .eq('id', providedAttendanceId)
+      .maybeSingle();
+
+    if (attendanceError) {
+      console.error('[attendance-check-out] Failed to fetch attendance by ID', attendanceError);
+      return response(500, { success: false, error: 'فشل التحقق من سجل الحضور المطلوب' });
+    }
+
+    if (!attendanceRecord) {
+      return response(404, { success: false, error: 'سجل الحضور المطلوب غير موجود' });
+    }
+
+    // Verify the attendance belongs to this employee
+    if (attendanceRecord.employee_id !== employeeId) {
+      return response(403, { success: false, error: 'سجل الحضور لا ينتمي لهذا الموظف' });
+    }
+
+    // Check if already completed
+    if (attendanceRecord.status === 'completed') {
+      const completedCheckOut = parseTimestamp(attendanceRecord.check_out_time) ?? eventTimestamp;
+      return response(200, {
+        success: true,
+        alreadyCheckedOut: true,
+        message: 'لقد سجلت انصرافك بالفعل',
+        attendance: attendanceRecord,
+        time_context: {
+          stored_timezone: 'UTC',
+          display_timezone: 'Africa/Cairo',
+          check_out_time_cairo: cairoDateTimeString(completedCheckOut),
+        },
+      });
+    }
+
+    const activeAttendance = attendanceRecord;
 
     if (!activeAttendance) {
       const { data: completedRecords, error: completedError } = await supabase
